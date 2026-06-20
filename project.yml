@@ -1,0 +1,146 @@
+name: Decode
+options:
+  bundleIdPrefix: com.decode
+  deploymentTarget:
+    macOS: "15.0"
+  xcodeVersion: "16.2"
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    MACOSX_DEPLOYMENT_TARGET: "15.0"
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: P5Y864DV5S
+  configs:
+    Debug:
+      SWIFT_OPTIMIZATION_LEVEL: -Onone
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+      ENABLE_TESTABILITY: YES
+    Release:
+      SWIFT_OPTIMIZATION_LEVEL: -O
+      SWIFT_COMPILATION_MODE: wholemodule
+      ENABLE_HARDENED_RUNTIME: YES
+
+packages:
+  GRDB:
+    url: https://github.com/groue/GRDB.swift
+    version: 7.5.0
+  SwiftSyntax:
+    url: https://github.com/swiftlang/swift-syntax
+    version: 600.0.1
+  SwiftTreeSitter:
+    url: https://github.com/ChimeHQ/SwiftTreeSitter
+    from: "0.10.0"
+  TreeSitterPython:
+    url: https://github.com/tree-sitter/tree-sitter-python
+    version: 0.23.6
+  TreeSitterJavaScript:
+    url: https://github.com/tree-sitter/tree-sitter-javascript
+    version: 0.23.1
+  TreeSitterTypeScript:
+    url: https://github.com/tree-sitter/tree-sitter-typescript
+    version: 0.23.2
+  TreeSitterHTML:
+    url: https://github.com/tree-sitter/tree-sitter-html
+    version: 0.23.2
+  TreeSitterCSS:
+    url: https://github.com/tree-sitter/tree-sitter-css
+    version: 0.23.2
+  # TreeSitterSQL temporarily excluded — DerekStride/tree-sitter-sql has a
+  # broken test-target dependency name that prevents SPM resolution.
+  # Re-add once upstream fixes Package.swift or we fork.
+  # TreeSitterSQL:
+  #   url: https://github.com/DerekStride/tree-sitter-sql
+  #   version: 0.3.7
+  TreeSitterJava:
+    url: https://github.com/tree-sitter/tree-sitter-java
+    version: 0.23.5
+  TreeSitterCSharp:
+    url: https://github.com/tree-sitter/tree-sitter-c-sharp
+    version: 0.23.1
+  TreeSitterC:
+    url: https://github.com/tree-sitter/tree-sitter-c
+    version: 0.23.4
+  TreeSitterCPP:
+    url: https://github.com/tree-sitter/tree-sitter-cpp
+    version: 0.23.4
+
+targets:
+  Decode:
+    type: application
+    platform: macOS
+    sources:
+      - path: Decode
+        excludes:
+          - "Infrastructure/AST/Queries/**"
+      - path: Decode/Infrastructure/AST/Queries
+        type: folder
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.decode.app
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
+        INFOPLIST_KEY_CFBundleDisplayName: Decode
+        GENERATE_INFOPLIST_FILE: YES
+        CURRENT_PROJECT_VERSION: 1
+        MARKETING_VERSION: 0.1.0
+        CODE_SIGN_ENTITLEMENTS: Decode/App/Decode.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    dependencies:
+      - package: GRDB
+      - package: SwiftSyntax
+        product: SwiftSyntax
+      - package: SwiftSyntax
+        product: SwiftParser
+      - package: SwiftTreeSitter
+        product: SwiftTreeSitter
+      - package: TreeSitterPython
+      - package: TreeSitterJavaScript
+      - package: TreeSitterTypeScript
+        product: TreeSitterTypeScript
+      - package: TreeSitterHTML
+      - package: TreeSitterCSS
+      # - package: TreeSitterSQL  # temporarily excluded (broken upstream Package.swift)
+      - package: TreeSitterJava
+      - package: TreeSitterCSharp
+      - package: TreeSitterC
+      - package: TreeSitterCPP
+
+  DecodeTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: DecodeTests
+    dependencies:
+      - target: Decode
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.decode.tests
+        GENERATE_INFOPLIST_FILE: YES
+
+  DecodeIntegrationTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: DecodeIntegrationTests
+    dependencies:
+      - target: Decode
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.decode.integrationtests
+        GENERATE_INFOPLIST_FILE: YES
+
+  DecodeUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - path: DecodeUITests
+    dependencies:
+      - target: Decode
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.decode.uitests
+        GENERATE_INFOPLIST_FILE: YES

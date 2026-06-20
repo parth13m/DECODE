@@ -1,0 +1,9 @@
+// Release.xcconfig
+// Production build settings.
+
+#include "Base.xcconfig"
+
+SWIFT_OPTIMIZATION_LEVEL = -O
+SWIFT_COMPILATION_MODE = wholemodule
+ENABLE_HARDENED_RUNTIME = YES
+COPY_PHASE_STRIP = YES

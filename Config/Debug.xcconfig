@@ -1,0 +1,9 @@
+// Debug.xcconfig
+// Development build settings.
+
+#include "Base.xcconfig"
+
+SWIFT_OPTIMIZATION_LEVEL = -Onone
+SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG
+ENABLE_TESTABILITY = YES
+GCC_PREPROCESSOR_DEFINITIONS = DEBUG=1 $(inherited)

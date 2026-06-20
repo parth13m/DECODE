@@ -1,0 +1,14 @@
+// Base.xcconfig
+// Shared build settings for all configurations.
+
+MACOSX_DEPLOYMENT_TARGET = 15.0
+SWIFT_VERSION = 6.0
+SWIFT_STRICT_CONCURRENCY = complete
+PRODUCT_BUNDLE_IDENTIFIER = com.decode.app
+PRODUCT_NAME = Decode
+CODE_SIGN_ENTITLEMENTS = Decode/App/Decode.entitlements
+GENERATE_INFOPLIST_FILE = YES
+CURRENT_PROJECT_VERSION = 1
+MARKETING_VERSION = 0.1.0
+INFOPLIST_KEY_LSApplicationCategoryType = public.app-category.developer-tools
+INFOPLIST_KEY_CFBundleDisplayName = Decode

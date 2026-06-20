@@ -1,0 +1,484 @@
+# Decode Platform Transition Plan (Source of Truth)
+
+## Status
+
+Decode MVP is functionally complete and has passed MVP Stabilization Sprint 2.
+
+Completed:
+
+* Phase 0
+* Phase 1
+* Selection Mode
+* Screenshot Mode
+* Session Mode
+* Multi-Session Support
+* Session Dock
+* MVP Stabilization Sprint 1
+* MVP Stabilization Sprint 2
+
+Verified:
+
+* Non-Swift Session Mode works
+* HTML tag leakage fixed
+* Formatting rendering fixed
+* Input validation added
+* Binary file detection added
+* File size limits added
+* OCR limits added
+* Context limits added
+* Request quota system added
+* Language-aware code fences added
+
+Current focus is no longer feature development.
+
+Current focus is:
+
+1. Internal dogfooding
+2. Alpha onboarding
+3. External alpha users
+4. Decode Platform architecture
+
+---
+
+# Strategic Decision
+
+This decision is finalized.
+
+Decode will provide AI access.
+
+Users will NOT provide their own API keys.
+
+Reasons:
+
+1. Most target users do not have API credits.
+2. Asking for API keys creates onboarding friction.
+3. API setup reduces conversion.
+4. Decode should feel like a product, not a developer utility.
+
+As a result:
+
+The existing provider-selection architecture is temporary.
+
+Future architecture:
+
+User
+↓
+Decode macOS App
+↓
+Decode Gateway
+↓
+Claude Sonnet
+↓
+Response
+
+The API keys remain server-side only.
+
+Users never see provider credentials.
+
+---
+
+# Alpha Objectives
+
+The purpose of Alpha is NOT:
+
+* Revenue
+* Billing
+* Monetization
+* Enterprise infrastructure
+
+The purpose of Alpha is:
+
+1. Learn how users actually use Decode.
+2. Identify the most valuable mode.
+3. Measure engagement.
+4. Collect qualitative feedback.
+5. Validate product-market fit signals.
+6. Identify abuse patterns.
+7. Prepare for Beta.
+
+---
+
+# Core Product Metrics
+
+The most important metrics are:
+
+## Mode Usage
+
+Track:
+
+* Selection Mode usage
+* Screenshot Mode usage
+* Session Mode usage
+
+Goal:
+
+Determine which mode provides the most value.
+
+Example:
+
+Selection: 70%
+Screenshot: 20%
+Session: 10%
+
+This should influence roadmap prioritization.
+
+---
+
+## User Activity
+
+Track:
+
+* Total users
+* Active users
+* Daily active users
+* Requests per user
+* Last active date
+
+Goal:
+
+Understand actual engagement.
+
+---
+
+## Request Metrics
+
+Track:
+
+* Total requests
+* Requests per day
+* Requests per user
+* Successful requests
+* Failed requests
+
+Goal:
+
+Monitor adoption and quality.
+
+---
+
+## Performance Metrics
+
+Track:
+
+* Request latency
+* Error rate
+
+Goal:
+
+Detect degradation before users report it.
+
+---
+
+# Metrics Explicitly Deferred
+
+Do NOT build during Alpha:
+
+* Revenue dashboards
+* Billing dashboards
+* Subscription systems
+* Retention analytics
+* Cohort analytics
+* Event funnels
+* A/B testing systems
+* Enterprise reporting
+
+These are Beta concerns.
+
+---
+
+# Decode Platform Architecture
+
+## High-Level Architecture
+
+User
+↓
+Decode macOS App
+↓
+Decode Gateway
+↓
+Claude Sonnet
+↓
+Response
+
+The Gateway becomes:
+
+* Authentication layer
+* Usage tracking layer
+* Analytics layer
+* Quota enforcement layer
+* Admin control layer
+
+---
+
+# Guiding Principle
+
+Build the smallest possible platform that allows:
+
+1. User authentication
+2. User management
+3. Usage analytics
+4. Admin controls
+5. AI request routing
+
+Do not build anything beyond this.
+
+---
+
+# Implementation Roadmap
+
+## Milestone 1 — Analytics Foundation
+
+Priority: P0
+
+Goal:
+
+Collect useful product intelligence immediately.
+
+### Database
+
+Create:
+
+users
+
+request_log
+
+### request_log should track
+
+* user_id
+* timestamp
+* mode
+* latency
+* status
+
+Optional:
+
+* input_tokens
+* output_tokens
+
+if available from provider responses.
+
+### Admin Dashboard
+
+Display:
+
+* Total users
+* Requests today
+* Selection Mode count
+* Screenshot Mode count
+* Session Mode count
+* Requests per user
+
+No charts required.
+
+Simple tables are sufficient.
+
+### Success Criteria
+
+Admin can determine:
+
+* Which mode is used most
+* Which users are active
+* Which users are inactive
+
+without asking users.
+
+---
+
+## Milestone 2 — Invite Code Authentication
+
+Priority: P0
+
+Goal:
+
+Prevent unauthorized access.
+
+### User Flow
+
+First Launch
+
+↓
+Enter Invite Code
+
+↓
+Activate
+
+↓
+Receive Access Token
+
+↓
+Store in Keychain
+
+### Database Fields
+
+users
+
+* id
+* email
+* invite_code
+* token_hash
+* status
+
+status values:
+
+* pending
+* active
+* disabled
+
+### Admin Controls
+
+Generate Invite Code
+
+Enable User
+
+Disable User
+
+### Success Criteria
+
+Only invited users can access Decode.
+
+Disabled users lose access immediately.
+
+---
+
+## Milestone 3 — Decode Gateway
+
+Priority: P0
+
+Goal:
+
+Move AI access from user-owned keys to Decode-owned keys.
+
+### Gateway Responsibilities
+
+Authenticate requests
+
+Validate user status
+
+Enforce quotas
+
+Log analytics
+
+Forward request to Claude Sonnet
+
+Stream response back
+
+### Requirements
+
+SSE passthrough
+
+Bearer token authentication
+
+Request logging
+
+Quota enforcement
+
+### Success Criteria
+
+macOS app never communicates directly with Claude.
+
+All AI traffic flows through Decode Gateway.
+
+---
+
+## Milestone 4 — Settings Simplification
+
+Priority: P1
+
+Current Settings
+
+* Provider Selection
+* API Key Input
+* Model Selection
+
+Future Settings
+
+* Invite Code
+* Activation Status
+* Account Status
+
+Users should not manage providers.
+
+Users should not manage models.
+
+Users should not manage API keys.
+
+---
+
+## Milestone 5 — User Management
+
+Priority: P1
+
+Admin Dashboard should display:
+
+User Name
+
+Status
+
+Requests
+
+Last Active
+
+Example:
+
+Parth
+Active
+145 Requests
+
+John
+Disabled
+38 Requests
+
+Admin Actions:
+
+Enable
+
+Disable
+
+Generate Invite
+
+### Success Criteria
+
+All user access can be managed from one screen.
+
+---
+
+# Explicitly Out Of Scope
+
+Do NOT build during Alpha:
+
+* RAG
+* Embeddings
+* Vector databases
+* Dependency graphs
+* Cross-repository context
+* Supabase
+* PostHog
+* Sentry
+* Billing
+* Subscriptions
+* Teams
+* Organizations
+* Role systems
+* OAuth
+* Google Login
+* GitHub Login
+* Password reset systems
+* Enterprise infrastructure
+* Multi-region deployment
+
+---
+
+# Alpha Success Definition
+
+Alpha is successful if:
+
+1. 10 invited users activate Decode.
+2. Users consistently use Decode during development.
+3. Analytics reveal clear usage patterns.
+4. Most valuable mode becomes obvious.
+5. Major UX friction points are identified.
+6. Infrastructure remains stable.
+7. Admin can manage all users.
+8. Decode API costs remain controllable.
+
+Only after these conditions are met should Beta planning begin.

@@ -1,0 +1,58 @@
+import SwiftUI
+import os.log
+
+private let appLog = Logger(subsystem: "com.decode.app", category: "app-diag")
+
+/// The main entry point for the Decode application.
+///
+/// Uses the SwiftUI App lifecycle. Instantiates the root dependency container
+/// and passes it into the view hierarchy via the environment.
+///
+/// ## Activation-Safe Startup
+/// `AppDependencies.init()` is lightweight — only object construction.
+/// All activation-sensitive work (Keychain, Accessibility, event monitors)
+/// is deferred until `NSApplication.didBecomeActiveNotification` fires,
+/// ensuring the run loop, responder chain, and menu bar are fully initialized.
+@main
+struct DecodeApp: App {
+
+    @State private var dependencies = AppDependencies()
+
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+                .environment(dependencies)
+                .onReceive(
+                    NotificationCenter.default.publisher(
+                        for: NSApplication.didBecomeActiveNotification
+                    )
+                ) { _ in
+                    appLog.notice("[DIAG] didBecomeActiveNotification received")
+                    dependencies.performDeferredStartup()
+                }
+        }
+        .commands {
+            CommandGroup(replacing: .help) {
+                Button("Welcome to Decode...") {
+                    OnboardingState.reset()
+                    NotificationCenter.default.post(
+                        name: .showOnboarding,
+                        object: nil
+                    )
+                }
+            }
+        }
+
+        Settings {
+            SettingsView()
+                .environment(dependencies)
+        }
+    }
+}
+
+// MARK: - Notifications
+
+extension Notification.Name {
+    /// Posted when the user selects "Welcome to Decode..." from the Help menu.
+    static let showOnboarding = Notification.Name("showOnboarding")
+}
