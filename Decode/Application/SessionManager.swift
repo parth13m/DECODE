@@ -88,17 +88,134 @@ final class SessionManager {
         Self.swiftExtensions.contains(url.pathExtension.lowercased())
     }
 
-    /// Parse a file using the appropriate parser.
+    /// Parse a file using the appropriate parser and extract all deterministic facts.
     ///
     /// Routes Swift files to ``SwiftSyntaxParser`` and supported non-Swift
-    /// files to ``TreeSitterParser``. Returns an empty array for unsupported
+    /// files to ``TreeSitterParser``. Returns an empty result for unsupported
     /// file types.
-    private func parseFile(source: String, url: URL) -> [ParsedEntity] {
+    private func parseFile(source: String, url: URL) -> DetailedParseResult {
         let fileName = url.lastPathComponent
         if isSwiftFile(url) {
-            return swiftParser.parseDetailed(source: source, fileName: fileName)
+            return swiftParser.parseAllFacts(source: source, fileName: fileName)
         }
-        return treeSitterParser.parseDetailed(source: source, fileName: fileName)
+        return treeSitterParser.parseAllFacts(source: source, fileName: fileName)
+    }
+
+    /// Assemble a ``FileIntelligence`` from the results of parsing.
+    ///
+    /// This captures all deterministic structural knowledge about a file
+    /// immediately after parsing completes, plus understanding layers
+    /// derived from the structural data. The intelligence is keyed to
+    /// the file's current hash so it can be invalidated on file change.
+    private func buildFileIntelligence(
+        session: Session,
+        parseResult: DetailedParseResult,
+        source: String
+    ) -> FileIntelligence {
+        let language = Self.detectLanguage(fileName: session.fileName)
+        let newlineCount = source.filter { $0 == "\n" }.count
+        let lineCount = source.isEmpty ? 0 : newlineCount + 1
+        let outline = Self.buildStructureOutline(entities: parseResult.entities)
+
+        // Understanding Layer 1: Identity — "What am I looking at?"
+        let identity = FileIdentityClassifier.classify(
+            fileName: session.fileName,
+            entities: parseResult.entities,
+            language: language,
+            filePath: session.filePath
+        )
+
+        // Understanding Layer 2: Purpose — "Why does this file exist?"
+        let purpose = FilePurposeDeriver.derivePurpose(
+            fileName: session.fileName,
+            identity: identity,
+            entities: parseResult.entities
+        )
+
+        return FileIntelligence(
+            sessionId: session.id,
+            fileName: session.fileName,
+            language: language,
+            lineCount: lineCount,
+            entities: parseResult.entities,
+            structureOutline: outline,
+            imports: parseResult.imports,
+            relationships: parseResult.relationships,
+            identity: identity,
+            purpose: purpose,
+            fileHash: session.fileHash,
+            buildDate: Date()
+        )
+    }
+
+    /// Detect the programming language from a file name.
+    ///
+    /// Uses ``GrammarRegistration`` for languages with parser support,
+    /// falls back to a simple extension map for others, and defaults
+    /// to "swift" for `.swift` files.
+    private static func detectLanguage(fileName: String) -> String {
+        let ext = (fileName as NSString).pathExtension.lowercased()
+
+        // Swift is handled by SwiftSyntaxParser, not GrammarRegistration.
+        if ext == "swift" { return "swift" }
+
+        // Languages with tree-sitter parser support.
+        if let grammar = GrammarRegistration.from(fileName: fileName) {
+            return grammar.queryDirectory // e.g., "python", "javascript"
+        }
+
+        // Fallback for recognized extensions without parser support.
+        return extensionToLanguage[ext] ?? ext
+    }
+
+    /// Extension-to-language fallback for files without parser support.
+    private static let extensionToLanguage: [String: String] = [
+        "rb": "ruby", "go": "go", "rs": "rust", "kt": "kotlin",
+        "m": "objectivec", "mm": "objectivec", "sh": "bash",
+        "zsh": "bash", "json": "json", "yaml": "yaml", "yml": "yaml",
+        "toml": "toml", "xml": "xml", "sql": "sql", "md": "markdown",
+        "r": "r", "lua": "lua", "php": "php", "dart": "dart",
+        "scala": "scala", "zig": "zig", "ex": "elixir", "exs": "elixir",
+    ]
+
+    /// Build an unmarked hierarchical outline of a file's entity structure.
+    ///
+    /// Top-level entities are unindented. Members are indented under their
+    /// parent type. This is the baseline outline stored on ``FileIntelligence``.
+    /// Snippet-specific markers (e.g., `← selected`) are added later by
+    /// ``ContextBuilderService`` when building prompt context.
+    static func buildStructureOutline(entities: [ParsedEntity]) -> String {
+        var lines: [String] = []
+
+        let topLevel = entities.filter { $0.isTopLevel }
+        let children = entities.filter { !$0.isTopLevel }
+
+        var childrenByParent: [String: [ParsedEntity]] = [:]
+        for child in children {
+            if let pid = child.parentStableId {
+                childrenByParent[pid, default: []].append(child)
+            }
+        }
+
+        for parent in topLevel {
+            lines.append("\(parent.signature) [lines \(parent.startLine)-\(parent.endLine)]")
+            let kids = childrenByParent[parent.entity.stableId] ?? []
+            for child in kids {
+                lines.append("  \(child.signature) [lines \(child.startLine)-\(child.endLine)]")
+            }
+        }
+
+        // Orphaned children (parent not in top-level list).
+        let knownParents = Set(topLevel.map(\.entity.stableId))
+        let orphans = children.filter {
+            guard let pid = $0.parentStableId else { return false }
+            return !knownParents.contains(pid)
+        }
+        for orphan in orphans {
+            lines.append("\(orphan.signature) [lines \(orphan.startLine)-\(orphan.endLine)]")
+        }
+
+        return lines.joined(separator: "\n")
     }
 
     // MARK: - Session Lifecycle
@@ -135,9 +252,10 @@ final class SessionManager {
             if let persisted = allSessions.first(where: { $0.filePath == url.path }) {
                 // Restore from database.
                 let source = try String(contentsOf: url, encoding: .utf8)
-                let entities = parseFile(source: source, url: url)
+                let result = parseFile(source: source, url: url)
 
-                let managed = ManagedSession(session: persisted, parsedEntities: entities)
+                let intelligence = buildFileIntelligence(session: persisted, parseResult: result, source: source)
+                let managed = ManagedSession(session: persisted, parsedEntities: result.entities, fileIntelligence: intelligence)
                 sessions[persisted.id] = managed
                 startWatching(managed: managed)
                 activateSession(id: persisted.id)
@@ -160,7 +278,7 @@ final class SessionManager {
 
         // Create a brand new session.
         let source = try String(contentsOf: url, encoding: .utf8)
-        let entities = parseFile(source: source, url: url)
+        let result = parseFile(source: source, url: url)
         let now = Date()
         let session = Session(
             id: UUID(),
@@ -180,7 +298,8 @@ final class SessionManager {
             try await db.createSession(session)
         }
 
-        let managed = ManagedSession(session: session, parsedEntities: entities)
+        let intelligence = buildFileIntelligence(session: session, parseResult: result, source: source)
+        let managed = ManagedSession(session: session, parsedEntities: result.entities, fileIntelligence: intelligence)
         sessions[session.id] = managed
         startWatching(managed: managed)
         activateSession(id: session.id)
@@ -243,9 +362,10 @@ final class SessionManager {
 
                 do {
                     let source = try String(contentsOf: url, encoding: .utf8)
-                    let entities = parseFile(source: source, url: url)
+                    let result = parseFile(source: source, url: url)
 
-                    let managed = ManagedSession(session: stored, parsedEntities: entities)
+                    var sessionForIntelligence = stored
+                    let managed = ManagedSession(session: stored, parsedEntities: result.entities)
                     sessions[stored.id] = managed
                     startWatching(managed: managed)
 
@@ -259,8 +379,17 @@ final class SessionManager {
                         updated.fileSize = fileSize(url)
                         try await db.updateSession(updated)
                         sessions[stored.id]?.session = updated
+                        sessionForIntelligence = updated
                         try await syncEntitiesToDatabase(sessionId: stored.id)
                     }
+
+                    // Build intelligence after session is fully up to date.
+                    let intelligence = buildFileIntelligence(
+                        session: sessionForIntelligence,
+                        parseResult: result,
+                        source: source
+                    )
+                    sessions[stored.id]?.fileIntelligence = intelligence
                 } catch {
                     #if DEBUG
                     print("[SessionManager] Failed to restore session \(stored.fileName): \(error)")
@@ -315,12 +444,13 @@ final class SessionManager {
 
         do {
             let source = try String(contentsOf: url, encoding: .utf8)
-            let newEntities = parseFile(source: source, url: url)
-            sessions[id]?.parsedEntities = newEntities
+            let result = parseFile(source: source, url: url)
+            sessions[id]?.parsedEntities = result.entities
             sessions[id]?.lastRefreshedAt = Date()
             sessions[id]?.isFileAccessible = true
 
             // Sync to database.
+            var currentSession = managed.session
             if let db = database {
                 var updated = managed.session
                 updated.updatedAt = Date()
@@ -329,8 +459,17 @@ final class SessionManager {
                 updated.fileSize = fileSize(url)
                 try await db.updateSession(updated)
                 sessions[id]?.session = updated
+                currentSession = updated
                 try await syncEntitiesToDatabase(sessionId: id)
             }
+
+            // Rebuild intelligence from fresh parse.
+            let intelligence = buildFileIntelligence(
+                session: currentSession,
+                parseResult: result,
+                source: source
+            )
+            sessions[id]?.fileIntelligence = intelligence
         } catch {
             #if DEBUG
             print("[SessionManager] Reparse failed for \(managed.session.fileName): \(error)")
@@ -454,6 +593,7 @@ final class ManagedSession: Identifiable {
 
     var session: Session
     var parsedEntities: [ParsedEntity]
+    var fileIntelligence: FileIntelligence?
     var lastRefreshedAt: Date?
     var isFileAccessible: Bool = true
 
@@ -463,11 +603,13 @@ final class ManagedSession: Identifiable {
     init(
         session: Session,
         parsedEntities: [ParsedEntity],
+        fileIntelligence: FileIntelligence? = nil,
         fileWatcher: FileWatcherService = FileWatcherService()
     ) {
         self.id = session.id
         self.session = session
         self.parsedEntities = parsedEntities
+        self.fileIntelligence = fileIntelligence
         self.fileWatcher = fileWatcher
         self.lastRefreshedAt = Date()
     }

@@ -35,6 +35,7 @@ final class SessionQuestionCoordinator {
     private let snippetHealthClassifier: SnippetHealthClassifier
     private let sessionProvider: @MainActor () -> SessionResolverInput?
     private let usageTracker: AIUsageTracker
+    private let semanticEnrichment: SemanticEnrichmentService
 
     // MARK: - State
 
@@ -63,7 +64,8 @@ final class SessionQuestionCoordinator {
         sessionResolver: SessionResolver = SessionResolver(),
         snippetHealthClassifier: SnippetHealthClassifier = SnippetHealthClassifier(),
         sessionProvider: @escaping @MainActor () -> SessionResolverInput?,
-        usageTracker: AIUsageTracker
+        usageTracker: AIUsageTracker,
+        semanticEnrichment: SemanticEnrichmentService
     ) {
         self.selectionCapture = selectionCapture
         self.aiProvider = aiProvider
@@ -74,6 +76,7 @@ final class SessionQuestionCoordinator {
         self.snippetHealthClassifier = snippetHealthClassifier
         self.sessionProvider = sessionProvider
         self.usageTracker = usageTracker
+        self.semanticEnrichment = semanticEnrichment
     }
 
     // MARK: - Lifecycle
@@ -229,16 +232,58 @@ final class SessionQuestionCoordinator {
             healthClassification = HealthClassification(tier: .silent, hints: [])
         }
 
-        // 9. Check quota before making the AI request.
+        // 9. Semantic enrichment (lazy, cached).
+        // Runs before the quota check — enrichment is infrastructure,
+        // not a user-visible request. Cache hits are instantaneous.
+        var enrichedPurpose: String? = nil
+        var enrichedBehavior: String? = nil
+        var enrichedSafety: String? = nil
+        var enrichedDesign: String? = nil
+        if let intelligence = managed.fileIntelligence {
+            let enrichment = await semanticEnrichment.enrich(intelligence: intelligence)
+            // Staleness check after enrichment await.
+            guard generation == requestGeneration else { return }
+            enrichedPurpose = enrichment?.purpose
+            enrichedBehavior = enrichment?.behavior
+            enrichedSafety = enrichment?.safety
+            enrichedDesign = enrichment?.design
+        }
+
+        // 9b. Question-aware context selection.
+        // Select which understanding layers to include based on the
+        // snippet content and file role. Layers not selected are omitted
+        // from the prompt to reduce token usage and improve focus.
+        let layerSelection = selectContextLayers(
+            snippet: snippetText,
+            fileRole: managed.fileIntelligence?.identity.role
+        )
+        if !layerSelection.includeBehavior { enrichedBehavior = nil }
+        if !layerSelection.includeSafety { enrichedSafety = nil }
+        if !layerSelection.includeDesign { enrichedDesign = nil }
+
+        // 10. Check quota before making the AI request.
         guard usageTracker.tryConsumeRequest() else {
             toastManager.show(usageTracker.quotaExhaustedMessage, icon: "gauge.with.dots.needle.67percent")
             return
         }
 
-        // 10. Build prompt and stream response.
+        // 11. Build prompt and stream response.
         let dsaMode = UserDefaults.standard.bool(forKey: "dsaModeEnabled")
         let explanationProfile = dsaMode ? "dsa" : "general"
-        var systemPrompt = contextBuilder.buildSystemPrompt(context: context, sourceApp: sourceAppName, snippet: snippetText, dsaMode: dsaMode)
+        // Prefer semantic purpose over deterministic purpose.
+        let filePurpose = enrichedPurpose ?? managed.fileIntelligence?.purpose
+        var systemPrompt = contextBuilder.buildSystemPrompt(
+            context: context,
+            sourceApp: sourceAppName,
+            snippet: snippetText,
+            dsaMode: dsaMode,
+            fileIdentity: managed.fileIntelligence?.identity,
+            filePurpose: filePurpose,
+            fileBehavior: enrichedBehavior,
+            fileSafety: enrichedSafety,
+            fileDesign: enrichedDesign,
+            fileImports: managed.fileIntelligence?.imports
+        )
         systemPrompt += ExplanationFramework.healthPromptAugmentation(
             tier: healthClassification.tier,
             hints: healthClassification.hints
@@ -328,6 +373,118 @@ final class SessionQuestionCoordinator {
             guard generation == requestGeneration else { return }
             hud.showError("AI request failed: \(error.localizedDescription)")
         }
+    }
+
+    // MARK: - Context Layer Selection
+
+    private struct LayerSelection {
+        let includeBehavior: Bool
+        let includeSafety: Bool
+        let includeDesign: Bool
+
+        static let all = LayerSelection(
+            includeBehavior: true,
+            includeSafety: true,
+            includeDesign: true
+        )
+    }
+
+    /// Select which understanding layers to include based on snippet
+    /// content and file role. Purpose is always included.
+    private func selectContextLayers(
+        snippet: String,
+        fileRole: FileRole?
+    ) -> LayerSelection {
+        let snippetLower = snippet.lowercased()
+
+        var includeBehavior = false
+        var includeSafety = false
+        var includeDesign = false
+
+        // Error handling patterns → Safety.
+        if containsAny(snippetLower, keywords: [
+            "catch", "throw", "throws", "try ", "try?", "try!",
+            "guard ", "precondition", "assert", "fatalError",
+            "do {", "rescue", "except", "finally",
+            "Result<", "Result.", ".failure", ".success",
+            "Error", "error", "Exception",
+        ]) {
+            includeSafety = true
+        }
+
+        // Concurrency patterns → Safety + Behavior.
+        if containsAny(snippetLower, keywords: [
+            "async", "await", "task {", "task.detached",
+            "dispatchqueue", "operationqueue",
+            "@sendable", "actor ", "nonisolated",
+            "lock", "mutex", "semaphore", "atomic",
+            "thread", "concurrent",
+            "promise", "future", "completionhandler",
+        ]) {
+            includeSafety = true
+            includeBehavior = true
+        }
+
+        // State and control flow patterns → Behavior.
+        if containsAny(snippetLower, keywords: [
+            "switch ", "case .", "case let",
+            "for ", "while ", "repeat {",
+            "state", "transition", "didset", "willset",
+            "@published", "@state", "@binding", "@observable",
+            "notificationcenter", ".addobserver", ".post(",
+            "delegate", "datasource",
+            "timer", "schedule", "dispatch_after",
+        ]) {
+            includeBehavior = true
+        }
+
+        // Design patterns → Design.
+        if containsAny(snippetLower, keywords: [
+            "protocol ", "extension ", "associatedtype",
+            "class ", "struct ", "enum ",
+            "init(", "deinit",
+            "factory", "builder", "singleton", "shared",
+            "override ", "open ", "final ",
+            "private ", "internal ", "public ", "fileprivate",
+            "typealias", "generic", "where ",
+            "import ", "dependency", "inject",
+        ]) {
+            includeDesign = true
+        }
+
+        // File role signals.
+        if let role = fileRole {
+            switch role {
+            case .coordinator, .manager, .service:
+                includeBehavior = true
+                includeDesign = true
+            case .model, .protocolDefinition:
+                includeDesign = true
+            case .view, .viewModel:
+                includeBehavior = true
+            case .parser:
+                includeBehavior = true
+            case .test:
+                includeBehavior = true
+            case .extensionFile, .configuration, .appEntry, .unknown:
+                break
+            }
+        }
+
+        // If no signals detected, include all layers.
+        if !includeBehavior && !includeSafety && !includeDesign {
+            return .all
+        }
+
+        return LayerSelection(
+            includeBehavior: includeBehavior,
+            includeSafety: includeSafety,
+            includeDesign: includeDesign
+        )
+    }
+
+    private func containsAny(_ text: String, keywords: [String]) -> Bool {
+        keywords.contains { text.contains($0) }
     }
 }
 

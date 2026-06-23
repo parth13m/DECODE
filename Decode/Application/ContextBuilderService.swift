@@ -455,7 +455,18 @@ struct ContextBuilderService: Sendable {
     ///   - context: The assembled session context with file structure and entity data.
     ///   - sourceApp: The source application name, if known.
     ///   - snippet: The user's selected code snippet, used for framework detection.
-    func buildSystemPrompt(context: SessionContext, sourceApp: String?, snippet: String, dsaMode: Bool = false) -> String {
+    func buildSystemPrompt(
+        context: SessionContext,
+        sourceApp: String?,
+        snippet: String,
+        dsaMode: Bool = false,
+        fileIdentity: FileIdentity? = nil,
+        filePurpose: String? = nil,
+        fileBehavior: String? = nil,
+        fileSafety: String? = nil,
+        fileDesign: String? = nil,
+        fileImports: [ImportDeclaration]? = nil
+    ) -> String {
         let lang = Self.codeFenceLanguage(for: context.fileName)
 
         var prompt = """
@@ -470,6 +481,32 @@ struct ContextBuilderService: Sendable {
             \(context.fileStructureOutline)
             ```
             """
+
+        // File understanding — frames the file's role and purpose for the LLM.
+        if let identity = fileIdentity, identity.role != .unknown {
+            prompt += "\n\n**Role**: \(identity.summary)"
+        }
+        if let purpose = filePurpose, !purpose.isEmpty {
+            prompt += "\n**Purpose**: \(purpose)"
+        }
+        if let behavior = fileBehavior, !behavior.isEmpty {
+            prompt += "\n**Behavior**: \(behavior)"
+        }
+        if let safety = fileSafety, !safety.isEmpty {
+            prompt += "\n**Safety**: \(safety)"
+        }
+        if let design = fileDesign, !design.isEmpty {
+            prompt += "\n**Design**: \(design)"
+        }
+        if let imports = fileImports, !imports.isEmpty {
+            let moduleNames = imports
+                .filter { $0.kind == .module || $0.kind == .symbol }
+                .map(\.moduleName)
+            let unique = Array(Set(moduleNames)).sorted()
+            if !unique.isEmpty {
+                prompt += "\n**Dependencies**: \(unique.joined(separator: ", "))"
+            }
+        }
 
         // Snippet location (entity-matched case).
         if !context.snippetLocationDescription.isEmpty {

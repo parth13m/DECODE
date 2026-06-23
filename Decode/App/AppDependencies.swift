@@ -239,6 +239,9 @@ final class AppDependencies {
             }
         }
 
+        let enrichmentService = SemanticEnrichmentService(
+            aiProvider: { [weak self] in self?.aiProvider }
+        )
         let sqCoordinator = SessionQuestionCoordinator(
             selectionCapture: selectionCapture,
             aiProvider: { [weak self] in self?.aiProvider },
@@ -253,7 +256,8 @@ final class AppDependencies {
                     pinnedSessionId: manager.pinnedSessionId
                 )
             },
-            usageTracker: tracker
+            usageTracker: tracker,
+            semanticEnrichment: enrichmentService
         )
         self.sessionQuestionCoordinator = sqCoordinator
 
