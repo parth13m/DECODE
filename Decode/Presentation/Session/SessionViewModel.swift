@@ -74,6 +74,99 @@ final class SessionViewModel {
         sessionManager.pinnedSessionId
     }
 
+    // MARK: - Knowledge Inspector Accessors
+
+    /// File intelligence for the active session.
+    var intelligence: FileIntelligence? {
+        activeSession?.fileIntelligence
+    }
+
+    /// Semantic enrichment (nil until the first question triggers LLM enrichment).
+    var enrichment: SemanticEnrichment? {
+        intelligence?.semanticEnrichment
+    }
+
+    /// File identity: role, layer, patterns.
+    var identity: FileIdentity? {
+        intelligence?.identity
+    }
+
+    /// Deterministic purpose string.
+    var deterministicPurpose: String? {
+        let p = intelligence?.purpose
+        return (p?.isEmpty == false) ? p : nil
+    }
+
+    /// Structure outline text.
+    var structureOutline: String? {
+        let o = intelligence?.structureOutline
+        return (o?.isEmpty == false) ? o : nil
+    }
+
+    /// All imports from the active session's file intelligence.
+    var imports: [ImportDeclaration] {
+        intelligence?.imports ?? []
+    }
+
+    /// All relationships from the active session's file intelligence.
+    var relationships: [Relationship] {
+        intelligence?.relationships ?? []
+    }
+
+    /// File language.
+    var language: String? {
+        intelligence?.language
+    }
+
+    /// File line count.
+    var lineCount: Int? {
+        intelligence?.lineCount
+    }
+
+    /// File hash.
+    var fileHash: String? {
+        intelligence?.fileHash
+    }
+
+    /// Intelligence build date.
+    var buildDate: Date? {
+        intelligence?.buildDate
+    }
+
+    /// The most recent question's reasoning context, if any.
+    var lastQuestionContext: QuestionContext? {
+        activeSession?.lastQuestionContext
+    }
+
+    // MARK: - Derived Visualizations (computed from existing data, no new parsing)
+
+    /// Entry points: entities that call others but are never called within this file.
+    var entryPoints: [ParsedEntity] {
+        guard let intel = intelligence else { return [] }
+        let callRelationships = intel.relationships.filter { $0.kind == .calls }
+        guard !callRelationships.isEmpty else { return [] }
+
+        let callerIds = Set(callRelationships.map(\.sourceEntity))
+        let calleeNames = Set(callRelationships.map(\.targetName))
+
+        return intel.entities.filter {
+            ($0.entity.entityType == .function || $0.entity.entityType == .method)
+            && callerIds.contains($0.entity.stableId)
+            && !calleeNames.contains($0.entity.name)
+        }
+    }
+
+    /// External calls: function/method names called but not defined in this file.
+    var externalCalls: [String] {
+        guard let intel = intelligence else { return [] }
+        let entityNames = Set(intel.entities.map(\.entity.name))
+        let callRelationships = intel.relationships.filter { $0.kind == .calls }
+        let externalTargets = callRelationships
+            .filter { !entityNames.contains($0.targetName) }
+            .map(\.targetName)
+        return Array(Set(externalTargets)).sorted()
+    }
+
     // MARK: - Init
 
     init(sessionManager: SessionManager) {

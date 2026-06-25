@@ -152,7 +152,7 @@ struct ContentView: View {
         .sheet(isPresented: $showingSession) {
             if let vm = dependencies.sessionViewModel {
                 SessionView(viewModel: vm)
-                    .frame(minWidth: 700, minHeight: 500)
+                    .frame(minWidth: 900, minHeight: 600)
             }
         }
         .sheet(isPresented: $showingOnboarding) {

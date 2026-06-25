@@ -597,6 +597,11 @@ final class ManagedSession: Identifiable {
     var lastRefreshedAt: Date?
     var isFileAccessible: Bool = true
 
+    /// Metadata from the most recent question answered for this session.
+    /// Set by ``SessionQuestionCoordinator`` after prompt construction.
+    /// `nil` until the first question is asked.
+    var lastQuestionContext: QuestionContext?
+
     let fileWatcher: FileWatcherService
     var watcherTask: Task<Void, Never>?
 

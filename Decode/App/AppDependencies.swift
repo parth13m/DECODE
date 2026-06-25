@@ -58,6 +58,9 @@ final class AppDependencies {
 
     private(set) var sessionQuestionCoordinator: SessionQuestionCoordinator?
 
+    /// Semantic enrichment service for cache inspection by the Knowledge Inspector.
+    private(set) var enrichmentService: SemanticEnrichmentService?
+
     /// Floating dock panel showing all sessions. Visible when sessions exist.
     private(set) var floatingDock: FloatingSessionDock?
 
@@ -239,9 +242,10 @@ final class AppDependencies {
             }
         }
 
-        let enrichmentService = SemanticEnrichmentService(
+        let enrichment = SemanticEnrichmentService(
             aiProvider: { [weak self] in self?.aiProvider }
         )
+        self.enrichmentService = enrichment
         let sqCoordinator = SessionQuestionCoordinator(
             selectionCapture: selectionCapture,
             aiProvider: { [weak self] in self?.aiProvider },
@@ -257,7 +261,7 @@ final class AppDependencies {
                 )
             },
             usageTracker: tracker,
-            semanticEnrichment: enrichmentService
+            semanticEnrichment: enrichment
         )
         self.sessionQuestionCoordinator = sqCoordinator
 

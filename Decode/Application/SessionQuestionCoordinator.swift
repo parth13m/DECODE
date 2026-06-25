@@ -239,7 +239,10 @@ final class SessionQuestionCoordinator {
         var enrichedBehavior: String? = nil
         var enrichedSafety: String? = nil
         var enrichedDesign: String? = nil
+        var enrichmentCacheHit = false
         if let intelligence = managed.fileIntelligence {
+            // Check cache before calling enrich to detect hit vs miss.
+            enrichmentCacheHit = semanticEnrichment.cachedEnrichment(forHash: intelligence.fileHash) != nil
             let enrichment = await semanticEnrichment.enrich(intelligence: intelligence)
             // Staleness check after enrichment await.
             guard generation == requestGeneration else { return }
@@ -247,6 +250,11 @@ final class SessionQuestionCoordinator {
             enrichedBehavior = enrichment?.behavior
             enrichedSafety = enrichment?.safety
             enrichedDesign = enrichment?.design
+
+            // Write enrichment back to ManagedSession for Knowledge Inspector.
+            if let enrichment {
+                managed.fileIntelligence?.semanticEnrichment = enrichment
+            }
         }
 
         // 9b. Question-aware context selection.
@@ -322,6 +330,19 @@ final class SessionQuestionCoordinator {
         #if DEBUG
         print("[SessionAnalytics] tier=\(contextTier) promptChars=\(systemPrompt.count + userMessage.count) session=\(managed.session.fileName)")
         #endif
+
+        // Store question context for Knowledge Inspector.
+        managed.lastQuestionContext = QuestionContext(
+            contextTier: contextTier,
+            includedBehavior: layerSelection.includeBehavior,
+            includedSafety: layerSelection.includeSafety,
+            includedDesign: layerSelection.includeDesign,
+            healthTier: healthClassification.tier.rawValue,
+            healthHintCount: healthClassification.hints.count,
+            promptCharacterCount: systemPrompt.count + userMessage.count,
+            enrichmentCacheHit: enrichmentCacheHit,
+            timestamp: Date()
+        )
 
         // Resolve language from file extension for analytics.
         let fileExt = (managed.session.fileName as NSString).pathExtension.lowercased()

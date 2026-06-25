@@ -37,6 +37,14 @@ final class SemanticEnrichmentService {
 
     // MARK: - Public API
 
+    /// Check whether enrichment is cached for a given file hash.
+    ///
+    /// Pure cache lookup — no LLM call, no computation. Returns `nil` if
+    /// the file has not been enriched yet or the hash doesn't match.
+    func cachedEnrichment(forHash fileHash: String) -> SemanticEnrichment? {
+        cache[fileHash]
+    }
+
     /// Retrieve or compute semantic enrichment for a file.
     ///
     /// Returns cached enrichment if available for the given file hash.
