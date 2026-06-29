@@ -2,7 +2,9 @@
 
 ## Project Mission
 
-Decode is a native macOS AI code explanation tool. Users highlight code in any editor, press a hotkey, and get an instant AI-powered explanation in a floating HUD. Decode provides AI access through a server-side gateway — users never configure API keys.
+Decode is a **Software Intelligence Platform**. Its canonical asset is the **Decode Intermediate Representation (DIR)** — a structured, tiered, incrementally maintained representation of software from which all capabilities are derived.
+
+Current capabilities (Explain, Improve, Follow-up) are **consumers** of the shared intelligence architecture. Future capabilities will also be consumers — the DIR is the platform, not the features.
 
 Stage: Pre-beta alpha, invite-only, 5–50 users.
 
@@ -10,7 +12,9 @@ Stage: Pre-beta alpha, invite-only, 5–50 users.
 
 ## Current Project State (June 2026)
 
-Decode MVP is feature-complete. Current phase: **Module Intelligence**.
+Architecture phase is **complete**. Current phase: **Implementation** of the understanding pipeline.
+
+The architecture is fully specified across three document layers (DAS → DDS → IAG). All specifications are frozen. Implementation follows IAG-004 phase ordering with verification gates between phases.
 
 Phase 1 (File Intelligence) is complete and validated. All four semantic understanding layers are implemented end-to-end.
 
@@ -73,8 +77,10 @@ Decode/Application/    → Coordinators, managers, context/explanation logic, en
 Decode/Domain/         → Models, Protocols
 Decode/Infrastructure/ → AI/, AST/, Capture/, Database/, FileSystem/, Hotkey/, Keychain/, OCR/
 Decode/Presentation/   → Overlay/, Session/, Onboarding/, Settings/
+Decode/Understanding/  → Understanding pipeline modules (IAG-001 §5 — created during implementation)
 backend/app/           → routers/, models/, static/, gateway_service.py, auth.py, config.py
 backend/alembic/       → Database migrations
+architecture/          → Frozen specifications: das/, dds/, iag/, rfc/, glossary/
 docs/                  → VISION.md (product vision and philosophy)
 ```
 
@@ -219,23 +225,101 @@ Admin generates invite code → user activates → access token stored as SHA-25
 
 ---
 
-## Roadmap
+## Architecture Specifications (Frozen)
 
-Ordered by implementation priority. Each phase composes on the previous.
+The architecture is fully specified and frozen. Implementation conforms to these documents — they do not conform to implementation. Changing a frozen specification requires an RFC (see `architecture/iag/IAG-004-Implementation-Sequence.md` §21).
 
-1. ~~**File Intelligence**~~ — **Complete.** All four semantic understanding layers (Purpose, Behavior, Safety, Design) implemented, validated, and shipped with question-aware context selection.
-2. **Module Intelligence** — understand how related files work together (cross-file relationships, module-level context). **Active phase.**
-3. **Project Intelligence** — understand the whole codebase as architecture.
+### Document Layers
+
+```
+DAS (frozen) — Architectural principles, invariants, the DIR definition
+  ↓
+DDS (frozen) — Runtime subsystem contracts, state models, failure modes
+  ↓
+IAG (frozen) — Module boundaries, technology decisions, runtime architecture, implementation sequence
+  ↓
+Implementation — Source code that realizes all of the above
+```
+
+### Specification Inventory
+
+| Layer | Documents | Scope |
+|-------|-----------|-------|
+| DAS | DAS-000 through DAS-012 | Architecture: principles, DIR, tiers, entities, relationships, passes, indexes, retrieval, context assembly, incremental update, consumers, storage |
+| DDS | DDS-000 through DDS-009 | Design: authoring standard, producer runtime, DIR runtime, pass runtime, index runtime, retrieval runtime, context assembly, update engine, storage engine, consumer runtime |
+| IAG | IAG-001 through IAG-004 | Implementation: module architecture, technology decisions, runtime architecture, implementation sequence |
+
+### Understanding Pipeline Modules (IAG-001)
+
+8 framework targets building the intelligence pipeline:
+
+| Module | DDS Source | Role |
+|--------|-----------|------|
+| DIRCore (M1) | DDS-002 types | Foundation types and cross-module protocols |
+| ProducerRuntime (M2) | DDS-001 + DDS-003 | Pass execution, DAG construction |
+| IndexRuntime (M3) | DDS-004 | Five index families, incremental maintenance |
+| RetrievalRuntime (M4) | DDS-005 | Five-stage evidence retrieval |
+| ContextAssembly (M5) | DDS-006 | Strategy-based context frame assembly |
+| ConsumerRuntime (M6) | DDS-009 | Reasoning engine management, grounding verification |
+| UpdateEngine (M7) | DDS-007 + DDS-002 runtime | DIR runtime + synchronous/deferred pipeline coordination |
+| StorageEngine (M8) | DDS-008 | Snapshots, GC, grounding map, content hashing |
+
+### Implementation Phases (IAG-004)
+
+| Phase | Name | Modules | Status |
+|-------|------|---------|--------|
+| 1 | Foundation | DIRCore, build system, test infrastructure | Not started |
+| 2 | Leaf Modules | StorageEngine, ProducerRuntime, IndexRuntime (parallel) | Not started |
+| 3 | Write Pipeline | UpdateEngine | Not started |
+| 4 | Read Pipeline | RetrievalRuntime → ContextAssembly → ConsumerRuntime | Not started |
+| 5 | System Integration | UnderstandingSystem composition root + integration tests | Not started |
+| 6 | Application Integration | AppDependencies wiring, file monitoring bridge | Not started |
+
+Phases are sequential with verification gates (G1–G6) between them. No phase begins until the previous gate passes. See IAG-004 for entry/exit criteria, parallel work opportunities, and rollback policy.
 
 ---
 
-## Next Immediate Milestone
+## Implementation Rules
 
-**Module Intelligence** — understand how related files work together.
+### Implement, Do Not Redesign
 
-File Intelligence reached diminishing returns: single-file understanding is comprehensive, but engineers reading coordinators, managers, and services consistently need to know "what do my dependencies do?" This is the cross-file understanding gap that Module Intelligence addresses.
+The architecture is specified. Implementation realizes the specifications. Do not:
+- Redesign module boundaries (IAG-001 is frozen)
+- Change the dependency graph between modules
+- Add or remove modules
+- Change actor placement (IAG-003 is frozen)
+- Change technology selections (IAG-002 is frozen)
+- Skip verification gates or phase ordering (IAG-004 is frozen)
 
-The infrastructure is ready: `Relationship` captures `.calls`, `.conformsTo`, `.inherits`, `.owns` edges. `ImportDeclaration` captures module dependencies. These are the building blocks for cross-file graph construction. Module Intelligence composes on top of File Intelligence — it does not require redesigning it.
+### Before Implementing
+
+1. Read the relevant DDS contract for the subsystem being implemented.
+2. Read the relevant IAG sections for module structure, technology, and runtime behavior.
+3. Inspect the affected code and identify impacted files — do not assume.
+4. Implement incrementally in production-quality code. No scaffolding, no stubs, no "we'll fix it later."
+
+### Quality Priorities
+
+Reliability, maintainability, correctness, incremental computation, and observability take precedence over clever implementations.
+
+### When the Spec Seems Wrong
+
+If implementation reveals a genuine contradiction with DAS/DDS/IAG — not inconvenience, but an actual invariant violation, contract contradiction, or impossibility — **stop and explain why an RFC is required**. Do not silently deviate from the specification. Do not work around it. Document the finding and the evidence.
+
+The RFC must include: which document and section, what it currently says, what's proposed, why it's incorrect (with evidence), and downstream impact. See IAG-004 §21.3.
+
+### Verification
+
+Each phase has objective exit criteria (IAG-004 §3–§8). Verification is binary: builds succeed or fail, tests pass or fail, strict concurrency reports or doesn't. No subjective assessment.
+
+---
+
+## Roadmap
+
+1. ~~**File Intelligence**~~ — **Complete.** All four semantic understanding layers implemented, validated, and shipped.
+2. ~~**Architecture**~~ — **Complete.** DAS-000–012, DDS-000–009, IAG-001–004 all frozen.
+3. **Understanding Pipeline Implementation** — **Active.** IAG-004 Phase 1 (Foundation) is next.
+4. **Project Intelligence** — understand the whole codebase as architecture. Future phase.
 
 ---
 
@@ -256,6 +340,13 @@ The infrastructure is ready: `Relationship` captures `.calls`, `.conformsTo`, `.
 
 These architectural decisions are validated. Do not redesign without strong evidence.
 
+### Frozen Specifications
+13. **DAS-000 through DAS-012** — canonical architecture. Changes require a DAS amendment process.
+14. **DDS-000 through DDS-009** — canonical design specifications. Changes require a DDS amendment process.
+15. **IAG-001 through IAG-004** — canonical implementation architecture. Changes require an explicit RFC with evidence of incorrectness (IAG-004 §21.3).
+16. **DIR as canonical asset** — all capabilities are consumers of the DIR. Do not build features that bypass the intelligence architecture.
+
+### Existing Application
 1. **Deterministic Facts Engine** — single-pass AST extraction of entities, imports, relationships. Foundation for everything.
 2. **File Intelligence architecture** — layered understanding model (Identity → Purpose → Behavior → Safety → Design). All layers implemented and validated.
 3. **Lazy Semantic Enrichment** — triggered by user question, not by parsing. Cached by file hash. In-memory cache. Single LLM call for all four layers.
@@ -267,7 +358,7 @@ These architectural decisions are validated. Do not redesign without strong evid
 9. **V7 explanation prompt** — frozen until real-user evidence justifies changes.
 10. **DSA as separate prompt** — not an overlay on V7. Lives in `ExplanationFramework+DSA.swift`.
 11. **Analytics pipeline** — server-side token extraction, compound mode values, orthogonal `mode` and `explanation_profile`.
-12. **Incremental milestone-based development** — File → Module → Project → Living Intelligence progression.
+12. **Incremental milestone-based development** — File → Architecture → Implementation → Project Intelligence progression.
 
 ---
 
@@ -279,7 +370,6 @@ Do not build these unless explicitly requested.
 |---------|--------|
 | AI quality ratings | No user feedback mechanism. Wait for alpha feedback. |
 | User-configurable hotkeys | Current hotkeys work. Not justified for alpha. |
-| Cross-file context / dependency graph | Module Intelligence phase — now active. |
 | SSE streaming | Current single-chunk approach works. Marginal improvement. |
 | ARE artifact generation | Model capability is the bottleneck. |
 | Time-windowed analytics | Not useful until daily volume exceeds ~50. |
@@ -308,6 +398,15 @@ Do not build these unless explicitly requested.
 - **Never encode explanation profile into mode strings.** `mode` and `explanation_profile` are orthogonal.
 - **Never force improvement output when code is already clean.**
 - **Update `_MODEL_PRICING_PER_MTOK` in admin.py** when switching AI models.
+
+### Understanding Pipeline
+- **Never add imports between pipeline modules beyond IAG-001 §3.** The dependency graph is frozen.
+- **Never use `@MainActor` in any understanding pipeline module.** Pipeline runs off the main thread (IAG-003 §6.3).
+- **Never use `@unchecked Sendable` without documented justification.** Strict concurrency must be clean (IAG-003 §10.3).
+- **Never skip a verification gate.** Phase N+1 does not begin until Phase N exit criteria pass (IAG-004 §12).
+- **Never patch downstream to fix upstream.** Fix defects at the earliest phase that introduced them (IAG-004 §20).
+- **Never import GRDB in any understanding pipeline module.** Storage uses Codable + atomic file I/O (IAG-002:TI-3).
+- **Never redesign a DDS contract during implementation.** If it seems wrong, file an RFC (IAG-004 §21).
 
 ---
 

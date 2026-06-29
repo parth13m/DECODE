@@ -69,6 +69,295 @@ packages:
     version: 0.23.4
 
 targets:
+
+  # ─────────────────────────────────────────────────────────────
+  # Understanding Pipeline — 8 Framework Targets (IAG-001 §1)
+  # ─────────────────────────────────────────────────────────────
+
+  # M1: Foundation types and cross-module protocols
+  DIRCore:
+    type: framework
+    platform: macOS
+    sources:
+      - path: Decode/Understanding/DIRCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.decode.dircore
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies: []
+
+  # M2: DAG-ordered pass execution (DDS-001, DDS-003)
+  ProducerRuntime:
+    type: framework
+    platform: macOS
+    sources:
+      - path: Decode/Understanding/ProducerRuntime
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.decode.producerruntime
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: DIRCore
+      - package: SwiftSyntax
+        product: SwiftSyntax
+      - package: SwiftSyntax
+        product: SwiftParser
+      - package: SwiftTreeSitter
+        product: SwiftTreeSitter
+      - package: TreeSitterPython
+      - package: TreeSitterJavaScript
+      - package: TreeSitterTypeScript
+        product: TreeSitterTypeScript
+      - package: TreeSitterHTML
+      - package: TreeSitterCSS
+      - package: TreeSitterJava
+      - package: TreeSitterCSharp
+      - package: TreeSitterC
+      - package: TreeSitterCPP
+
+  # M3: Five index families, incremental maintenance (DDS-004)
+  IndexRuntime:
+    type: framework
+    platform: macOS
+    sources:
+      - path: Decode/Understanding/IndexRuntime
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.decode.indexruntime
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: DIRCore
+
+  # M4: Evidence retrieval from indexes and DIR (DDS-005)
+  RetrievalRuntime:
+    type: framework
+    platform: macOS
+    sources:
+      - path: Decode/Understanding/RetrievalRuntime
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.decode.retrievalruntime
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: DIRCore
+      - target: IndexRuntime
+
+  # M5: Structured context from retrieved evidence (DDS-006)
+  ContextAssembly:
+    type: framework
+    platform: macOS
+    sources:
+      - path: Decode/Understanding/ContextAssembly
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.decode.contextassembly
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: DIRCore
+      - target: RetrievalRuntime
+
+  # M6: Understanding delivery to consumers (DDS-009)
+  ConsumerRuntime:
+    type: framework
+    platform: macOS
+    sources:
+      - path: Decode/Understanding/ConsumerRuntime
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.decode.consumerruntime
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: DIRCore
+      - target: ContextAssembly
+
+  # M7: Synchronous/deferred pipeline orchestration, DIR ownership (DDS-007)
+  UpdateEngine:
+    type: framework
+    platform: macOS
+    sources:
+      - path: Decode/Understanding/UpdateEngine
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.decode.updateengine
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: DIRCore
+      - target: ProducerRuntime
+      - target: IndexRuntime
+      - target: StorageEngine
+
+  # M8: Snapshot persistence, GC, grounding map, content hashes (DDS-008)
+  StorageEngine:
+    type: framework
+    platform: macOS
+    sources:
+      - path: Decode/Understanding/StorageEngine
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.decode.storageengine
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: DIRCore
+
+  # ─────────────────────────────────────────────────────────────
+  # Understanding Pipeline — Test Support (IAG-001 §9)
+  # ─────────────────────────────────────────────────────────────
+
+  UnderstandingTestSupport:
+    type: framework
+    platform: macOS
+    sources:
+      - path: UnderstandingTests/UnderstandingTestSupport
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.decode.understandingtestsupport
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: DIRCore
+
+  # ─────────────────────────────────────────────────────────────
+  # Understanding Pipeline — 8 Unit Test Targets (IAG-001 §8)
+  # ─────────────────────────────────────────────────────────────
+
+  DIRCoreTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: UnderstandingTests/DIRCoreTests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.decode.dircoretests
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: DIRCore
+      - target: UnderstandingTestSupport
+
+  ProducerRuntimeTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: UnderstandingTests/ProducerRuntimeTests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.decode.producerruntimetests
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: ProducerRuntime
+      - target: DIRCore
+      - target: UnderstandingTestSupport
+
+  IndexRuntimeTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: UnderstandingTests/IndexRuntimeTests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.decode.indexruntimetests
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: IndexRuntime
+      - target: DIRCore
+      - target: UnderstandingTestSupport
+
+  RetrievalRuntimeTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: UnderstandingTests/RetrievalRuntimeTests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.decode.retrievalruntimetests
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: RetrievalRuntime
+      - target: DIRCore
+      - target: UnderstandingTestSupport
+
+  ContextAssemblyTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: UnderstandingTests/ContextAssemblyTests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.decode.contextassemblytests
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: ContextAssembly
+      - target: DIRCore
+      - target: UnderstandingTestSupport
+
+  ConsumerRuntimeTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: UnderstandingTests/ConsumerRuntimeTests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.decode.consumerruntimetests
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: ConsumerRuntime
+      - target: DIRCore
+      - target: UnderstandingTestSupport
+
+  UpdateEngineTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: UnderstandingTests/UpdateEngineTests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.decode.updateenginetests
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: UpdateEngine
+      - target: DIRCore
+      - target: UnderstandingTestSupport
+
+  StorageEngineTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: UnderstandingTests/StorageEngineTests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.decode.storageenginetests
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: StorageEngine
+      - target: DIRCore
+      - target: UnderstandingTestSupport
+
+  # ─────────────────────────────────────────────────────────────
+  # Understanding Pipeline — 1 Integration Test Target (IAG-001 §8)
+  # ─────────────────────────────────────────────────────────────
+
+  UnderstandingIntegrationTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: UnderstandingTests/UnderstandingIntegrationTests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.decode.understandingintegrationtests
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: DIRCore
+      - target: ProducerRuntime
+      - target: IndexRuntime
+      - target: RetrievalRuntime
+      - target: ContextAssembly
+      - target: ConsumerRuntime
+      - target: UpdateEngine
+      - target: StorageEngine
+      - target: UnderstandingTestSupport
+
+  # ─────────────────────────────────────────────────────────────
+  # Decode Application
+  # ─────────────────────────────────────────────────────────────
+
   Decode:
     type: application
     platform: macOS
@@ -76,6 +365,7 @@ targets:
       - path: Decode
         excludes:
           - "Infrastructure/AST/Queries/**"
+          - "Understanding/**"
       - path: Decode/Infrastructure/AST/Queries
         type: folder
         buildPhase: resources
