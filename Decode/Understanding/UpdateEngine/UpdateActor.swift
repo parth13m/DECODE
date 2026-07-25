@@ -426,6 +426,9 @@ public actor UpdateActor: DIRReadAccess, DIRWriteAccess, DemandSignalSink {
                 if case .frontend(let frontend) = contract {
                     let ext = (event.filePath as NSString).pathExtension
                     if frontend.sourceFormats.contains(ext) {
+                        // Snapshot unit IDs before execution to detect new admissions.
+                        let unitIdsBefore = Set(unitStore.allUnits().map(\.id))
+
                         let ticket = ExecutionTicket(
                             producerId: producerId,
                             scope: .file(path: event.filePath),
@@ -433,6 +436,13 @@ public actor UpdateActor: DIRReadAccess, DIRWriteAccess, DemandSignalSink {
                         )
                         let result = await executionDirective.execute(ticket)
                         syncTickets += 1
+
+                        // Track newly admitted units (DDS-007 R8: index must
+                        // reflect all DIR mutations, including admissions).
+                        let unitIdsAfter = Set(unitStore.allUnits().map(\.id))
+                        for newId in unitIdsAfter.subtracting(unitIdsBefore) {
+                            allChanges.append(.admitted(newId))
+                        }
 
                         switch result {
                         case .completed(let report):

@@ -34,7 +34,7 @@ Grant all three in **System Settings > Privacy & Security**, then restart Decode
 
 **Activation fails or shows "Connection failed"**
 - Verify your internet connection
-- Check backend health: https://decode-production-2884.up.railway.app/health
+- Check backend health: https://decode-production-9eba.up.railway.app/health
 - Retry — the backend may be cold-starting (takes 5–15 seconds)
 
 **App stuck on "Verifying account..."**

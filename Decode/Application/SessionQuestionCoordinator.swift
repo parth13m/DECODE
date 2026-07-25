@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import ConsumerRuntime
 
 /// Orchestrates the Session Question flow: hotkey → capture → resolve session → context → AI → HUD.
 ///
@@ -36,6 +37,7 @@ final class SessionQuestionCoordinator {
     private let sessionProvider: @MainActor () -> SessionResolverInput?
     private let usageTracker: AIUsageTracker
     private let semanticEnrichment: SemanticEnrichmentService
+    private let pipelineQueryService: PipelineQueryService?
 
     // MARK: - State
 
@@ -65,7 +67,8 @@ final class SessionQuestionCoordinator {
         snippetHealthClassifier: SnippetHealthClassifier = SnippetHealthClassifier(),
         sessionProvider: @escaping @MainActor () -> SessionResolverInput?,
         usageTracker: AIUsageTracker,
-        semanticEnrichment: SemanticEnrichmentService
+        semanticEnrichment: SemanticEnrichmentService,
+        pipelineQueryService: PipelineQueryService? = nil
     ) {
         self.selectionCapture = selectionCapture
         self.aiProvider = aiProvider
@@ -77,6 +80,7 @@ final class SessionQuestionCoordinator {
         self.sessionProvider = sessionProvider
         self.usageTracker = usageTracker
         self.semanticEnrichment = semanticEnrichment
+        self.pipelineQueryService = pipelineQueryService
     }
 
     // MARK: - Lifecycle
@@ -194,6 +198,31 @@ final class SessionQuestionCoordinator {
         #if DEBUG
         print("[SessionQuestion] Resolved session: \(managed.session.fileName) (method=\(resolution.method), confidence=\(resolution.confidence))")
         #endif
+
+        // 6b. Pipeline path: attempt the Software Intelligence Platform first.
+        //     If the pipeline produces an Understanding, render it and return.
+        //     If it cannot (no evidence, assembly failure, consumer failure),
+        //     fall through to the legacy path below.
+        if let pipelineQueryService {
+            let pipelineResult = await attemptPipelineExplain(
+                filePath: managed.session.filePath,
+                snippetText: snippetText,
+                parsedEntities: managed.parsedEntities,
+                sourceAppName: sourceAppName,
+                provider: provider,
+                managed: managed,
+                generation: generation
+            )
+
+            if pipelineResult {
+                // Pipeline succeeded — Understanding rendered to HUD.
+                return
+            }
+
+            #if DEBUG
+            print("[SessionQuestion] Pipeline returned no result — falling back to legacy path")
+            #endif
+        }
 
         // 7. Build snippet-anchored session context.
         let snapshot = ActiveSessionSnapshot(
@@ -387,13 +416,145 @@ final class SessionQuestionCoordinator {
                 originalCode: snippetText,
                 explanationProfile: explanationProfile,
                 language: language,
-                sessionContext: context
+                sessionContext: context,
+                pipelineQueryService: nil,
+                pipelineConversationState: nil,
+                pipelineFilePath: nil,
+                pipelineEntityName: nil
             )
             hud.showStream(stream, sourceApp: sourceAppName, followUpContext: followUpCtx)
         } catch {
             guard generation == requestGeneration else { return }
             hud.showError("AI request failed: \(error.localizedDescription)")
         }
+    }
+
+    // MARK: - Pipeline Execution Path
+
+    /// Attempts to produce an explanation via the Software Intelligence Platform.
+    ///
+    /// Returns `true` if the pipeline produced a usable Understanding that was
+    /// rendered to the HUD. Returns `false` if the pipeline could not produce
+    /// an Understanding (no evidence, assembly failure, consumer failure),
+    /// signaling the caller to fall back to the legacy path.
+    private func attemptPipelineExplain(
+        filePath: String,
+        snippetText: String,
+        parsedEntities: [ParsedEntity],
+        sourceAppName: String?,
+        provider: any AIProviderProtocol,
+        managed: ManagedSession,
+        generation: UInt64
+    ) async -> Bool {
+        // Find the smallest entity whose source contains the snippet.
+        let containingEntity = parsedEntities
+            .filter { $0.sourceText.contains(snippetText) }
+            .min(by: { $0.sourceText.count < $1.sourceText.count })
+
+        // If no entity contains the snippet, the pipeline cannot resolve
+        // an anchor — fall back to the legacy path.
+        guard let entity = containingEntity else {
+            #if DEBUG
+            print("[SessionQuestion] Pipeline: no containing entity found for snippet")
+            #endif
+            return false
+        }
+
+        // Build the qualified entity name matching FrontendOutputConversion's
+        // naming convention: "ParentType.ChildName" for nested entities,
+        // "Name" for top-level.
+        let entityName: String
+        if let parentStableId = entity.parentStableId,
+           let parent = parsedEntities.first(where: { $0.entity.stableId == parentStableId }) {
+            entityName = "\(parent.entity.name).\(entity.entity.name)"
+        } else {
+            entityName = entity.entity.name
+        }
+
+        let explanationProfile = UserDefaults.standard.bool(forKey: "dsaModeEnabled") ? "dsa" : "general"
+
+        // Show loading state immediately.
+        hud.showLoading(
+            sourceApp: sourceAppName,
+            mode: "session",
+            sessionFile: managed.session.fileName,
+            explanationProfile: explanationProfile
+        )
+
+        // Execute the pipeline query off the main thread.
+        let queryService = pipelineQueryService!
+        let result = await Task.detached {
+            await queryService.query(
+                filePath: filePath,
+                entityName: entityName,
+                purpose: "explain"
+            )
+        }.value
+
+        // Staleness check after pipeline await.
+        guard generation == requestGeneration else {
+            #if DEBUG
+            print("[SessionQuestion] Pipeline: request superseded (gen=\(generation), current=\(requestGeneration))")
+            #endif
+            return true // Consumed the request — don't fall back.
+        }
+
+        guard case .success(let understanding) = result else {
+            #if DEBUG
+            print("[SessionQuestion] Pipeline: non-success result — \(result)")
+            #endif
+            return false
+        }
+
+        // Check quota before delivering the result.
+        guard usageTracker.tryConsumeRequest() else {
+            toastManager.show(usageTracker.quotaExhaustedMessage, icon: "gauge.with.dots.needle.67percent")
+            return true // Consumed the request — don't fall back.
+        }
+
+        // Resolve language for analytics.
+        let fileExt = (managed.session.fileName as NSString).pathExtension.lowercased()
+        let language: String? = if let profile = LanguageProfile.from(fileName: managed.session.fileName) {
+            profile.displayName
+        } else if fileExt == "swift" {
+            "Swift"
+        } else {
+            nil
+        }
+
+        // Wrap Understanding.content in a single-element stream for the HUD.
+        let content = understanding.content
+        let stream = AsyncThrowingStream<String, Error> { continuation in
+            continuation.yield(content)
+            continuation.finish()
+        }
+
+        // Build follow-up context for the HUD (enables pipeline-based follow-up).
+        // Stores the ConversationState from the initial Understanding so follow-up
+        // questions route through the pipeline with conversation continuity.
+        let followUpCtx = ExplanationHUDViewModel.FollowUpContext(
+            sourceContent: "Explain this code:\n\n\(snippetText)",
+            systemPrompt: "", // Not used by pipeline path — placeholder for legacy fallback.
+            mode: "session",
+            aiProvider: provider,
+            usageTracker: usageTracker,
+            originalCode: snippetText,
+            explanationProfile: explanationProfile,
+            language: language,
+            sessionContext: nil, // Pipeline-based context — no legacy SessionContext.
+            pipelineQueryService: pipelineQueryService,
+            pipelineConversationState: understanding.conversationState,
+            pipelineFilePath: filePath,
+            pipelineEntityName: entityName
+        )
+
+        hud.showStream(stream, sourceApp: sourceAppName, followUpContext: followUpCtx)
+
+        #if DEBUG
+        print("[SessionQuestion] Pipeline: Understanding delivered — engine=\(understanding.metadata.engineIdentifier), completeness=\(understanding.metadata.completeness)")
+        #endif
+
+        return true
     }
 
     // MARK: - Context Layer Selection

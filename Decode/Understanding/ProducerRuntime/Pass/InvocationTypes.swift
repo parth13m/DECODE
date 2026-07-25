@@ -55,14 +55,14 @@ enum InvocationState: String, Hashable, Sendable {
 ///
 /// DDS-003: For a per-file pass processing file F, the scope window is all entities
 /// in F. For a per-module pass, all entities in the module.
-struct ScopeWindow: Sendable {
+public struct ScopeWindow: Sendable {
     /// The entities within scope for this invocation.
-    let entities: Set<EntityReference>
+    public let entities: Set<EntityReference>
 
     /// An identifier for this scope window (used for prior output record lookup).
-    let identifier: ScopeWindowIdentifier
+    public let identifier: ScopeWindowIdentifier
 
-    init(entities: Set<EntityReference>, identifier: ScopeWindowIdentifier) {
+    public init(entities: Set<EntityReference>, identifier: ScopeWindowIdentifier) {
         self.entities = entities
         self.identifier = identifier
     }
@@ -71,15 +71,15 @@ struct ScopeWindow: Sendable {
 /// Identifies a scope window for prior output record lookup.
 ///
 /// DDS-003: Prior output records are keyed by (pass identity, scope window).
-struct ScopeWindowIdentifier: Hashable, Sendable {
-    let value: String
+public struct ScopeWindowIdentifier: Hashable, Sendable {
+    public let value: String
 
-    init(_ value: String) {
+    public init(_ value: String) {
         self.value = value
     }
 
     /// Creates a scope window identifier from an execution scope.
-    static func from(_ scope: ExecutionScope) -> ScopeWindowIdentifier {
+    public static func from(_ scope: ExecutionScope) -> ScopeWindowIdentifier {
         switch scope {
         case .entity(let ref):
             return ScopeWindowIdentifier("entity:\(ref.qualifiedName)")

@@ -137,6 +137,140 @@ struct OutputComparisonKey: Hashable, Sendable {
     }
 }
 
+// MARK: — Public Frontend Output
+
+/// A single output record from a frontend producer.
+///
+/// Public counterpart of the internal `RawOutputRecord`. Product code
+/// (IAG-004 §18) uses this type when registering frontends via
+/// `ProducerActor.registerFrontendHandler`.
+public struct FrontendOutput: Sendable {
+    public let subject: UnitSubject
+    public let predicate: PredicateIdentifier
+    public let value: TypedValue
+    public let tier: Tier
+    public let confidence: Confidence
+    public let groundingRefs: [UnitIdentifier]
+    public let version: VersionStamp
+
+    public init(
+        subject: UnitSubject,
+        predicate: PredicateIdentifier,
+        value: TypedValue,
+        tier: Tier,
+        confidence: Confidence,
+        groundingRefs: [UnitIdentifier] = [],
+        version: VersionStamp
+    ) {
+        self.subject = subject
+        self.predicate = predicate
+        self.value = value
+        self.tier = tier
+        self.confidence = confidence
+        self.groundingRefs = groundingRefs
+        self.version = version
+    }
+}
+
+/// Internal adapter that wraps a closure to conform to FrontendDefinition.
+struct ClosureFrontend: FrontendDefinition {
+    let handler: @Sendable (
+        _ filePath: String,
+        _ identity: ProducerIdentity,
+        _ outputContract: OutputContract
+    ) async throws -> [FrontendOutput]
+
+    func parse(
+        filePath: String,
+        identity: ProducerIdentity,
+        outputContract: OutputContract
+    ) async throws -> [RawOutputRecord] {
+        let outputs = try await handler(filePath, identity, outputContract)
+        return outputs.map { output in
+            RawOutputRecord(
+                subject: output.subject,
+                predicate: output.predicate,
+                value: output.value,
+                tier: output.tier,
+                confidence: output.confidence,
+                groundingRefs: output.groundingRefs,
+                version: output.version
+            )
+        }
+    }
+}
+
+// MARK: — Public Pass Output
+
+/// A single output record from a pass producer.
+///
+/// Public counterpart of the internal `RawOutputRecord` for pass producers.
+/// Product code (IAG-004 §18) uses this type when registering passes via
+/// `ProducerActor.registerPassHandler`.
+public struct PassOutput: Sendable {
+    public let subject: UnitSubject
+    public let predicate: PredicateIdentifier
+    public let value: TypedValue
+    public let tier: Tier
+    public let confidence: Confidence
+    public let groundingRefs: [UnitIdentifier]
+    public let inferenceMethod: String?
+    public let version: VersionStamp
+
+    public init(
+        subject: UnitSubject,
+        predicate: PredicateIdentifier,
+        value: TypedValue,
+        tier: Tier,
+        confidence: Confidence,
+        groundingRefs: [UnitIdentifier] = [],
+        inferenceMethod: String? = nil,
+        version: VersionStamp
+    ) {
+        self.subject = subject
+        self.predicate = predicate
+        self.value = value
+        self.tier = tier
+        self.confidence = confidence
+        self.groundingRefs = groundingRefs
+        self.inferenceMethod = inferenceMethod
+        self.version = version
+    }
+}
+
+/// Internal adapter that wraps a closure to conform to PassDefinition.
+struct ClosurePass: PassDefinition {
+    let handler: @Sendable (
+        _ inputSet: [AtomicUnit],
+        _ scopeWindow: ScopeWindow,
+        _ passIdentity: ProducerIdentity,
+        _ outputContract: OutputContract,
+        _ existingScopeEntity: EntityReference?
+    ) async throws -> [PassOutput]
+
+    func execute(context: ExecutionContext) async throws -> [RawOutputRecord] {
+        let outputs = try await handler(
+            context.inputSet,
+            context.scopeWindow,
+            context.passIdentity,
+            context.outputContract,
+            context.existingScopeEntity
+        )
+        return outputs.map { output in
+            RawOutputRecord(
+                subject: output.subject,
+                predicate: output.predicate,
+                value: output.value,
+                tier: output.tier,
+                confidence: output.confidence,
+                groundingRefs: output.groundingRefs,
+                inferenceMethod: output.inferenceMethod,
+                version: output.version
+            )
+        }
+    }
+}
+
 // MARK: — Output Validation
 
 /// Reasons an output batch may be rejected during validation.

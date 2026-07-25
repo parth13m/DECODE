@@ -42,7 +42,7 @@ enum DecodeConfig {
         #if DEBUG
         return URL(string: "http://localhost:8000")!
         #else
-        return URL(string: "https://decode-production-2884.up.railway.app")!
+        return URL(string: "https://decode-production-9eba.up.railway.app")!
         #endif
     }
 }

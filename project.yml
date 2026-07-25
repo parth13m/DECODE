@@ -19,6 +19,7 @@ settings:
       SWIFT_OPTIMIZATION_LEVEL: -Onone
       SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
       ENABLE_TESTABILITY: YES
+      CLANG_ENABLE_CODE_COVERAGE: NO
     Release:
       SWIFT_OPTIMIZATION_LEVEL: -O
       SWIFT_COMPILATION_MODE: wholemodule
@@ -271,6 +272,7 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
     dependencies:
       - target: RetrievalRuntime
+      - target: IndexRuntime
       - target: DIRCore
       - target: UnderstandingTestSupport
 
@@ -285,6 +287,7 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
     dependencies:
       - target: ContextAssembly
+      - target: RetrievalRuntime
       - target: DIRCore
       - target: UnderstandingTestSupport
 
@@ -299,6 +302,8 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
     dependencies:
       - target: ConsumerRuntime
+      - target: ContextAssembly
+      - target: RetrievalRuntime
       - target: DIRCore
       - target: UnderstandingTestSupport
 
@@ -398,6 +403,15 @@ targets:
       - package: TreeSitterCSharp
       - package: TreeSitterC
       - package: TreeSitterCPP
+      # Understanding pipeline framework targets (Phase 6: Application Integration)
+      - target: DIRCore
+      - target: ProducerRuntime
+      - target: IndexRuntime
+      - target: RetrievalRuntime
+      - target: ContextAssembly
+      - target: ConsumerRuntime
+      - target: UpdateEngine
+      - target: StorageEngine
 
   DecodeTests:
     type: bundle.unit-test
@@ -434,3 +448,22 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.decode.uitests
         GENERATE_INFOPLIST_FILE: YES
+
+schemes:
+  Decode:
+    build:
+      targets:
+        Decode: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      gatherCoverageData: false
+      targets:
+        - DecodeTests
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release

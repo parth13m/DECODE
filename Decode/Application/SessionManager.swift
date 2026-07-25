@@ -68,6 +68,12 @@ final class SessionManager {
     private let treeSitterParser: TreeSitterParser
     private let database: DatabaseService?
 
+    /// Bridge for forwarding file change events to the understanding pipeline.
+    /// Called when a session's watched file is modified. The closure receives the
+    /// file path and change kind (IAG-004 §8.1: session file events route to
+    /// understanding pipeline when sessions are active).
+    var onFileChanged: ((_ filePath: String, _ kind: FileChangeKind) -> Void)?
+
     /// File extensions that receive full SwiftSyntax AST parsing.
     private static let swiftExtensions: Set<String> = ["swift"]
 
@@ -416,6 +422,9 @@ final class SessionManager {
         managed.watcherTask = Task { [weak self] in
             for await event in eventStream {
                 guard let self, !Task.isCancelled else { break }
+
+                // Bridge to understanding pipeline (IAG-004 §8.1, IC-10).
+                self.onFileChanged?(event.fileURL.path, event.kind)
 
                 switch event.kind {
                 case .modified:

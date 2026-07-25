@@ -220,7 +220,11 @@ final class ScreenshotModeCoordinator {
                 originalCode: nil,
                 explanationProfile: explanationProfile,
                 language: nil,
-                sessionContext: nil
+                sessionContext: nil,
+                pipelineQueryService: nil,
+                pipelineConversationState: nil,
+                pipelineFilePath: nil,
+                pipelineEntityName: nil
             )
             hud.showStream(stream, sourceApp: sourceAppName, followUpContext: followUpCtx)
         } catch {

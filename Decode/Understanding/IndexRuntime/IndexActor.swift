@@ -129,7 +129,7 @@ public actor IndexActor: IndexQuerying, IndexFreshness, IndexBatchUpdate {
 
         // Apply any change batches that arrived during construction
         for batch in pendingBatches {
-            applyBatchInternal(batch)
+            _ = await applyBatchWithResolution(batch)
         }
         pendingBatches.removeAll()
 
@@ -246,7 +246,7 @@ public actor IndexActor: IndexQuerying, IndexFreshness, IndexBatchUpdate {
             return BatchUpdateResult(updatedFamilies: [], failedFamilies: [:], epoch: batch.epoch)
         }
 
-        return applyBatchInternal(batch)
+        return await applyBatchWithResolution(batch)
     }
 
     public func processDeferredUpdates() async {
@@ -335,91 +335,7 @@ public actor IndexActor: IndexQuerying, IndexFreshness, IndexBatchUpdate {
         logger.info("IndexActor terminated — all indexes deallocated")
     }
 
-    // MARK: — Internal: Batch Update Application
-
-    /// Applies a change batch to all available structural families, enqueues content updates.
-    ///
-    /// DAS-010 IM-3: Entity/Graph first → Scope/Predicate second → Content deferred.
-    @discardableResult
-    private func applyBatchInternal(_ batch: ChangeBatch) -> BatchUpdateResult {
-        var updatedFamilies: Set<IndexFamily> = []
-        var failedFamilies: [IndexFamily: String] = [:]
-
-        logger.debug("Applying change batch (epoch: \(batch.epoch.value), changes: \(batch.changes.count))")
-
-        // Phase 1: Entity and Graph (DAS-010 IM-3)
-        for family in [IndexFamily.entity, .graph] {
-            let availability = familyAvailabilityState[family] ?? .absent
-            guard availability == .available || availability == .rebuilding else { continue }
-            do {
-                try applyChangesToFamily(family, changes: batch.changes)
-                familyLastUpdateEpoch[family] = batch.epoch
-                updatedFamilies.insert(family)
-            } catch {
-                logger.error("Failed to update \(family.rawValue) index: \(error.localizedDescription)")
-                failedFamilies[family] = error.localizedDescription
-                familyAvailabilityState[family] = .absent
-            }
-        }
-
-        // Phase 2: Scope and Predicate (DAS-010 IM-3)
-        for family in [IndexFamily.scope, .predicate] {
-            let availability = familyAvailabilityState[family] ?? .absent
-            guard availability == .available || availability == .rebuilding else { continue }
-            do {
-                try applyChangesToFamily(family, changes: batch.changes)
-                familyLastUpdateEpoch[family] = batch.epoch
-                updatedFamilies.insert(family)
-            } catch {
-                logger.error("Failed to update \(family.rawValue) index: \(error.localizedDescription)")
-                failedFamilies[family] = error.localizedDescription
-                familyAvailabilityState[family] = .absent
-            }
-        }
-
-        // Phase 3: Content — deferred (DAS-010 IM-4)
-        enqueueContentUpdates(batch.changes)
-
-        return BatchUpdateResult(updatedFamilies: updatedFamilies, failedFamilies: failedFamilies, epoch: batch.epoch)
-    }
-
-    /// Applies individual changes to a specific family.
-    private func applyChangesToFamily(_ family: IndexFamily, changes: [UnitChange]) throws {
-        for change in changes {
-            switch change {
-            case let .admitted(unitId):
-                // Need to look up the unit to get its fields
-                // During synchronous pipeline, the unit is guaranteed to exist
-                // We'll index it when we have its data; for now record the admission
-                // The unit data is resolved during construction/rebuild, or via
-                // the pendingAdmissions mechanism
-                try handleAdmission(unitId: unitId, family: family)
-
-            case let .invalidated(unitId):
-                handleInvalidation(unitId: unitId, family: family)
-
-            case let .superseded(unitId, by: successorId):
-                handleSupersession(unitId: unitId, successorId: successorId, family: family)
-
-            case let .garbageCollected(unitId):
-                handleGarbageCollection(unitId: unitId, family: family)
-            }
-        }
-    }
-
     // MARK: — Internal: Per-Change Handlers
-
-    /// Handles admission of a new unit to a specific family.
-    ///
-    /// Note: Since the unit data is needed but not available in the UnitChange enum,
-    /// we need to resolve the unit via DIRReadAccess. However, within the actor
-    /// we cannot do async calls from a non-async context. The resolution happens
-    /// in the caller (applyBatchInternal is called from async contexts).
-    private func handleAdmission(unitId: UnitIdentifier, family: IndexFamily) throws {
-        // Unit will be resolved in applyBatchWithResolution
-        // This is a placeholder for the synchronous path; actual resolution
-        // requires the async applyBatch entry point
-    }
 
     private func handleInvalidation(unitId: UnitIdentifier, family: IndexFamily) {
         switch family {
@@ -465,25 +381,6 @@ public actor IndexActor: IndexQuerying, IndexFreshness, IndexBatchUpdate {
             predicateIndex.removeUnit(unitId)
         case .content:
             break // Handled by deferred queue
-        }
-    }
-
-    /// Enqueues content index updates for deferred processing.
-    private func enqueueContentUpdates(_ changes: [UnitChange]) {
-        for change in changes {
-            switch change {
-            case let .admitted(unitId):
-                // The actual text content will be resolved during processDeferredUpdates
-                // For now, record that we need to add this unit
-                deferredContentUpdates.append(.remove(unitId: unitId)) // Remove old if exists
-                // Text resolution deferred to processDeferredUpdates via dirRead
-            case let .invalidated(unitId):
-                deferredContentUpdates.append(.remove(unitId: unitId))
-            case let .superseded(unitId, by: _):
-                deferredContentUpdates.append(.remove(unitId: unitId))
-            case let .garbageCollected(unitId):
-                deferredContentUpdates.append(.remove(unitId: unitId))
-            }
         }
     }
 

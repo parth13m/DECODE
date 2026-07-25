@@ -61,7 +61,8 @@ private final class MockAIProvider: AIProviderProtocol, @unchecked Sendable {
         systemPrompt: String,
         mode: String?,
         contextTier: String?,
-        explanationProfile: String?
+        explanationProfile: String?,
+        language: String?
     ) async throws -> AsyncThrowingStream<String, Error> {
         lastMessages = messages
         lastSystemPrompt = systemPrompt

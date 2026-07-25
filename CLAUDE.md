@@ -10,13 +10,19 @@ Stage: Pre-beta alpha, invite-only, 5–50 users.
 
 ---
 
-## Current Project State (June 2026)
+## Current Project State (July 2026)
 
-Architecture phase is **complete**. Current phase: **Implementation** of the understanding pipeline.
+The **Software Intelligence Platform** and the **Session Mode** epic are both **complete** and production-ready. Both are frozen except for bug fixes, reliability improvements, security fixes, or RFC-driven changes.
 
-The architecture is fully specified across three document layers (DAS → DDS → IAG). All specifications are frozen. Implementation follows IAG-004 phase ordering with verification gates between phases.
+The active engineering epic is **Project Intelligence** — understanding the whole codebase as architecture.
 
-Phase 1 (File Intelligence) is complete and validated. All four semantic understanding layers are implemented end-to-end.
+The architecture is fully specified across three document layers (DAS → DDS → IAG). All specifications are frozen. Implementation follows these documents exactly. Architecture changes require an RFC (IAG-004 §21).
+
+### Completed Platform
+
+The understanding pipeline (all 8 modules from IAG-001) is operational end-to-end: ProducerRuntime → IndexRuntime → RetrievalRuntime → ContextAssembly → ConsumerRuntime, with UnderstandingSystem as the composition root, SwiftSyntaxFrontend and TreeSitterFrontend as producers, and ExplainReasoningEngine, ImproveReasoningEngine, and FollowUpReasoningEngine as consumers. Application integration is wired through AppDependencies with pipeline-first execution and automatic legacy fallback.
+
+All four File Intelligence understanding layers (Identity, Purpose, Behavior, Safety, Design) are implemented and validated.
 
 ### What's Implemented
 
@@ -268,14 +274,14 @@ Implementation — Source code that realizes all of the above
 
 | Phase | Name | Modules | Status |
 |-------|------|---------|--------|
-| 1 | Foundation | DIRCore, build system, test infrastructure | Not started |
-| 2 | Leaf Modules | StorageEngine, ProducerRuntime, IndexRuntime (parallel) | Not started |
-| 3 | Write Pipeline | UpdateEngine | Not started |
-| 4 | Read Pipeline | RetrievalRuntime → ContextAssembly → ConsumerRuntime | Not started |
-| 5 | System Integration | UnderstandingSystem composition root + integration tests | Not started |
-| 6 | Application Integration | AppDependencies wiring, file monitoring bridge | Not started |
+| 1 | Foundation | DIRCore, build system, test infrastructure | Complete |
+| 2 | Leaf Modules | StorageEngine, ProducerRuntime, IndexRuntime (parallel) | Complete |
+| 3 | Write Pipeline | UpdateEngine | Complete |
+| 4 | Read Pipeline | RetrievalRuntime → ContextAssembly → ConsumerRuntime | Complete |
+| 5 | System Integration | UnderstandingSystem composition root + integration tests | Complete |
+| 6 | Application Integration | AppDependencies wiring, file monitoring bridge | Complete |
 
-Phases are sequential with verification gates (G1–G6) between them. No phase begins until the previous gate passes. See IAG-004 for entry/exit criteria, parallel work opportunities, and rollback policy.
+All six phases are complete. Phases are sequential with verification gates (G1–G6) between them. See IAG-004 for entry/exit criteria, parallel work opportunities, and rollback policy.
 
 ---
 
@@ -293,14 +299,29 @@ The architecture is specified. Implementation realizes the specifications. Do no
 
 ### Before Implementing
 
-1. Read the relevant DDS contract for the subsystem being implemented.
-2. Read the relevant IAG sections for module structure, technology, and runtime behavior.
-3. Inspect the affected code and identify impacted files — do not assume.
-4. Implement incrementally in production-quality code. No scaffolding, no stubs, no "we'll fix it later."
+1. Read only the DDS/IAG sections relevant to the current capability.
+2. Inspect only the affected repository files — do not assume.
+3. Implement the capability in production-quality code. No scaffolding, no stubs, no "we'll fix it later."
+4. Verify DDS/DAS/IAG compliance.
+5. Add focused tests.
+6. Verify builds and tests.
+7. Update the active implementation status document.
+8. Continue to the next capability.
+
+Think in milestones rather than files.
 
 ### Quality Priorities
 
-Reliability, maintainability, correctness, incremental computation, and observability take precedence over clever implementations.
+Optimize for production quality, maintainability, correctness, scalability, and user value. These take precedence over clever implementations.
+
+### Implementation Philosophy
+
+- Build product capabilities on top of the completed platform.
+- Reuse ProducerRuntime, RetrievalRuntime, ContextAssembly, ConsumerRuntime, UnderstandingSystem, and existing frontends and reasoning engines.
+- Avoid modifying platform infrastructure unless implementation evidence demonstrates a genuine architectural problem.
+- Avoid speculative refactoring.
+- Avoid reopening completed architectural discussions.
+- Avoid unnecessary investigations or documentation.
 
 ### When the Spec Seems Wrong
 
@@ -318,21 +339,26 @@ Each phase has objective exit criteria (IAG-004 §3–§8). Verification is bina
 
 1. ~~**File Intelligence**~~ — **Complete.** All four semantic understanding layers implemented, validated, and shipped.
 2. ~~**Architecture**~~ — **Complete.** DAS-000–012, DDS-000–009, IAG-001–004 all frozen.
-3. **Understanding Pipeline Implementation** — **Active.** IAG-004 Phase 1 (Foundation) is next.
-4. **Project Intelligence** — understand the whole codebase as architecture. Future phase.
+3. ~~**Understanding Pipeline Implementation (Session Mode)**~~ — **Complete.** All 6 phases, all 8 modules, application integration, pipeline-first execution for Explain/Follow-Up/Improve, production hardening, and comprehensive test coverage.
+4. **Project Intelligence** — **Active.** Understand the whole codebase as architecture.
+
+### Implementation Status Tracking
+
+Session Mode implementation is tracked in `SESSION_MODE_IMPLEMENTATION_STATUS.md` (complete, read-only reference).
+
+<!-- TODO: Create PROJECT_INTELLIGENCE_IMPLEMENTATION_STATUS.md when the Project Intelligence epic begins. It will become the active implementation status document. -->
 
 ---
 
 ## Known Limitations
 
-1. **Test coverage thin** — 13 test files exist but key services lack coverage. Priority: `ContextBuilderService`, `SessionResolver`, `SnippetHealthClassifier`, `ExplanationTagParser`.
-2. **Swift conformance ambiguity** — SwiftSyntax lacks type resolution. All inheritance clause items on classes are recorded as `.conformsTo` (cannot distinguish superclass from protocol without type checking).
-3. **Sandbox disabled** — re-enabling requires security-scoped bookmarks.
-4. **No server-side request cancellation** — client cancels URLSession task but server-side LLM call runs to completion.
-5. **No `os.Logger` in release builds** — only server-side observability.
-6. **SQL grammar excluded** from tree-sitter — upstream SPM package issue.
-7. **Replace ⌘V targeting** — HUD panel may capture key window after Replace click, causing paste to target the panel instead of the editor.
-8. **Pre-existing test failure** — `MockAIProvider` doesn't conform to `AIProviderProtocol` in `SelectionModeCoordinatorTests.swift:49`.
+1. **Swift conformance ambiguity** — SwiftSyntax lacks type resolution. All inheritance clause items on classes are recorded as `.conformsTo` (cannot distinguish superclass from protocol without type checking).
+2. **Sandbox disabled** — re-enabling requires security-scoped bookmarks.
+3. **No server-side request cancellation** — client cancels URLSession task but server-side LLM call runs to completion.
+4. **No `os.Logger` in release builds** — only server-side observability.
+5. **SQL grammar excluded** from tree-sitter — upstream SPM package issue.
+6. **Replace ⌘V targeting** — HUD panel may capture key window after Replace click, causing paste to target the panel instead of the editor.
+7. **Pre-existing tree-sitter linker issue** — All tree-sitter C package targets fail to link with `___llvm_profile_runtime` undefined symbol. Swift compilation succeeds. Unrelated to pipeline.
 
 ---
 
@@ -346,6 +372,13 @@ These architectural decisions are validated. Do not redesign without strong evid
 15. **IAG-001 through IAG-004** — canonical implementation architecture. Changes require an explicit RFC with evidence of incorrectness (IAG-004 §21.3).
 16. **DIR as canonical asset** — all capabilities are consumers of the DIR. Do not build features that bypass the intelligence architecture.
 
+### Completed Platform (Frozen)
+1. **Understanding Pipeline** — all 8 modules (DIRCore, ProducerRuntime, IndexRuntime, RetrievalRuntime, ContextAssembly, ConsumerRuntime, UpdateEngine, StorageEngine). Do not modify without RFC.
+2. **UnderstandingSystem** — composition root wiring the pipeline. Frozen.
+3. **SwiftSyntaxFrontend / TreeSitterFrontend** — producers that feed the pipeline. Frozen.
+4. **ExplainReasoningEngine / ImproveReasoningEngine / FollowUpReasoningEngine** — consumers of the pipeline. Frozen.
+5. **Pipeline-first execution** — Session Mode Explain, Follow-Up, and Improve attempt the pipeline first, fall back to legacy on failure. Do not remove fallback paths.
+
 ### Existing Application
 1. **Deterministic Facts Engine** — single-pass AST extraction of entities, imports, relationships. Foundation for everything.
 2. **File Intelligence architecture** — layered understanding model (Identity → Purpose → Behavior → Safety → Design). All layers implemented and validated.
@@ -358,7 +391,10 @@ These architectural decisions are validated. Do not redesign without strong evid
 9. **V7 explanation prompt** — frozen until real-user evidence justifies changes.
 10. **DSA as separate prompt** — not an overlay on V7. Lives in `ExplanationFramework+DSA.swift`.
 11. **Analytics pipeline** — server-side token extraction, compound mode values, orthogonal `mode` and `explanation_profile`.
-12. **Incremental milestone-based development** — File → Architecture → Implementation → Project Intelligence progression.
+12. **Incremental milestone-based development** — File → Architecture → Session Mode → Project Intelligence progression.
+
+### Completed Session Mode (Frozen)
+All 18 specification-defined Session Mode capabilities are implemented. Future Session Mode work limited to bug fixes, reliability improvements, security fixes, or explicitly approved product changes.
 
 ---
 
@@ -407,6 +443,7 @@ Do not build these unless explicitly requested.
 - **Never patch downstream to fix upstream.** Fix defects at the earliest phase that introduced them (IAG-004 §20).
 - **Never import GRDB in any understanding pipeline module.** Storage uses Codable + atomic file I/O (IAG-002:TI-3).
 - **Never redesign a DDS contract during implementation.** If it seems wrong, file an RFC (IAG-004 §21).
+- **Never produce File → Entity containment in composition passes.** DAS-004 CONT-3 assigns below-file containment exclusively to source parsers (T0, deterministic). `FrontendOutputConversion` handles this natively.
 
 ---
 
@@ -432,4 +469,4 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
 Main branch: `main`. Build must pass before committing. Run `xcodegen generate` after adding/removing Swift files.
 
 ### Tests
-13 test files in `DecodeTests/`. One pre-existing failure: `MockAIProvider` conformance in `SelectionModeCoordinatorTests.swift:49`.
+22 test files in `DecodeTests/`. Key coverage: `SessionResolver`, `ContextBuilderService`, `SnippetHealthClassifier`, `ExplanationTagParser`, `ExplainReasoningEngine`, `ImproveReasoningEngine`, `FollowUpReasoningEngine`, `SelectionModeCoordinator`, `SwiftSyntaxFrontend`, `TreeSitterFrontend`, `ModuleBoundaryPass`.

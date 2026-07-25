@@ -813,6 +813,58 @@ public actor ProducerActor: ProducerRegistry, ExecutionDirective, FailureReportS
         return nil
     }
 
+    // MARK: — Public Frontend Registration (Closure-Based)
+
+    /// Registers a frontend producer using a closure-based parse function.
+    ///
+    /// This is the public entry point for product code (IAG-004 §18) to register
+    /// frontend producers. The internal `FrontendDefinition` protocol (IAG-001 §2)
+    /// remains internal — this method wraps the closure in an adapter.
+    ///
+    /// - Parameters:
+    ///   - contract: The frontend's declared contract.
+    ///   - handler: A Sendable closure that parses a file and returns raw output.
+    ///              Receives: (filePath, producerIdentity, outputContract).
+    ///              Returns: Array of `FrontendOutput` records.
+    /// - Returns: The registration result.
+    public func registerFrontendHandler(
+        _ contract: FrontendContract,
+        handler: @escaping @Sendable (
+            _ filePath: String,
+            _ identity: ProducerIdentity,
+            _ outputContract: OutputContract
+        ) async throws -> [FrontendOutput]
+    ) async throws -> RegistrationResult {
+        let adapter = ClosureFrontend(handler: handler)
+        return try await registerFrontend(contract, implementation: adapter)
+    }
+
+    /// Registers a pass producer using a closure-based handler.
+    ///
+    /// This is the public entry point for product code (IAG-004 §18) to register
+    /// pass producers. The internal `PassDefinition` protocol (IAG-001 §2)
+    /// remains internal — this method wraps the closure in an adapter.
+    ///
+    /// - Parameters:
+    ///   - contract: The pass's declared contract.
+    ///   - handler: A Sendable closure that executes the pass logic.
+    ///              Receives: (inputSet, scopeWindow, passIdentity, outputContract, existingScopeEntity).
+    ///              Returns: Array of `PassOutput` records.
+    /// - Returns: The registration result.
+    public func registerPassHandler(
+        _ contract: PassContract,
+        handler: @escaping @Sendable (
+            _ inputSet: [AtomicUnit],
+            _ scopeWindow: ScopeWindow,
+            _ passIdentity: ProducerIdentity,
+            _ outputContract: OutputContract,
+            _ existingScopeEntity: EntityReference?
+        ) async throws -> [PassOutput]
+    ) async throws -> RegistrationResult {
+        let adapter = ClosurePass(handler: handler)
+        return try await registerPass(contract, implementation: adapter)
+    }
+
     // MARK: — Query (for internal use)
 
     /// Returns the current runtime state.

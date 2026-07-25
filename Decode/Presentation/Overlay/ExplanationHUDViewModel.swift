@@ -1,4 +1,5 @@
 import AppKit
+import ConsumerRuntime
 import Foundation
 
 /// The display state of the floating explanation HUD.
@@ -103,6 +104,23 @@ final class ExplanationHUDViewModel {
         /// Improve so it operates on the same tier/outline/entity data.
         /// `nil` for Selection and Screenshot modes.
         let sessionContext: SessionContext?
+
+        // MARK: - Pipeline Follow-Up State
+
+        /// Pipeline query service for follow-up via the understanding pipeline.
+        /// `nil` when the initial explanation used the legacy path.
+        let pipelineQueryService: PipelineQueryService?
+
+        /// ConversationState from the pipeline's Understanding.
+        /// Used by follow-up and improve to maintain pipeline conversation continuity.
+        /// `nil` when the initial explanation used the legacy path.
+        var pipelineConversationState: ConversationState?
+
+        /// File path for the session file. Used by pipeline follow-up to re-query.
+        let pipelineFilePath: String?
+
+        /// Entity name resolved during the initial pipeline query.
+        let pipelineEntityName: String?
     }
 
     // MARK: - Follow-up Prompt
@@ -331,8 +349,10 @@ final class ExplanationHUDViewModel {
 
     /// Ask a follow-up question using the context from the original request.
     ///
-    /// Builds a 3-message conversation (original content, explanation, question)
-    /// and sends it to the same AI provider with the same system prompt.
+    /// Attempts the pipeline path first when pipeline state is available
+    /// (ConversationState round-trip through FollowUpReasoningEngine).
+    /// Falls back to the legacy 3-message conversation path on pipeline
+    /// failure or when pipeline state is absent.
     func askFollowUp() {
         let question = followUpText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !question.isEmpty else { return }
@@ -348,6 +368,46 @@ final class ExplanationHUDViewModel {
         followUpAnswer = ""
         followUpError = ""
 
+        followUpTask = Task {
+            // Attempt pipeline follow-up when state is available.
+            if let service = ctx.pipelineQueryService,
+               let conversationState = ctx.pipelineConversationState,
+               let filePath = ctx.pipelineFilePath,
+               let entityName = ctx.pipelineEntityName {
+
+                let result = await Task.detached {
+                    await service.queryFollowUp(
+                        filePath: filePath,
+                        entityName: entityName,
+                        question: question,
+                        conversationState: conversationState
+                    )
+                }.value
+
+                if case .success(let understanding) = result {
+                    if !Task.isCancelled {
+                        followUpAnswer = understanding.content
+                        // Update conversation state for subsequent follow-ups.
+                        followUpContext?.pipelineConversationState = understanding.conversationState
+                        isFollowUpLoading = false
+                        followUpText = ""
+                    }
+                    return
+                }
+
+                #if DEBUG
+                print("[DEBUG HUD] pipeline follow-up failed, falling back to legacy path: \(result)")
+                #endif
+                // Fall through to legacy path.
+            }
+
+            // Legacy path: 3-message conversation via streamChat.
+            await askFollowUpLegacy(question: question, ctx: ctx)
+        }
+    }
+
+    /// Legacy follow-up path: builds a 3-message conversation and streams the response.
+    private func askFollowUpLegacy(question: String, ctx: FollowUpContext) async {
         let messages: [AIMessage] = [
             AIMessage(role: .user, content: ctx.sourceContent),
             AIMessage(role: .assistant, content: explanationText),
@@ -365,33 +425,31 @@ final class ExplanationHUDViewModel {
             "followup"
         }
 
-        followUpTask = Task {
-            do {
-                let stream = try await ctx.aiProvider.streamChat(
-                    messages: messages,
-                    systemPrompt: combinedSystemPrompt,
-                    mode: followUpMode,
-                    contextTier: nil,
-                    explanationProfile: ctx.explanationProfile,
-                    language: ctx.language
-                )
+        do {
+            let stream = try await ctx.aiProvider.streamChat(
+                messages: messages,
+                systemPrompt: combinedSystemPrompt,
+                mode: followUpMode,
+                contextTier: nil,
+                explanationProfile: ctx.explanationProfile,
+                language: ctx.language
+            )
 
-                for try await token in stream {
-                    if Task.isCancelled { break }
-                    followUpAnswer += token
-                }
+            for try await token in stream {
+                if Task.isCancelled { break }
+                followUpAnswer += token
+            }
 
-                if !Task.isCancelled {
-                    isFollowUpLoading = false
-                    followUpText = ""
-                }
-            } catch is CancellationError {
+            if !Task.isCancelled {
                 isFollowUpLoading = false
-            } catch {
-                if !Task.isCancelled {
-                    followUpError = error.localizedDescription
-                    isFollowUpLoading = false
-                }
+                followUpText = ""
+            }
+        } catch is CancellationError {
+            isFollowUpLoading = false
+        } catch {
+            if !Task.isCancelled {
+                followUpError = error.localizedDescription
+                isFollowUpLoading = false
             }
         }
     }
@@ -421,6 +479,54 @@ final class ExplanationHUDViewModel {
         improvedCode = ""
         improvementError = ""
 
+        improvementTask = Task {
+            // Pipeline path: attempt when pipeline state is available.
+            if let service = ctx.pipelineQueryService,
+               let filePath = ctx.pipelineFilePath,
+               let entityName = ctx.pipelineEntityName {
+                let result = await Task.detached {
+                    await service.query(
+                        filePath: filePath,
+                        entityName: entityName,
+                        purpose: "improve"
+                    )
+                }.value
+
+                if case .success(let understanding) = result {
+                    if !Task.isCancelled {
+                        let parsed = ImprovementService.parseResponse(understanding.content)
+                        improvementSummary = parsed.summary
+                        improvedCode = parsed.improvedCode
+                        isImprovementLoading = false
+
+                        let mode = ImprovementService.improvementMode(from: ctx.mode)
+
+                        #if DEBUG
+                        print("[DIAG_IMPROVE] pipeline complete summary_len=\(parsed.summary.count) code_len=\(parsed.improvedCode.count)")
+                        #endif
+
+                        if parsed.improvedCode.isEmpty {
+                            AnalyticsEventService.send(
+                                eventType: "improve_no_change",
+                                mode: mode,
+                                metadata: ["summary_length": parsed.summary.count]
+                            )
+                        }
+                    }
+                    return
+                }
+                // Fall through to legacy path.
+            }
+
+            await requestImprovementLegacy(originalCode: originalCode, ctx: ctx)
+        }
+    }
+
+    /// Legacy improvement path: direct AI provider call with streaming response.
+    ///
+    /// Used when the pipeline is unavailable or fails. Preserves the original
+    /// Selection and Session mode improvement flows exactly.
+    private func requestImprovementLegacy(originalCode: String, ctx: FollowUpContext) async {
         let messages: [AIMessage] = [
             AIMessage(role: .user, content: originalCode),
         ]
@@ -438,48 +544,46 @@ final class ExplanationHUDViewModel {
             contextTier = nil
         }
 
-        improvementTask = Task {
-            do {
-                let stream = try await ctx.aiProvider.streamChat(
-                    messages: messages,
-                    systemPrompt: improveSystemPrompt,
-                    mode: mode,
-                    contextTier: contextTier,
-                    explanationProfile: ctx.explanationProfile,
-                    language: ctx.language
-                )
+        do {
+            let stream = try await ctx.aiProvider.streamChat(
+                messages: messages,
+                systemPrompt: improveSystemPrompt,
+                mode: mode,
+                contextTier: contextTier,
+                explanationProfile: ctx.explanationProfile,
+                language: ctx.language
+            )
 
-                for try await token in stream {
-                    if Task.isCancelled { break }
-                    improvementRawText += token
-                }
+            for try await token in stream {
+                if Task.isCancelled { break }
+                improvementRawText += token
+            }
 
-                if !Task.isCancelled {
-                    let result = ImprovementService.parseResponse(improvementRawText)
-                    improvementSummary = result.summary
-                    improvedCode = result.improvedCode
-                    isImprovementLoading = false
-
-                    #if DEBUG
-                    print("[DIAG_IMPROVE] complete summary_len=\(result.summary.count) code_len=\(result.improvedCode.count)")
-                    #endif
-
-                    // Report no-change outcome when AI found nothing to improve.
-                    if result.improvedCode.isEmpty {
-                        AnalyticsEventService.send(
-                            eventType: "improve_no_change",
-                            mode: mode,
-                            metadata: ["summary_length": result.summary.count]
-                        )
-                    }
-                }
-            } catch is CancellationError {
+            if !Task.isCancelled {
+                let result = ImprovementService.parseResponse(improvementRawText)
+                improvementSummary = result.summary
+                improvedCode = result.improvedCode
                 isImprovementLoading = false
-            } catch {
-                if !Task.isCancelled {
-                    improvementError = error.localizedDescription
-                    isImprovementLoading = false
+
+                #if DEBUG
+                print("[DIAG_IMPROVE] complete summary_len=\(result.summary.count) code_len=\(result.improvedCode.count)")
+                #endif
+
+                // Report no-change outcome when AI found nothing to improve.
+                if result.improvedCode.isEmpty {
+                    AnalyticsEventService.send(
+                        eventType: "improve_no_change",
+                        mode: mode,
+                        metadata: ["summary_length": result.summary.count]
+                    )
                 }
+            }
+        } catch is CancellationError {
+            isImprovementLoading = false
+        } catch {
+            if !Task.isCancelled {
+                improvementError = error.localizedDescription
+                isImprovementLoading = false
             }
         }
     }

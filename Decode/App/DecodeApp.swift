@@ -30,6 +30,19 @@ struct DecodeApp: App {
                     appLog.notice("[DIAG] didBecomeActiveNotification received")
                     dependencies.performDeferredStartup()
                 }
+                .onReceive(
+                    NotificationCenter.default.publisher(
+                        for: NSApplication.willTerminateNotification
+                    )
+                ) { _ in
+                    appLog.notice("[DIAG] willTerminateNotification received")
+                    // IAG-003 §4.2: Shutdown understanding pipeline on app termination.
+                    // Task.detached avoids @MainActor inheritance — pipeline has no @MainActor (IAG-003 §6.3).
+                    let system = dependencies.understandingSystem
+                    Task.detached {
+                        await system.shutdown()
+                    }
+                }
         }
         .commands {
             CommandGroup(replacing: .help) {

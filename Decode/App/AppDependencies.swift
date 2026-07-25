@@ -1,6 +1,9 @@
 import Foundation
 import SwiftUI
 import os.log
+import ContextAssembly
+import ConsumerRuntime
+import UpdateEngine
 
 private let startupLog = Logger(subsystem: "com.decode.app", category: "startup-diag")
 
@@ -67,6 +70,23 @@ final class AppDependencies {
     /// Observation task that watches session count and updates dock visibility.
     private var dockVisibilityTask: Task<Void, Never>?
 
+    // MARK: - Understanding Pipeline
+
+    /// The understanding pipeline composition root (IAG-001 §6).
+    /// Created at init (lightweight — no I/O). Started during deferred startup.
+    /// Shutdown on app termination via willTerminateNotification.
+    let understandingSystem: UnderstandingSystem
+
+    /// Consumer invocation — the primary query entry point for the understanding pipeline (DDS-009:PC-1).
+    var consumerInvocation: any ConsumerInvocation { understandingSystem.consumerInvocation }
+
+    /// Pipeline query orchestrator — chains processChanges → retrieve → assemble → invoke.
+    /// Created at init alongside UnderstandingSystem.
+    let pipelineQueryService: PipelineQueryService
+
+    /// Task running the understanding pipeline startup sequence.
+    private var understandingStartupTask: Task<Void, Never>?
+
     // MARK: - Usage Tracking
 
     /// Shared quota tracker for AI request limits across all modes.
@@ -117,6 +137,17 @@ final class AppDependencies {
         self.toastManager = DecodeToastManager()
         self.screenCapture = ScreenCaptureServiceImpl()
         self.ocrService = VisionOCRService()
+
+        // Understanding pipeline — lightweight construction only (no I/O).
+        // Snapshot directory: ~/Library/Application Support/Decode/understanding/
+        let appSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first!.appendingPathComponent("Decode", isDirectory: true)
+        let snapshotDir = appSupport.appendingPathComponent("understanding", isDirectory: true)
+        try? FileManager.default.createDirectory(at: snapshotDir, withIntermediateDirectories: true)
+        self.understandingSystem = UnderstandingSystem(snapshotDirectory: snapshotDir)
+        self.pipelineQueryService = PipelineQueryService(understandingSystem: understandingSystem)
 
         #if DEBUG
         print("[DEBUG Startup] AppDependencies.init complete")
@@ -207,6 +238,28 @@ final class AppDependencies {
         self.sessionManager = manager
         self.sessionViewModel = SessionViewModel(sessionManager: manager)
 
+        // 2b-bridge. File monitoring bridge (IAG-004 §8.1, IC-10).
+        // Route session file change events to the understanding pipeline.
+        // Maps app-domain FileChangeKind → pipeline-domain UpdateEngine.FileChangeType.
+        let understanding = self.understandingSystem
+        manager.onFileChanged = { filePath, kind in
+            let changeType: UpdateEngine.FileChangeType
+            switch kind {
+            case .modified:
+                changeType = .modified
+            case .deleted:
+                changeType = .deleted
+            case .moved:
+                changeType = .modified
+            case .inaccessible:
+                return
+            }
+            let event = UpdateEngine.FileChangeEvent(filePath: filePath, changeType: changeType)
+            Task.detached {
+                _ = await understanding.processChanges([event])
+            }
+        }
+
         // 2c. Session Dock: floating panel for session visibility.
         let dock = FloatingSessionDock(sessionManager: manager)
         dock.onOpenSessionMode = { [weak self] id in
@@ -261,9 +314,91 @@ final class AppDependencies {
                 )
             },
             usageTracker: tracker,
-            semanticEnrichment: enrichment
+            semanticEnrichment: enrichment,
+            pipelineQueryService: pipelineQueryService
         )
         self.sessionQuestionCoordinator = sqCoordinator
+
+        // 2d. Start understanding pipeline (IAG-004 §8.1: called from performDeferredStartup).
+        // Runs async — does not block deferred startup. No @MainActor on pipeline (IAG-003 §6.3).
+        // After startup, register reasoning engines (DDS-009 PC-2).
+        let aiProviderClosure: @Sendable () async -> (any AIProviderProtocol)? = { [weak self] in
+            await MainActor.run { self?.aiProvider }
+        }
+        let explainEngine = ExplainReasoningEngine(aiProvider: aiProviderClosure)
+        let improveEngine = ImproveReasoningEngine(aiProvider: aiProviderClosure)
+        let followUpEngine = FollowUpReasoningEngine(aiProvider: aiProviderClosure)
+
+        understandingStartupTask = Task.detached { [understandingSystem] in
+            await understandingSystem.start()
+
+            // Register reasoning engines (DDS-009 PC-2).
+            _ = await understandingSystem.engineManagement.register(EngineRegistration(
+                purpose: ContextPurpose("explain"),
+                engineIdentifier: ExplainReasoningEngine.identifier,
+                engineVersion: ExplainReasoningEngine.version,
+                engine: explainEngine,
+                isFallback: false
+            ))
+            _ = await understandingSystem.engineManagement.register(EngineRegistration(
+                purpose: ContextPurpose("improve"),
+                engineIdentifier: ImproveReasoningEngine.identifier,
+                engineVersion: ImproveReasoningEngine.version,
+                engine: improveEngine,
+                isFallback: false
+            ))
+            _ = await understandingSystem.engineManagement.register(EngineRegistration(
+                purpose: ContextPurpose("followup"),
+                engineIdentifier: FollowUpReasoningEngine.identifier,
+                engineVersion: FollowUpReasoningEngine.version,
+                engine: followUpEngine,
+                isFallback: false
+            ))
+
+            // Register production frontend producers (IAG-004 §18).
+            // SwiftSyntax frontend: Swift source files → T0 atomic units.
+            // Tree-sitter frontend: all other supported languages → T0 atomic units.
+            do {
+                _ = try await understandingSystem.registerFrontendHandler(
+                    SwiftSyntaxFrontend.contract,
+                    handler: SwiftSyntaxFrontend.handler
+                )
+                _ = try await understandingSystem.registerFrontendHandler(
+                    TreeSitterFrontend.contract,
+                    handler: TreeSitterFrontend.handler
+                )
+            } catch {
+                #if DEBUG
+                print("[DEBUG Startup] Frontend registration failed: \(error)")
+                #endif
+            }
+
+            // Register composition passes (PI-001: Module boundary detection).
+            do {
+                _ = try await understandingSystem.registerPassHandler(
+                    ModuleBoundaryPass.contract,
+                    handler: ModuleBoundaryPass.handler
+                )
+            } catch {
+                #if DEBUG
+                print("[DEBUG Startup] Pass registration failed: \(error)")
+                #endif
+            }
+
+            // Register context assembly strategies (DDS-006 CS-R1).
+            for strategy in ContextStrategies.all {
+                let result = understandingSystem.strategyManagement.register(strategy)
+                #if DEBUG
+                if case .failure(let error) = result {
+                    print("[DEBUG Startup] Strategy registration failed for \(strategy.purpose): \(error)")
+                }
+                #endif
+            }
+
+            #if DEBUG
+            print("[DEBUG Startup] UnderstandingSystem started, engines + frontends + strategies registered")
+            #endif
+        }
 
         // 3. Start hotkey listening with fan-out to coordinators + session open handler.
         //    AsyncStream is single-consumer, so we consume it once and
@@ -299,6 +434,16 @@ final class AppDependencies {
         #if DEBUG
         print("[DEBUG Startup] performDeferredStartup — COMPLETE — AI=\(isConfigured), AX=\(selectionCapture.hasAccessibilityPermission()), selectionCoordinator=\(selectionCoordinator != nil), screenshotCoordinator=\(screenshotCoordinator != nil), sessionQuestionCoordinator=\(sessionQuestionCoordinator != nil)")
         #endif
+    }
+
+    // MARK: - Shutdown
+
+    /// Shuts down the understanding pipeline (IAG-003 §4.2).
+    /// Called from willTerminateNotification handler in DecodeApp.
+    func shutdownUnderstandingPipeline() async {
+        understandingStartupTask?.cancel()
+        understandingStartupTask = nil
+        await understandingSystem.shutdown()
     }
 
     // MARK: - Session Open (Hotkey)
