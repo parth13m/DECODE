@@ -50,13 +50,13 @@ final class AppDependencies {
     let ocrService: VisionOCRService
     private(set) var screenshotCoordinator: ScreenshotModeCoordinator?
 
-    // MARK: - Session Mode
+    // MARK: - Workspace Mode
 
-    /// Manages all sessions: lifecycle, file watching, persistence, active session.
+    /// Manages all workspaces: lifecycle, file watching, persistence, active workspace.
     /// Created during deferred startup after the database is available.
-    private(set) var sessionManager: SessionManager?
+    private(set) var workspaceManager: WorkspaceManager?
 
-    /// Shared view model for Session Mode UI, backed by ``sessionManager``.
+    /// Shared view model for Session Mode UI, backed by ``workspaceManager``.
     private(set) var sessionViewModel: SessionViewModel?
 
     private(set) var sessionQuestionCoordinator: SessionQuestionCoordinator?
@@ -64,10 +64,10 @@ final class AppDependencies {
     /// Semantic enrichment service for cache inspection by the Knowledge Inspector.
     private(set) var enrichmentService: SemanticEnrichmentService?
 
-    /// Floating dock panel showing all sessions. Visible when sessions exist.
+    /// Floating dock panel showing all workspaces. Visible when workspaces exist.
     private(set) var floatingDock: FloatingSessionDock?
 
-    /// Observation task that watches session count and updates dock visibility.
+    /// Observation task that watches workspace count and updates dock visibility.
     private var dockVisibilityTask: Task<Void, Never>?
 
     // MARK: - Understanding Pipeline
@@ -233,16 +233,16 @@ final class AppDependencies {
         )
         self.screenshotCoordinator = ssCoordinator
 
-        // 2b. Session Mode: create manager, view model, and question coordinator.
-        let manager = SessionManager(database: database)
-        self.sessionManager = manager
-        self.sessionViewModel = SessionViewModel(sessionManager: manager)
+        // 2b. Workspace Mode: create manager and view model.
+        let wsManager = WorkspaceManager(database: database)
+        self.workspaceManager = wsManager
+        self.sessionViewModel = SessionViewModel(workspaceManager: wsManager)
 
         // 2b-bridge. File monitoring bridge (IAG-004 §8.1, IC-10).
-        // Route session file change events to the understanding pipeline.
+        // Route workspace file change events to the understanding pipeline.
         // Maps app-domain FileChangeKind → pipeline-domain UpdateEngine.FileChangeType.
         let understanding = self.understandingSystem
-        manager.onFileChanged = { filePath, kind in
+        wsManager.onFileChanged = { filePath, kind in
             let changeType: UpdateEngine.FileChangeType
             switch kind {
             case .modified:
@@ -260,8 +260,18 @@ final class AppDependencies {
             }
         }
 
-        // 2c. Session Dock: floating panel for session visibility.
-        let dock = FloatingSessionDock(sessionManager: manager)
+        // Wire processChanges closure for directory workspace indexing.
+        wsManager.processChanges = { events in
+            await understanding.processChanges(events)
+        }
+
+        // Restore workspaces from database.
+        Task { [weak wsManager] in
+            await wsManager?.restoreWorkspaces()
+        }
+
+        // 2c. Session Dock: floating panel for workspace visibility.
+        let dock = FloatingSessionDock(workspaceManager: wsManager)
         dock.onOpenSessionMode = { [weak self] id in
             guard let self, let vm = self.sessionViewModel else { return }
             NSApp.activate(ignoringOtherApps: true)
@@ -273,12 +283,12 @@ final class AppDependencies {
         }
         self.floatingDock = dock
 
-        // Watch session count to show/hide dock automatically.
-        dockVisibilityTask = Task { [weak dock, weak manager] in
-            // withObservationTracking loop: re-evaluate whenever sessions changes.
+        // Watch workspace count to show/hide dock automatically.
+        dockVisibilityTask = Task { [weak dock, weak wsManager] in
+            // withObservationTracking loop: re-evaluate whenever workspaces changes.
             while !Task.isCancelled {
-                guard let dock, let manager else { break }
-                let isEmpty = manager.sessions.isEmpty
+                guard let dock, let wsManager else { break }
+                let isEmpty = wsManager.workspaces.isEmpty
                 if isEmpty {
                     dock.hide()
                 } else {
@@ -287,7 +297,7 @@ final class AppDependencies {
                 // Suspend until the next observation change.
                 await withCheckedContinuation { continuation in
                     withObservationTracking {
-                        _ = manager.sessions.count
+                        _ = wsManager.workspaces.count
                     } onChange: {
                         continuation.resume()
                     }
@@ -304,13 +314,13 @@ final class AppDependencies {
             aiProvider: { [weak self] in self?.aiProvider },
             hud: hud,
             toastManager: toastManager,
-            sessionProvider: { [weak manager] in
-                guard let manager else { return nil }
-                guard !manager.sessions.isEmpty else { return nil }
-                return SessionResolverInput(
-                    sessions: manager.sessions,
-                    activeSessionId: manager.activeSessionId,
-                    pinnedSessionId: manager.pinnedSessionId
+            workspaceProvider: { [weak wsManager] in
+                guard let wsManager else { return nil }
+                guard !wsManager.workspaces.isEmpty else { return nil }
+                return WorkspaceResolverInput(
+                    workspaces: wsManager.workspaces,
+                    activeWorkspaceId: wsManager.activeWorkspaceId,
+                    pinnedWorkspaceId: wsManager.pinnedWorkspaceId
                 )
             },
             usageTracker: tracker,
@@ -385,6 +395,30 @@ final class AppDependencies {
                 #endif
             }
 
+            // Register resolution passes (M1: Cross-file entity resolution).
+            do {
+                _ = try await understandingSystem.registerPassHandler(
+                    CrossFileResolutionPass.contract,
+                    handler: CrossFileResolutionPass.handler
+                )
+            } catch {
+                #if DEBUG
+                print("[DEBUG Startup] Cross-file resolution pass registration failed: \(error)")
+                #endif
+            }
+
+            // Register emergence passes (M4: Module emergent properties).
+            do {
+                _ = try await understandingSystem.registerPassHandler(
+                    ModuleEmergentPropertiesPass.contract,
+                    handler: ModuleEmergentPropertiesPass.handler
+                )
+            } catch {
+                #if DEBUG
+                print("[DEBUG Startup] Module emergent properties pass registration failed: \(error)")
+                #endif
+            }
+
             // Register context assembly strategies (DDS-006 CS-R1).
             for strategy in ContextStrategies.all {
                 let result = understandingSystem.strategyManagement.register(strategy)
@@ -418,6 +452,10 @@ final class AppDependencies {
                     self?.handleOpenSession()
                 }
 
+                if event.action == .openWorkspace {
+                    self?.handleOpenWorkspace()
+                }
+
                 selContinuation.yield(event)
                 ssContinuation.yield(event)
                 sqContinuation.yield(event)
@@ -448,18 +486,69 @@ final class AppDependencies {
 
     // MARK: - Session Open (Hotkey)
 
-    /// Handle the ⌃⇧O hotkey: open file picker, create session, present sheet.
+    /// Handle the ⌃⇧O hotkey: open file picker, create workspace, present sheet.
     private func handleOpenSession() {
-        guard let vm = sessionViewModel else { return }
+        guard workspaceManager != nil else { return }
 
         // Bring Decode to the front so NSOpenPanel is visible.
         NSApp.activate(ignoringOtherApps: true)
 
-        vm.openFile()
+        // Open file picker — same panel config as SessionViewModel.openFile().
+        let panel = NSOpenPanel()
+        panel.title = "Select a code file"
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
 
-        // If a session is now active, signal the sheet to present.
-        if vm.activeSession != nil {
-            vm.shouldPresentSession = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        Task { [weak self] in
+            guard let self else { return }
+
+            // Create workspace for the selected file.
+            if let vm = self.sessionViewModel {
+                await vm.loadFile(url: url)
+            }
+
+            // Present session sheet if a workspace is now active.
+            if let vm = self.sessionViewModel, vm.activeWorkspace != nil {
+                vm.shouldPresentSession = true
+            }
+        }
+    }
+
+    // MARK: - Workspace Open (Hotkey)
+
+    /// Handle the ⌃⇧P hotkey: open folder picker, create directory workspace, present sheet.
+    private func handleOpenWorkspace() {
+        guard workspaceManager != nil else { return }
+
+        // Bring Decode to the front so NSOpenPanel is visible.
+        NSApp.activate(ignoringOtherApps: true)
+
+        let panel = NSOpenPanel()
+        panel.title = "Select a project folder"
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        Task { [weak self] in
+            guard let self, let wsManager = self.workspaceManager else { return }
+
+            do {
+                try await wsManager.createDirectoryWorkspace(url: url)
+            } catch {
+                #if DEBUG
+                print("[AppDependencies] Failed to create directory workspace: \(error)")
+                #endif
+                return
+            }
+
+            // Present session sheet if a workspace is now active.
+            if let vm = self.sessionViewModel, vm.activeWorkspace != nil {
+                vm.shouldPresentSession = true
+            }
         }
     }
 
@@ -496,6 +585,3 @@ final class AppDependencies {
         #endif
     }
 }
-
-
-

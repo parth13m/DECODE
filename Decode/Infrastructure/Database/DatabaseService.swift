@@ -42,43 +42,43 @@ final class DatabaseService: DatabaseServiceProtocol, Sendable {
         try self.init(path: dbPath)
     }
 
-    // MARK: - Sessions
+    // MARK: - Workspaces
 
-    func createSession(_ session: Session) async throws {
-        let record = SessionRecord(from: session)
+    func createWorkspace(_ workspace: Workspace) async throws {
+        let record = WorkspaceRecord(from: workspace)
         try await dbPool.write { db in
             try record.insert(db)
         }
     }
 
-    func fetchSession(id: UUID) async throws -> Session? {
+    func fetchWorkspace(id: UUID) async throws -> Workspace? {
         try await dbPool.read { db in
-            try SessionRecord
+            try WorkspaceRecord
                 .filter(Column("id") == id.uuidString)
                 .fetchOne(db)?
                 .toDomain()
         }
     }
 
-    func fetchAllSessions() async throws -> [Session] {
+    func fetchAllWorkspaces() async throws -> [Workspace] {
         try await dbPool.read { db in
-            try SessionRecord
+            try WorkspaceRecord
                 .order(Column("updatedAt").desc)
                 .fetchAll(db)
                 .compactMap { $0.toDomain() }
         }
     }
 
-    func updateSession(_ session: Session) async throws {
-        let record = SessionRecord(from: session)
+    func updateWorkspace(_ workspace: Workspace) async throws {
+        let record = WorkspaceRecord(from: workspace)
         try await dbPool.write { db in
             try record.update(db)
         }
     }
 
-    func deleteSession(id: UUID) async throws {
+    func deleteWorkspace(id: UUID) async throws {
         try await dbPool.write { db in
-            _ = try SessionRecord
+            _ = try WorkspaceRecord
                 .filter(Column("id") == id.uuidString)
                 .deleteAll(db)
         }

@@ -73,7 +73,7 @@ final class ScreenshotModeCoordinator {
                     activeRequestTask = Task {
                         await handleCaptureScreenshot(event: event, generation: generation)
                     }
-                case .explainSelection, .askSessionQuestion, .openSession:
+                case .explainSelection, .askSessionQuestion, .openSession, .openWorkspace:
                     break  // Handled by other coordinators
                 }
             }

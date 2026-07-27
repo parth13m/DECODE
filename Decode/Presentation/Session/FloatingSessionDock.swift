@@ -5,16 +5,16 @@ import SwiftUI
 @Observable
 @MainActor
 final class DockState {
-    /// Whether the dock is expanded (showing session list) or collapsed (showing handle).
+    /// Whether the dock is expanded (showing workspace list) or collapsed (showing handle).
     var isExpanded = false
-    /// Index of the currently hovered session pill, for magnification effect.
+    /// Index of the currently hovered workspace pill, for magnification effect.
     var hoveredIndex: Int? = nil
 }
 
-/// Non-activating floating panel that shows open sessions as a hover-reveal dock.
+/// Non-activating floating panel that shows open workspaces as a hover-reveal dock.
 ///
 /// ## Design
-/// No container background. Sessions appear as individual floating capsule pills
+/// No container background. Workspaces appear as individual floating capsule pills
 /// with `.ultraThinMaterial` backdrops, anchored to the right edge of the screen.
 /// A capsule handle is visible when collapsed. Hover reveals the pill stack.
 ///
@@ -65,24 +65,24 @@ final class FloatingSessionDock {
     // MARK: - Callbacks
 
     /// Called when the user selects "Open Session Mode" from the context menu.
-    /// Receives the session ID to activate.
+    /// Receives the workspace ID to activate.
     var onOpenSessionMode: ((UUID) -> Void)?
 
     // MARK: - Dependencies
 
-    private let sessionManager: SessionManager
+    private let workspaceManager: WorkspaceManager
 
     // MARK: - Init
 
-    init(sessionManager: SessionManager) {
-        self.sessionManager = sessionManager
+    init(workspaceManager: WorkspaceManager) {
+        self.workspaceManager = workspaceManager
     }
 
     // MARK: - Show / Hide
 
-    /// Show the dock if there are sessions, or hide it if there are none.
+    /// Show the dock if there are workspaces, or hide it if there are none.
     func updateVisibility() {
-        if sessionManager.sessions.isEmpty {
+        if workspaceManager.workspaces.isEmpty {
             hide()
         } else if !isVisible {
             show()
@@ -123,7 +123,7 @@ final class FloatingSessionDock {
 
     // MARK: - Expand / Collapse
 
-    /// Expand the dock from the handle to the full session list.
+    /// Expand the dock from the handle to the full workspace list.
     func expand() {
         guard !dockState.isExpanded, isVisible else { return }
         collapseWorkItem?.cancel()
@@ -194,7 +194,7 @@ final class FloatingSessionDock {
     }
 
     private func expandedHeight() -> CGFloat {
-        let count = CGFloat(sessionManager.sessions.count)
+        let count = CGFloat(workspaceManager.workspaces.count)
         // Each pill + spacing between them + vertical overflow padding (top + bottom)
         let contentHeight = count * Self.pillHeight + max(0, count - 1) * Self.pillSpacing + 2 * Self.overflowMargin
         return min(contentHeight, Self.maxDockHeight)
@@ -243,25 +243,25 @@ final class FloatingSessionDock {
 
         // SwiftUI content
         let contentView = SessionDockContentView(
-            sessionManager: sessionManager,
+            workspaceManager: workspaceManager,
             dockState: dockState,
-            onActivateSession: { [weak self] id in
-                self?.sessionManager.activateSession(id: id)
+            onActivateWorkspace: { [weak self] id in
+                self?.workspaceManager.activateWorkspace(id: id)
             },
-            onCloseSession: { [weak self] id in
-                self?.sessionManager.closeSession(id: id)
+            onCloseWorkspace: { [weak self] id in
+                self?.workspaceManager.closeWorkspace(id: id)
                 self?.updateVisibility()
             },
             onOpenSessionMode: { [weak self] id in
-                self?.sessionManager.activateSession(id: id)
+                self?.workspaceManager.activateWorkspace(id: id)
                 self?.onOpenSessionMode?(id)
             },
             onTogglePin: { [weak self] id in
-                guard let manager = self?.sessionManager else { return }
-                if manager.pinnedSessionId == id {
-                    manager.unpinSession()
+                guard let manager = self?.workspaceManager else { return }
+                if manager.pinnedWorkspaceId == id {
+                    manager.unpinWorkspace()
                 } else {
-                    manager.pinSession(id: id)
+                    manager.pinWorkspace(id: id)
                 }
             }
         )

@@ -58,13 +58,22 @@ struct ExplainReasoningEngine: ReasoningEngine, Sendable {
 
         let knowledge = ReasoningEngineSupport.extractKnowledge(from: allUnits)
 
+        // M6: Extract module observations for module-aware framing.
+        let filtered = ReasoningEngineSupport.filterModuleEntities(from: knowledge)
+        let moduleObservations = ReasoningEngineSupport.extractModuleObservations(
+            from: knowledge,
+            codeEntityNames: filtered.entityNames
+        )
+
         let systemPrompt = buildSystemPrompt(
             knowledge: knowledge,
-            outputSpecification: outputSpecification
+            outputSpecification: outputSpecification,
+            hasModuleObservations: moduleObservations != nil
         )
         let userPrompt = buildUserPrompt(
             knowledge: knowledge,
-            outputSpecification: outputSpecification
+            outputSpecification: outputSpecification,
+            moduleObservations: moduleObservations
         )
 
         guard let provider = await aiProvider() else {
@@ -97,7 +106,8 @@ struct ExplainReasoningEngine: ReasoningEngine, Sendable {
 
     private func buildSystemPrompt(
         knowledge: ExtractedKnowledge,
-        outputSpecification: OutputSpecification
+        outputSpecification: OutputSpecification,
+        hasModuleObservations: Bool = false
     ) -> String {
         let framework: ExplanationFramework
         if let lang = knowledge.detectedLanguage {
@@ -125,19 +135,33 @@ struct ExplainReasoningEngine: ReasoningEngine, Sendable {
             prompt += "\n\nProvide a comprehensive, detailed explanation covering all aspects."
         }
 
+        // M6: Add module observation instruction when module context is present.
+        if hasModuleObservations {
+            prompt += "\n\n" + ModuleObservations.systemPromptInstruction
+        }
+
         return prompt
     }
 
     private func buildUserPrompt(
         knowledge: ExtractedKnowledge,
-        outputSpecification: OutputSpecification
+        outputSpecification: OutputSpecification,
+        moduleObservations: ModuleObservations? = nil
     ) -> String {
         var sections: [String] = []
 
-        if !knowledge.entityFacts.isEmpty {
+        // M6: Inject module observations before entity facts.
+        if let moduleObservations {
+            sections.append(moduleObservations.formatForPrompt())
+        }
+
+        // M6: Use filtered entity names/facts (module entities removed).
+        let filtered = ReasoningEngineSupport.filterModuleEntities(from: knowledge)
+
+        if !filtered.entityFacts.isEmpty {
             var entitySection = "## Entities\n"
-            for entityName in knowledge.entityNames {
-                guard let facts = knowledge.entityFacts[entityName] else { continue }
+            for entityName in filtered.entityNames {
+                guard let facts = filtered.entityFacts[entityName] else { continue }
                 entitySection += "\n### \(entityName)\n"
                 for fact in facts {
                     entitySection += "- \(fact.predicate): \(fact.value)\n"

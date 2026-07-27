@@ -461,6 +461,7 @@ schemes:
       gatherCoverageData: false
       targets:
         - DecodeTests
+        - RetrievalRuntimeTests
     profile:
       config: Release
     analyze:

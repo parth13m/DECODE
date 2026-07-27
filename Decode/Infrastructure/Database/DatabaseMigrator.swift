@@ -61,6 +61,88 @@ struct DecodeDatabaseMigrator {
             )
         }
 
+        migrator.registerMigration("v2_workspaces") { db in
+            // Workspaces table — successor to sessions.
+            // Additive migration: sessions table is not modified.
+            try db.create(table: "workspaces") { t in
+                t.primaryKey("id", .text).notNull()
+                t.column("kind", .text).notNull()
+                t.column("createdAt", .datetime).notNull()
+                t.column("updatedAt", .datetime).notNull()
+                t.column("bookmarkData", .blob).notNull()
+                t.column("rootPath", .text).notNull()
+                t.column("rootFileName", .text).notNull()
+                t.column("summaryText", .text).notNull().defaults(to: "")
+                t.column("isCorrupted", .boolean).notNull().defaults(to: false)
+            }
+
+            // Unique index on rootPath prevents duplicate workspaces for the
+            // same file or directory.
+            try db.create(
+                index: "idx_workspaces_rootPath",
+                on: "workspaces",
+                columns: ["rootPath"],
+                unique: true
+            )
+        }
+
+        migrator.registerMigration("v3_migrate_sessions") { db in
+            // Migrate existing sessions → workspaces (kind = 'file').
+            // Copy each session row into the workspaces table, mapping
+            // session fields to workspace equivalents.
+            try db.execute(sql: """
+                INSERT OR IGNORE INTO workspaces
+                    (id, kind, createdAt, updatedAt, bookmarkData,
+                     rootPath, rootFileName, summaryText, isCorrupted)
+                SELECT
+                    id, 'file', createdAt, updatedAt, bookmarkData,
+                    filePath, fileName, summaryText, isCorrupted
+                FROM sessions
+                """)
+
+            // Drop the entities FK constraint on sessions by recreating
+            // the entities table without the FK reference.
+            // GRDB/SQLite doesn't support ALTER TABLE DROP CONSTRAINT,
+            // so we recreate. The sessionId column is kept as-is (still
+            // stores the workspace ID — renamed conceptually, not in schema).
+            try db.drop(index: "idx_entities_sessionId")
+            try db.drop(index: "idx_entities_stableId_sessionId")
+            try db.rename(table: "entities", to: "entities_old")
+
+            try db.create(table: "entities") { t in
+                t.primaryKey("id", .text).notNull()
+                t.column("sessionId", .text).notNull()
+                t.column("stableId", .text).notNull()
+                t.column("entityType", .text).notNull()
+                t.column("name", .text).notNull()
+                t.column("summaryText", .text).notNull().defaults(to: "")
+                t.column("hash", .text).notNull()
+                t.column("lastUpdated", .datetime).notNull()
+            }
+
+            try db.execute(sql: """
+                INSERT INTO entities
+                SELECT * FROM entities_old
+                """)
+
+            try db.drop(table: "entities_old")
+
+            try db.create(
+                index: "idx_entities_sessionId",
+                on: "entities",
+                columns: ["sessionId"]
+            )
+            try db.create(
+                index: "idx_entities_stableId_sessionId",
+                on: "entities",
+                columns: ["stableId", "sessionId"],
+                unique: true
+            )
+
+            // Drop the sessions table — no longer needed.
+            try db.drop(table: "sessions")
+        }
+
         try migrator.migrate(db)
     }
 }

@@ -18,9 +18,14 @@ enum ContextStrategies {
 
     /// Strategy for "explain" purpose — balanced across all evidence stages.
     ///
-    /// DAS-009 ES-1: Three strata corresponding to the three retrieval stages
-    /// (direct, relational, scope). Budget allocation follows the Explain
-    /// retrieval intent's weight distribution (50/30/20).
+    /// Version 2.0.0 (M5): Adds a module stratum for module-level emergent
+    /// properties. Supersedes 1.0.0 (which is retained for diagnostic replay).
+    /// Budget rebalanced: direct 50%, relational 25%, module 10%, scope 15%.
+    ///
+    /// The module stratum selects scope-stage evidence at T1 (module-level
+    /// properties from ModuleBoundaryPass and ModuleEmergentPropertiesPass).
+    /// The file-scope stratum selects scope-stage evidence at T0 (file-level
+    /// properties from frontends). This tier-based partition satisfies SI-2.
     static let explain = ContextStrategy(
         purpose: ContextPurpose("explain"),
         strata: [
@@ -36,20 +41,34 @@ enum ContextStrategies {
                 name: "relational",
                 priority: 1,
                 selectionCriteria: SelectionCriteria(stage: .relational),
-                budgetFraction: 0.3,
+                budgetFraction: 0.25,
                 fillPolicy: .distanceFirst
             ),
             StratumDefinition(
-                name: "scope",
+                name: "module",
                 priority: 2,
-                selectionCriteria: SelectionCriteria(stage: .scope),
-                budgetFraction: 0.2,
+                selectionCriteria: SelectionCriteria(
+                    stage: .scope,
+                    minTier: .t1,
+                    maxTier: .t1
+                ),
+                budgetFraction: 0.10,
+                fillPolicy: .confidenceFirst
+            ),
+            StratumDefinition(
+                name: "scope",
+                priority: 3,
+                selectionCriteria: SelectionCriteria(
+                    stage: .scope,
+                    maxTier: .t0
+                ),
+                budgetFraction: 0.15,
                 fillPolicy: .distanceFirst
             ),
         ],
         tierPreference: .ordering([.t0, .t1, .t2]),
         elisionPolicy: .stratumFirst,
-        version: "1.0.0"
+        version: "2.0.0"
     )
 
     /// Strategy for "improve" purpose — prioritizes direct evidence.
@@ -82,8 +101,9 @@ enum ContextStrategies {
 
     /// Strategy for "followup" purpose — mirrors explain for consistent context.
     ///
-    /// Follow-up questions need the same evidence scope as the original explanation
-    /// so the reasoning engine can reference what was already discussed.
+    /// Version 2.0.0 (M5): Adds module stratum, matching explain strategy.
+    /// Follow-up questions need the same evidence scope as the original
+    /// explanation so the reasoning engine can reference what was discussed.
     static let followup = ContextStrategy(
         purpose: ContextPurpose("followup"),
         strata: [
@@ -99,20 +119,34 @@ enum ContextStrategies {
                 name: "relational",
                 priority: 1,
                 selectionCriteria: SelectionCriteria(stage: .relational),
-                budgetFraction: 0.3,
+                budgetFraction: 0.25,
                 fillPolicy: .distanceFirst
             ),
             StratumDefinition(
-                name: "scope",
+                name: "module",
                 priority: 2,
-                selectionCriteria: SelectionCriteria(stage: .scope),
-                budgetFraction: 0.2,
+                selectionCriteria: SelectionCriteria(
+                    stage: .scope,
+                    minTier: .t1,
+                    maxTier: .t1
+                ),
+                budgetFraction: 0.10,
+                fillPolicy: .confidenceFirst
+            ),
+            StratumDefinition(
+                name: "scope",
+                priority: 3,
+                selectionCriteria: SelectionCriteria(
+                    stage: .scope,
+                    maxTier: .t0
+                ),
+                budgetFraction: 0.15,
                 fillPolicy: .distanceFirst
             ),
         ],
         tierPreference: .ordering([.t0, .t1, .t2]),
         elisionPolicy: .stratumFirst,
-        version: "1.0.0"
+        version: "2.0.0"
     )
 
     /// All strategies to register at startup.

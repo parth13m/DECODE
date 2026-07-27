@@ -4,8 +4,8 @@ import UniformTypeIdentifiers
 
 /// UI state for Session Mode.
 ///
-/// Thin wrapper over ``SessionManager`` that provides view-specific state:
-/// selected entity, loading indicators, file picker interaction. All session
+/// Thin wrapper over ``WorkspaceManager`` that provides view-specific state:
+/// selected entity, loading indicators, file picker interaction. All workspace
 /// lifecycle (create, parse, watch, persist) is delegated to the manager.
 @Observable
 @MainActor
@@ -22,35 +22,38 @@ final class SessionViewModel {
     /// Error message from the most recent operation, if any.
     private(set) var errorMessage: String?
 
+    /// Navigation state for `.directory` workspaces — tracks active file and entity.
+    let navigationState = NavigationState()
+
     // MARK: - Dependencies
 
-    let sessionManager: SessionManager
+    let workspaceManager: WorkspaceManager
 
     // MARK: - Convenience Accessors
 
-    /// The active session's managed state, or nil.
-    var activeSession: ManagedSession? {
-        sessionManager.activeSession
+    /// The active workspace's managed state, or nil.
+    var activeWorkspace: ManagedWorkspace? {
+        workspaceManager.activeWorkspace
     }
 
-    /// The file name of the active session.
+    /// The file name of the active workspace.
     var fileName: String {
-        activeSession?.session.fileName ?? "No file selected"
+        activeWorkspace?.workspace.rootFileName ?? "No file selected"
     }
 
-    /// Parsed entities from the active session.
+    /// Parsed entities from the active workspace.
     var parsedEntities: [ParsedEntity] {
-        activeSession?.parsedEntities ?? []
+        activeWorkspace?.parsedEntities ?? []
     }
 
-    /// Whether the active session's file watcher is running.
+    /// Whether the active workspace's file watcher is running.
     var isWatching: Bool {
-        activeSession?.watcherTask != nil
+        activeWorkspace?.watcherTask != nil
     }
 
-    /// Last refresh timestamp of the active session.
+    /// Last refresh timestamp of the active workspace.
     var lastRefreshedAt: Date? {
-        activeSession?.lastRefreshedAt
+        activeWorkspace?.lastRefreshedAt
     }
 
     /// The selected entity, resolved from the ID.
@@ -59,26 +62,26 @@ final class SessionViewModel {
         return parsedEntities.first { $0.id == id }
     }
 
-    /// All sessions for the session list.
-    var allSessions: [ManagedSession] {
-        sessionManager.orderedSessions
+    /// All workspaces for the workspace list.
+    var allWorkspaces: [ManagedWorkspace] {
+        workspaceManager.orderedWorkspaces
     }
 
-    /// The active session ID, for highlighting in the session list.
-    var activeSessionId: UUID? {
-        sessionManager.activeSessionId
+    /// The active workspace ID, for highlighting in the workspace list.
+    var activeWorkspaceId: UUID? {
+        workspaceManager.activeWorkspaceId
     }
 
-    /// The pinned session ID, for showing pin indicator in the UI.
-    var pinnedSessionId: UUID? {
-        sessionManager.pinnedSessionId
+    /// The pinned workspace ID, for showing pin indicator in the UI.
+    var pinnedWorkspaceId: UUID? {
+        workspaceManager.pinnedWorkspaceId
     }
 
     // MARK: - Knowledge Inspector Accessors
 
-    /// File intelligence for the active session.
+    /// File intelligence for the active workspace.
     var intelligence: FileIntelligence? {
-        activeSession?.fileIntelligence
+        activeWorkspace?.fileIntelligence
     }
 
     /// Semantic enrichment (nil until the first question triggers LLM enrichment).
@@ -103,12 +106,12 @@ final class SessionViewModel {
         return (o?.isEmpty == false) ? o : nil
     }
 
-    /// All imports from the active session's file intelligence.
+    /// All imports from the active workspace's file intelligence.
     var imports: [ImportDeclaration] {
         intelligence?.imports ?? []
     }
 
-    /// All relationships from the active session's file intelligence.
+    /// All relationships from the active workspace's file intelligence.
     var relationships: [Relationship] {
         intelligence?.relationships ?? []
     }
@@ -135,7 +138,24 @@ final class SessionViewModel {
 
     /// The most recent question's reasoning context, if any.
     var lastQuestionContext: QuestionContext? {
-        activeSession?.lastQuestionContext
+        activeWorkspace?.lastQuestionContext
+    }
+
+    // MARK: - Directory Workspace Accessors
+
+    /// Whether the active workspace is a directory workspace.
+    var isDirectoryWorkspace: Bool {
+        activeWorkspace?.workspace.kind == .directory
+    }
+
+    /// Indexing state for the active workspace (nil for .file workspaces).
+    var indexingState: IndexingState? {
+        activeWorkspace?.indexingCoordinator?.state
+    }
+
+    /// Discovered file paths for the active directory workspace.
+    var discoveredFiles: [String] {
+        activeWorkspace?.indexingCoordinator?.discoveredFiles ?? []
     }
 
     // MARK: - Derived Visualizations (computed from existing data, no new parsing)
@@ -169,15 +189,15 @@ final class SessionViewModel {
 
     // MARK: - Init
 
-    init(sessionManager: SessionManager) {
-        self.sessionManager = sessionManager
+    init(workspaceManager: WorkspaceManager) {
+        self.workspaceManager = workspaceManager
     }
 
     // MARK: - Restore
 
-    /// Restore all sessions from the database. Call once on view appear.
-    func restoreSessions() async {
-        await sessionManager.restoreSessions()
+    /// Restore all workspaces from the database. Call once on view appear.
+    func restoreWorkspaces() async {
+        await workspaceManager.restoreWorkspaces()
     }
 
     // MARK: - Actions
@@ -185,7 +205,7 @@ final class SessionViewModel {
     /// Whether the session sheet should be auto-presented (e.g., after hotkey open).
     var shouldPresentSession = false
 
-    /// Open a file picker and create/activate a session for the selected file.
+    /// Open a file picker and create/activate a workspace for the selected file.
     func openFile() {
         let panel = NSOpenPanel()
         panel.title = "Select a code file"
@@ -222,14 +242,14 @@ final class SessionViewModel {
         return Array(Set(types))
     }()
 
-    /// Create or activate a session for the given URL.
+    /// Create or activate a workspace for the given URL.
     func loadFile(url: URL) async {
         isLoading = true
         errorMessage = nil
         selectedEntityID = nil
 
         do {
-            try await sessionManager.createSession(url: url)
+            try await workspaceManager.createFileWorkspace(url: url)
             isLoading = false
         } catch {
             errorMessage = "Failed to open: \(error.localizedDescription)"
@@ -237,27 +257,27 @@ final class SessionViewModel {
         }
     }
 
-    /// Switch the active session.
-    func switchToSession(id: UUID) {
+    /// Switch the active workspace.
+    func switchToWorkspace(id: UUID) {
         selectedEntityID = nil
-        sessionManager.activateSession(id: id)
+        workspaceManager.activateWorkspace(id: id)
     }
 
-    /// Close a session and remove it from memory.
-    func closeSession(id: UUID) {
-        if selectedEntityID != nil, sessionManager.activeSessionId == id {
+    /// Close a workspace and remove it from memory.
+    func closeWorkspace(id: UUID) {
+        if selectedEntityID != nil, workspaceManager.activeWorkspaceId == id {
             selectedEntityID = nil
         }
-        sessionManager.closeSession(id: id)
+        workspaceManager.closeWorkspace(id: id)
     }
 
-    /// Pin a session for manual override of automatic resolution.
-    /// Unpins if the session is already pinned (toggle behavior).
+    /// Pin a workspace for manual override of automatic resolution.
+    /// Unpins if the workspace is already pinned (toggle behavior).
     func togglePin(id: UUID) {
-        if sessionManager.pinnedSessionId == id {
-            sessionManager.unpinSession()
+        if workspaceManager.pinnedWorkspaceId == id {
+            workspaceManager.unpinWorkspace()
         } else {
-            sessionManager.pinSession(id: id)
+            workspaceManager.pinWorkspace(id: id)
         }
     }
 }

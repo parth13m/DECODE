@@ -1,10 +1,10 @@
 import Foundation
 
-/// Metadata about the most recent question Decode answered for a session.
+/// Metadata about the most recent question Decode answered for a workspace.
 ///
 /// Captures the reasoning decisions the coordinator made: which context tier
 /// was used, which understanding layers were selected, snippet health, and
-/// prompt size. Stored on ``ManagedSession`` so the Knowledge Inspector can
+/// prompt size. Stored on ``ManagedWorkspace`` so the Knowledge Inspector can
 /// show "How Decode Reasons" without triggering any computation.
 struct QuestionContext: Sendable {
     let contextTier: String

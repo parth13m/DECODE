@@ -380,11 +380,14 @@ All 8 modules from IAG-001 exist as framework targets:
     - `improveFallbackNoEvidence`: unknown entity → empty evidence → HUD falls back to legacy.
 - **Frozen**: No (product development, not pipeline infrastructure)
 
-### Next Steps (Post-Pipeline)
+### Workspace Mode (Post-Session Mode)
 
-Session Mode is the first user-facing feature running on the completed platform. Remaining capability milestones:
-- **Milestone 15: Selection Explain via Pipeline** — Wire SelectionModeCoordinator to pipeline (minimal benefit until Project Intelligence).
-- **Milestone 16: Screenshot Explain via Pipeline** — Wire ScreenshotModeCoordinator to pipeline (structural consistency).
+Session Mode has been succeeded by **Workspace Mode** (W0–W7), which replaces session-first with workspace-first application architecture. Workspace Mode is tracked in `WORKSPACE_IMPLEMENTATION_STATUS.md`.
+
+### Remaining Pipeline Milestones (Deferred)
+
+- **Selection Explain via Pipeline** — Wire SelectionModeCoordinator to pipeline (minimal benefit until Project Intelligence).
+- **Screenshot Explain via Pipeline** — Wire ScreenshotModeCoordinator to pipeline (structural consistency).
 
 ---
 
@@ -592,13 +595,10 @@ No pipeline-specific implementation blockers remain.
 
 ## Session Handoff
 
-Every future Claude Code session implementing the understanding pipeline should follow this sequence:
+This document is a **read-only reference** for Session Mode and pipeline implementation history. It is no longer the active implementation status document.
 
+For future sessions:
 1. **Read `CLAUDE.md`** — project rules, engineering principles, constraints.
-2. **Read `SESSION_MODE_IMPLEMENTATION_STATUS.md`** (this file) — current state, next task, decisions to preserve.
-3. **Read only the relevant DDS and IAG documents** for the subsystem being implemented. Do not reread the full architecture.
-4. **Inspect affected repository files** — the modules being consumed and the placeholder being replaced.
-5. **Implement** — production-quality code, strict concurrency, no stubs.
-6. **Verify** — build clean, all tests pass (new and existing), zero regressions.
-7. **Update this status document** — mark subsystem complete, update phase, advance the immediate task, record any new decisions or issues.
-8. **Stop** after the subsystem is complete.
+2. **Read `WORKSPACE_IMPLEMENTATION_STATUS.md`** — current workspace architecture (successor to Session Mode).
+3. **Read this file only** if touching pipeline modules or reasoning engines.
+4. **Read relevant DDS/IAG documents** only if modifying pipeline internals.

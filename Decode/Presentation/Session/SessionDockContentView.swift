@@ -2,25 +2,25 @@ import SwiftUI
 
 /// SwiftUI content displayed inside the floating session dock panel.
 ///
-/// Renders either a collapsed capsule handle or individual floating session
-/// pills based on ``DockState/isExpanded``. Observes ``SessionManager``
-/// directly for session state.
+/// Renders either a collapsed capsule handle or individual floating workspace
+/// pills based on ``DockState/isExpanded``. Observes ``WorkspaceManager``
+/// directly for workspace state.
 ///
 /// ## Design
-/// No container background. Each session is an independent floating capsule
+/// No container background. Each workspace is an independent floating capsule
 /// with its own `.ultraThinMaterial` backdrop and shadow. The handle is a
 /// larger capsule with an orange accent.
 ///
 /// ## Interactions
-/// - **Single click**: Activate session (switch context for `⌃⇧Q`).
+/// - **Single click**: Activate workspace (switch context for `⌃⇧Q`).
 /// - **Right click**: Context menu (Open Session Mode, Close, Copy Path).
 /// - **Hover**: Magnification effect on hovered pill + neighbors.
 struct SessionDockContentView: View {
 
-    let sessionManager: SessionManager
+    let workspaceManager: WorkspaceManager
     let dockState: DockState
-    let onActivateSession: (UUID) -> Void
-    let onCloseSession: (UUID) -> Void
+    let onActivateWorkspace: (UUID) -> Void
+    let onCloseWorkspace: (UUID) -> Void
     let onOpenSessionMode: (UUID) -> Void
     let onTogglePin: (UUID) -> Void
 
@@ -73,9 +73,9 @@ struct SessionDockContentView: View {
     private var expandedContent: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(spacing: 6) {
-                let sessions = sessionManager.orderedSessions
-                ForEach(Array(sessions.enumerated()), id: \.element.id) { index, managed in
-                    sessionPill(managed, index: index)
+                let workspaces = workspaceManager.orderedWorkspaces
+                ForEach(Array(workspaces.enumerated()), id: \.element.id) { index, managed in
+                    workspacePill(managed, index: index)
                 }
             }
             // Overflow padding: pills lay out within the central dockWidth region.
@@ -87,11 +87,11 @@ struct SessionDockContentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    // MARK: - Session Pill
+    // MARK: - Workspace Pill
 
-    private func sessionPill(_ managed: ManagedSession, index: Int) -> some View {
-        let isActive = sessionManager.activeSessionId == managed.session.id
-        let isPinned = sessionManager.pinnedSessionId == managed.session.id
+    private func workspacePill(_ managed: ManagedWorkspace, index: Int) -> some View {
+        let isActive = workspaceManager.activeWorkspaceId == managed.workspace.id
+        let isPinned = workspaceManager.pinnedWorkspaceId == managed.workspace.id
         let scale = scaleForIndex(index)
         let isHovered = dockState.hoveredIndex == index
 
@@ -108,8 +108,16 @@ struct SessionDockContentView: View {
                     .frame(width: 7, height: 7)
             }
 
+            // Workspace kind icon
+            if managed.workspace.kind == .directory {
+                Image(systemName: "folder.fill")
+                    .font(.system(size: 10))
+                    .foregroundStyle(accentOrange.opacity(0.7))
+                    .frame(width: 12)
+            }
+
             VStack(alignment: .leading, spacing: 1) {
-                Text(managed.session.fileName)
+                Text(managed.workspace.rootFileName)
                     .font(.system(size: 11, weight: isActive ? .semibold : .medium))
                     .foregroundStyle(textPrimary)
                     .lineLimit(1)
@@ -119,6 +127,16 @@ struct SessionDockContentView: View {
                     Text("File unavailable")
                         .font(.system(size: 9, weight: .medium))
                         .foregroundStyle(Color(red: 0.90, green: 0.30, blue: 0.24))
+                } else if let indexing = managed.indexingCoordinator?.state, indexing.isActive {
+                    if let fraction = indexing.progressFraction {
+                        Text("Indexing \(Int(fraction * 100))%")
+                            .font(.system(size: 9))
+                            .foregroundStyle(accentOrange.opacity(0.8))
+                    } else {
+                        Text("Scanning...")
+                            .font(.system(size: 9))
+                            .foregroundStyle(accentOrange.opacity(0.8))
+                    }
                 } else if !managed.parsedEntities.isEmpty {
                     Text("\(managed.parsedEntities.count) entities")
                         .font(.system(size: 9))
@@ -131,7 +149,7 @@ struct SessionDockContentView: View {
             // Close button — visible on hover
             if isHovered {
                 Button {
-                    onCloseSession(managed.session.id)
+                    onCloseWorkspace(managed.workspace.id)
                 } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 9, weight: .semibold))
@@ -169,17 +187,17 @@ struct SessionDockContentView: View {
             dockState.hoveredIndex = hovering ? index : nil
         }
         .onTapGesture {
-            onActivateSession(managed.session.id)
+            onActivateWorkspace(managed.workspace.id)
         }
         .contextMenu {
             Button {
-                onOpenSessionMode(managed.session.id)
+                onOpenSessionMode(managed.workspace.id)
             } label: {
                 Label("Open Session Mode", systemImage: "doc.text.magnifyingglass")
             }
 
             Button {
-                onTogglePin(managed.session.id)
+                onTogglePin(managed.workspace.id)
             } label: {
                 if isPinned {
                     Label("Unpin Session", systemImage: "pin.slash")
@@ -193,15 +211,24 @@ struct SessionDockContentView: View {
             Button {
                 let pasteboard = NSPasteboard.general
                 pasteboard.clearContents()
-                pasteboard.setString(managed.session.filePath, forType: .string)
+                pasteboard.setString(managed.workspace.rootPath, forType: .string)
             } label: {
-                Label("Copy File Path", systemImage: "doc.on.clipboard")
+                Label(managed.workspace.kind == .directory ? "Copy Folder Path" : "Copy File Path",
+                      systemImage: "doc.on.clipboard")
+            }
+
+            if managed.workspace.kind == .directory {
+                Button {
+                    NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: managed.workspace.rootPath)
+                } label: {
+                    Label("Reveal in Finder", systemImage: "folder")
+                }
             }
 
             Divider()
 
             Button(role: .destructive) {
-                onCloseSession(managed.session.id)
+                onCloseWorkspace(managed.workspace.id)
             } label: {
                 Label("Close Session", systemImage: "xmark.circle")
             }
@@ -224,7 +251,7 @@ struct SessionDockContentView: View {
 
     // MARK: - Helpers
 
-    private func pillIndicatorColor(managed: ManagedSession, isActive: Bool) -> Color {
+    private func pillIndicatorColor(managed: ManagedWorkspace, isActive: Bool) -> Color {
         if !managed.isFileAccessible {
             return Color(red: 0.90, green: 0.30, blue: 0.24)
         }

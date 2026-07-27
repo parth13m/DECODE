@@ -404,7 +404,7 @@ public struct RetrievalService: EvidenceRetrieval, Sendable {
                 }
             }
 
-            // Gather scope evidence for identified scope entities
+            // Gather file-scope evidence for identified scope entities.
             for scopeEntity in scopeEntities {
                 guard accumulator.canGather(stage: .scope, stageBudget: stageBudget) else {
                     accumulator.markTruncated(.scope)
@@ -431,6 +431,48 @@ public struct RetrievalService: EvidenceRetrieval, Sendable {
                         }
                     } else {
                         accumulator.excludedUnitCount += 1
+                    }
+                }
+            }
+
+            // M5: Gather module-scope evidence when scope >= .module.
+            // Module entity is determined from the anchor's file path using
+            // the same directory-based algorithm as ModuleBoundaryPass.
+            if plan.scope >= .module {
+                for scopeEntity in scopeEntities {
+                    let filePath = scopeEntity.qualifiedName
+                    let dirPath = (filePath as NSString).deletingLastPathComponent
+                    let moduleName = (dirPath as NSString).lastPathComponent
+                    guard !moduleName.isEmpty else { continue }
+
+                    let moduleRef = EntityReference(qualifiedName: "module:\(moduleName)")
+
+                    guard accumulator.canGather(stage: .scope, stageBudget: stageBudget) else {
+                        accumulator.markTruncated(.scope)
+                        return
+                    }
+
+                    let moduleResult = await indexQuerying.queryEntity(moduleRef, predicate: nil, tier: nil, status: .active)
+                    if moduleResult.usedFallback {
+                        fallbackFamilies.insert(.entity)
+                    }
+
+                    for entry in moduleResult.entries {
+                        guard accumulator.canGather(stage: .scope, stageBudget: stageBudget) else {
+                            accumulator.markTruncated(.scope)
+                            return
+                        }
+                        guard passesTierFilter(entry.tier, plan: plan) else { continue }
+
+                        if let unit = await dirAccess.unit(for: entry.unitId) {
+                            if unit.status == .active && passesConfidenceFilter(unit.confidence, plan: plan) {
+                                let provenance = EvidenceProvenance(stage: .scope, path: ["scope", "module:\(moduleName)"])
+                                let annotated = AnnotatedUnit(unit: unit, provenance: provenance, distance: 2)
+                                accumulator.add(annotated, stage: .scope)
+                            }
+                        } else {
+                            accumulator.excludedUnitCount += 1
+                        }
                     }
                 }
             }

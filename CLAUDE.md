@@ -12,9 +12,9 @@ Stage: Pre-beta alpha, invite-only, 5–50 users.
 
 ## Current Project State (July 2026)
 
-The **Software Intelligence Platform** and the **Session Mode** epic are both **complete** and production-ready. Both are frozen except for bug fixes, reliability improvements, security fixes, or RFC-driven changes.
+The **Software Intelligence Platform**, **Session Mode**, and **Workspace Mode** epics are all **complete** and production-ready. All are frozen except for bug fixes, reliability improvements, security fixes, or RFC-driven changes.
 
-The active engineering epic is **Project Intelligence** — understanding the whole codebase as architecture.
+The next engineering epic is **Project Intelligence** — understanding the whole codebase as architecture. Currently in **discovery phase** (not yet started).
 
 The architecture is fully specified across three document layers (DAS → DDS → IAG). All specifications are frozen. Implementation follows these documents exactly. Architecture changes require an RFC (IAG-004 §21).
 
@@ -26,13 +26,23 @@ All four File Intelligence understanding layers (Identity, Purpose, Behavior, Sa
 
 ### What's Implemented
 
-**Three modes, four hotkeys**, all with follow-up questions and post-explanation code improvement:
+**Three modes, five hotkeys**, all with follow-up questions and post-explanation code improvement:
 
 | Mode | Trigger | Flow |
 |------|---------|------|
 | Selection | Double-tap Control | Capture selected text → AI → HUD |
 | Screenshot | Double-tap Option | Drag-select region → OCR → AI → HUD |
-| Session | `⌃⇧O` open file, then Double-tap Shift | Capture snippet → resolve session → build context → AI → HUD |
+| Session | `⌃⇧O` open file / `⌃⇧P` open directory, then Double-tap Shift | Capture snippet → resolve workspace → build context → AI → HUD |
+
+**Workspace Mode** — workspace-first application architecture (replaces session-first):
+- **Two workspace kinds**: `.file` (single file) and `.directory` (entire project folder).
+- **WorkspaceManager**: CRUD, security-scoped bookmarks, file accessibility monitoring.
+- **WorkspaceResolver**: multi-file entity containment scoring across directory workspaces, `resolvedFilePath` for file-within-directory matching.
+- **IndexingCoordinator**: manifest scanning, batched pipeline ingestion (20 files/batch) for directory workspaces.
+- **DirectoryWatcherService**: FSEvents-based recursive monitoring, 500ms debounce, mod-date snapshot comparison.
+- **NavigationState**: tracks active file/entity within directory workspaces.
+- **ProjectExplorerView**: hierarchical file tree sidebar for directory workspaces.
+- **Session dock**: shows folder icons, indexing progress, file counts for directory workspaces.
 
 **File Intelligence** — layered understanding of source files:
 - **Deterministic Facts Engine**: entities, imports, relationships (calls, conformsTo, inherits, owns), structure outline — all extracted from AST in a single parse pass.
@@ -65,10 +75,10 @@ Protocols for cross-layer communication (dependency inversion). No layer imports
 ### Key Services by Layer
 
 **App**: `AppDependencies` — root DI container, deferred startup, hotkey fan-out.
-**Application**: `SelectionModeCoordinator`, `ScreenshotModeCoordinator`, `SessionQuestionCoordinator`, `SessionManager`, `SessionResolver`, `ContextBuilderService`, `ExplanationFramework`, `RepresentationGuidance`, `SnippetHealthClassifier`, `ImprovementService`, `SemanticEnrichmentService`, `FilePurposeDeriver`, `FileIdentityClassifier`.
-**Domain**: Models (`Session`, `CodeEntity`, `SessionContext`, `AILimits`, `FileIntelligence`, `Relationship`, `SemanticEnrichment`, `ImportDeclaration`), Protocols (`AIProviderProtocol`, `DatabaseProtocol`).
-**Infrastructure**: `DecodeGatewayProvider`, `AccessibilityCapture`, `HotkeyService`, `SwiftSyntaxParser`, `TreeSitterParser`, `DatabaseService`, `KeychainService`, `FileWatcherService`, `ScreenCaptureService`, `VisionOCRService`, `TextReplacementService`, `AnalyticsEventService`.
-**Presentation**: `FloatingExplanationHUD`, `ExplanationHUDViewModel`, `ExplanationTagParser`, `ImprovementSectionView`, `FloatingSessionDock`, `SessionView`.
+**Application**: `SelectionModeCoordinator`, `ScreenshotModeCoordinator`, `SessionQuestionCoordinator`, `WorkspaceManager`, `WorkspaceResolver`, `IndexingCoordinator`, `NavigationState`, `SessionManager`, `SessionResolver`, `ContextBuilderService`, `ExplanationFramework`, `RepresentationGuidance`, `SnippetHealthClassifier`, `ImprovementService`, `SemanticEnrichmentService`, `FilePurposeDeriver`, `FileIdentityClassifier`.
+**Domain**: Models (`Workspace`, `WorkspaceKind`, `Session`, `CodeEntity`, `SessionContext`, `AILimits`, `FileIntelligence`, `Relationship`, `SemanticEnrichment`, `ImportDeclaration`), Protocols (`AIProviderProtocol`, `DatabaseProtocol`, `DirectoryWatcherProtocol`).
+**Infrastructure**: `DecodeGatewayProvider`, `AccessibilityCapture`, `HotkeyService`, `SwiftSyntaxParser`, `TreeSitterParser`, `DatabaseService`, `KeychainService`, `FileWatcherService`, `DirectoryWatcherService`, `ScreenCaptureService`, `VisionOCRService`, `TextReplacementService`, `AnalyticsEventService`.
+**Presentation**: `FloatingExplanationHUD`, `ExplanationHUDViewModel`, `ExplanationTagParser`, `ImprovementSectionView`, `FloatingSessionDock`, `SessionView`, `ProjectExplorerView`.
 
 ### Dependency Injection
 `AppDependencies` (`@Observable @MainActor`) passed via `.environment()`. Manual DI — no framework.
@@ -147,10 +157,25 @@ Lazy, cached LLM-derived understanding that augments deterministic analysis.
 
 ---
 
-## Session Mode Details
+## Workspace Mode Architecture
 
-### Session Resolution (`SessionResolver`)
-Pinned session → unconditional override. Single session → trivial. Multiple sessions → scored by entity containment, file content match, recency. Low confidence → fallback to `activeSessionId`.
+### Workspace-First Flow
+User opens a file (`⌃⇧O`) or directory (`⌃⇧P`) → `WorkspaceManager` creates a `ManagedWorkspace` → file is parsed/directory is indexed → user asks a question (Double-tap Shift) → `SessionQuestionCoordinator` resolves workspace → builds context → AI → HUD.
+
+### Workspace Model
+`Workspace` (Domain) — persisted via GRDB. `ManagedWorkspace` (Application) — runtime wrapper with `parsedEntities`, `parsedEntitiesByFile`, `indexingCoordinator`, `directoryWatcher`, `isFileAccessible`.
+
+### Workspace Resolution (`WorkspaceResolver`)
+Pinned workspace → unconditional override. Single workspace → trivial. Multiple workspaces → scored by entity containment (100), normalized match (80), file content (60), recency bonus, active bonus. For `.directory` workspaces, searches `parsedEntitiesByFile` across all indexed files and returns `resolvedFilePath`. Low confidence or ambiguous → fallback to `activeWorkspaceId`.
+
+### Directory Indexing (`IndexingCoordinator`)
+Scans manifest of supported files, excludes `.git`/`node_modules`/`build`/etc., batches files (20/batch) through the understanding pipeline via `processChanges`. Populates `parsedEntitiesByFile` on ManagedWorkspace.
+
+### Directory Watching (`DirectoryWatcherService`)
+FSEvents on root directory FD. 500ms debounce. Mod-date snapshot comparison detects modified/new/deleted files. Reuses `IndexingCoordinator.supportedExtensions` and `excludedDirectories`.
+
+### Multi-File Question Handling
+`SessionQuestionCoordinator` derives `effectiveFilePath`/`effectiveFileName`/`effectiveEntities` from the resolved file within a directory workspace. Pipeline, context builder, health classifier, and analytics all use these effective values.
 
 ### Context Tiers (`ContextBuilderService`)
 Token reduction of ~63–97% vs sending the full file.
@@ -166,7 +191,7 @@ Token reduction of ~63–97% vs sending the full file.
 Tree-sitter parses the snippet. Edge errors = partial-selection artifacts. Interior errors = real issues. Tiers: silent → observe → surface → diagnose, injected into system prompt.
 
 ### Session Dock
-Non-activating `NSPanel` on right screen edge. Capsule pills with magnification. Pin session via context menu.
+Non-activating `NSPanel` on right screen edge. Capsule pills with magnification. Pin workspace via context menu. Directory workspaces show folder icon, indexing progress, file counts.
 
 ---
 
@@ -340,13 +365,13 @@ Each phase has objective exit criteria (IAG-004 §3–§8). Verification is bina
 1. ~~**File Intelligence**~~ — **Complete.** All four semantic understanding layers implemented, validated, and shipped.
 2. ~~**Architecture**~~ — **Complete.** DAS-000–012, DDS-000–009, IAG-001–004 all frozen.
 3. ~~**Understanding Pipeline Implementation (Session Mode)**~~ — **Complete.** All 6 phases, all 8 modules, application integration, pipeline-first execution for Explain/Follow-Up/Improve, production hardening, and comprehensive test coverage.
-4. **Project Intelligence** — **Active.** Understand the whole codebase as architecture.
+4. ~~**Workspace Mode**~~ — **Complete.** All 8 milestones (W0–W7). Workspace-first architecture, directory support, indexing, watching, multi-file resolution.
+5. **Project Intelligence** — **Next.** Understand the whole codebase as architecture. Discovery phase — not yet started.
 
 ### Implementation Status Tracking
 
 Session Mode implementation is tracked in `SESSION_MODE_IMPLEMENTATION_STATUS.md` (complete, read-only reference).
-
-<!-- TODO: Create PROJECT_INTELLIGENCE_IMPLEMENTATION_STATUS.md when the Project Intelligence epic begins. It will become the active implementation status document. -->
+Workspace Mode implementation is tracked in `WORKSPACE_IMPLEMENTATION_STATUS.md` (complete, read-only reference).
 
 ---
 
@@ -359,6 +384,16 @@ Session Mode implementation is tracked in `SESSION_MODE_IMPLEMENTATION_STATUS.md
 5. **SQL grammar excluded** from tree-sitter — upstream SPM package issue.
 6. **Replace ⌘V targeting** — HUD panel may capture key window after Replace click, causing paste to target the panel instead of the editor.
 7. **Pre-existing tree-sitter linker issue** — All tree-sitter C package targets fail to link with `___llvm_profile_runtime` undefined symbol. Swift compilation succeeds. Unrelated to pipeline.
+8. **Directory watcher monitors root FD only** — relies on FSEvents propagation for deeply nested changes.
+9. **No persistent NavigationState** — active file/entity within directory workspaces resets on app restart.
+
+### Pre-Existing Test Failures (4)
+
+These failures predate the Workspace Mode implementation and are unrelated:
+1. `streamChatFormatsMessages` (AINetworkClientTests) — `emptyResponse` error
+2. `showStreamHandlesError` (ExplanationHUDViewModelTests) — display state mismatch
+3. `emptyTagSkipped` (ExplanationTagParserTests) — segment parsing difference
+4. `SwiftSyntaxFrontend: Contains output uses file: prefix` — entity qualified name format
 
 ---
 
@@ -391,10 +426,13 @@ These architectural decisions are validated. Do not redesign without strong evid
 9. **V7 explanation prompt** — frozen until real-user evidence justifies changes.
 10. **DSA as separate prompt** — not an overlay on V7. Lives in `ExplanationFramework+DSA.swift`.
 11. **Analytics pipeline** — server-side token extraction, compound mode values, orthogonal `mode` and `explanation_profile`.
-12. **Incremental milestone-based development** — File → Architecture → Session Mode → Project Intelligence progression.
+12. **Incremental milestone-based development** — File → Architecture → Session Mode → Workspace Mode → Project Intelligence progression.
 
 ### Completed Session Mode (Frozen)
 All 18 specification-defined Session Mode capabilities are implemented. Future Session Mode work limited to bug fixes, reliability improvements, security fixes, or explicitly approved product changes.
+
+### Completed Workspace Mode (Frozen)
+All 8 milestones (W0–W7) are implemented: domain model, GRDB persistence, WorkspaceManager, IndexingCoordinator, DirectoryWatcherService, WorkspaceResolver multi-file resolution, NavigationState, ProjectExplorerView, SessionQuestionCoordinator directory-aware question handling. Future Workspace Mode work limited to bug fixes or explicitly approved changes.
 
 ---
 
@@ -424,7 +462,7 @@ Do not build these unless explicitly requested.
 
 ### Decode-Specific
 - **Never use markdown headings (`##`) in LLM prompts.** Renderer uses `.inlineOnlyPreservingWhitespace`.
-- **Never infer active session.** Use `activeSessionId` set by explicit user action only.
+- **Never infer active workspace.** Use `activeWorkspaceId` set by explicit user action only.
 - **Never watch the file directly.** Watch parent directory to survive atomic saves.
 - **Never reuse the explanation system prompt for follow-ups.** Use `followUpSystemPrompt`.
 - **Never forget `rebuildAIProvider()` after auth state changes.**
@@ -469,4 +507,6 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
 Main branch: `main`. Build must pass before committing. Run `xcodegen generate` after adding/removing Swift files.
 
 ### Tests
-22 test files in `DecodeTests/`. Key coverage: `SessionResolver`, `ContextBuilderService`, `SnippetHealthClassifier`, `ExplanationTagParser`, `ExplainReasoningEngine`, `ImproveReasoningEngine`, `FollowUpReasoningEngine`, `SelectionModeCoordinator`, `SwiftSyntaxFrontend`, `TreeSitterFrontend`, `ModuleBoundaryPass`.
+35 test files in `DecodeTests/`. 518 tests in main suite + 43 in understanding pipeline suite. Key coverage: `WorkspaceManager`, `WorkspaceResolver`, `WorkspaceResolverMultiFile`, `IndexingCoordinator`, `DirectoryWatcherService`, `NavigationState`, `ProjectExplorerTree`, `SessionResolver`, `ContextBuilderService`, `SnippetHealthClassifier`, `ExplanationTagParser`, `ExplainReasoningEngine`, `ImproveReasoningEngine`, `FollowUpReasoningEngine`, `SelectionModeCoordinator`, `SwiftSyntaxFrontend`, `TreeSitterFrontend`, `ModuleBoundaryPass`.
+
+4 pre-existing test failures (see Known Limitations).

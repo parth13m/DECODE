@@ -153,7 +153,7 @@ private func intValue(_ output: PassOutput) -> Int64? {
 // MARK: - PI-001 Contract Tests
 
 @Suite("ModuleBoundaryPass Contract")
-struct ContractTests {
+struct MBPContractTests {
 
     @Test("Identity has correct identifier and version")
     func identity() {
@@ -693,7 +693,7 @@ struct EntityKindDistributionTests {
 // MARK: - PI-002 Idempotency and Stability Tests
 
 @Suite("ModuleBoundaryPass Idempotency")
-struct IdempotencyTests {
+struct MBPIdempotencyTests {
 
     @Test("Same input produces identical output on repeated execution")
     func idempotentExecution() async throws {

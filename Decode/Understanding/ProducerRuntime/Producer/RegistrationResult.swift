@@ -8,7 +8,7 @@ import DIRCore
 ///
 /// DDS-001 PC-1: Registration is accepted if the contract is valid and does not
 /// introduce a DAG cycle. Otherwise rejected with a diagnostic.
-public enum RegistrationResult: Sendable {
+public enum RegistrationResult: Sendable, Equatable {
     /// The producer was accepted into the registry and is schedulable.
     case accepted
     /// Registration was deferred because the runtime is in the Executing state.

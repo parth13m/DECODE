@@ -2,26 +2,26 @@ import AppKit
 import Foundation
 import ConsumerRuntime
 
-/// Orchestrates the Session Question flow: hotkey → capture → resolve session → context → AI → HUD.
+/// Orchestrates the Workspace Question flow: hotkey → capture → resolve workspace → context → AI → HUD.
 ///
 /// Follows the same coordinator pattern as ``SelectionModeCoordinator``.
 /// When the user presses double-tap Shift, this coordinator:
 ///
 /// 1. Checks that an AI provider is configured
-/// 2. Checks that at least one session exists
+/// 2. Checks that at least one workspace exists
 /// 3. Captures the selected text from the source app
-/// 4. **Automatically resolves** which session the snippet belongs to
-/// 5. Assembles session context (file content + entity signatures)
+/// 4. **Automatically resolves** which workspace the snippet belongs to
+/// 5. Assembles workspace context (file content + entity signatures)
 /// 6. Builds an enriched system prompt via ``ContextBuilderService``
 /// 7. Streams the AI response to the floating HUD
 ///
-/// ## Session Resolution
-/// The coordinator uses ``SessionResolver`` to automatically match the
-/// captured snippet to the best session. Resolution strategy:
-/// - Pinned session → unconditional override
-/// - Single session → trivial match
-/// - Multiple sessions → score by entity containment, file content, recency
-/// - Low confidence → fall back to the manually active session
+/// ## Workspace Resolution
+/// The coordinator uses ``WorkspaceResolver`` to automatically match the
+/// captured snippet to the best workspace. Resolution strategy:
+/// - Pinned workspace → unconditional override
+/// - Single workspace → trivial match
+/// - Multiple workspaces → score by entity containment, file content, recency
+/// - Low confidence → fall back to the manually active workspace
 @MainActor
 final class SessionQuestionCoordinator {
 
@@ -32,9 +32,9 @@ final class SessionQuestionCoordinator {
     private let hud: FloatingExplanationHUD
     private let toastManager: DecodeToastManager
     private let contextBuilder: ContextBuilderService
-    private let sessionResolver: SessionResolver
+    private let workspaceResolver: WorkspaceResolver
     private let snippetHealthClassifier: SnippetHealthClassifier
-    private let sessionProvider: @MainActor () -> SessionResolverInput?
+    private let workspaceProvider: @MainActor () -> WorkspaceResolverInput?
     private let usageTracker: AIUsageTracker
     private let semanticEnrichment: SemanticEnrichmentService
     private let pipelineQueryService: PipelineQueryService?
@@ -51,10 +51,10 @@ final class SessionQuestionCoordinator {
     ///   - selectionCapture: Accessibility-based text capture service.
     ///   - aiProvider: Closure returning the current AI provider, or nil.
     ///   - hud: The floating explanation panel for displaying results.
-    ///   - contextBuilder: Assembles session context into prompts.
-    ///   - sessionResolver: Automatic session matching service.
+    ///   - contextBuilder: Assembles workspace context into prompts.
+    ///   - workspaceResolver: Automatic workspace matching service.
     ///   - snippetHealthClassifier: Confidence-based code health analyzer.
-    ///   - sessionProvider: Closure returning all open sessions + active/pinned IDs.
+    ///   - workspaceProvider: Closure returning all open workspaces + active/pinned IDs.
     ///     Queried on each hotkey press.
     ///   - usageTracker: Shared quota tracker for AI request limits.
     init(
@@ -63,9 +63,9 @@ final class SessionQuestionCoordinator {
         hud: FloatingExplanationHUD,
         toastManager: DecodeToastManager,
         contextBuilder: ContextBuilderService = ContextBuilderService(),
-        sessionResolver: SessionResolver = SessionResolver(),
+        workspaceResolver: WorkspaceResolver = WorkspaceResolver(),
         snippetHealthClassifier: SnippetHealthClassifier = SnippetHealthClassifier(),
-        sessionProvider: @escaping @MainActor () -> SessionResolverInput?,
+        workspaceProvider: @escaping @MainActor () -> WorkspaceResolverInput?,
         usageTracker: AIUsageTracker,
         semanticEnrichment: SemanticEnrichmentService,
         pipelineQueryService: PipelineQueryService? = nil
@@ -75,9 +75,9 @@ final class SessionQuestionCoordinator {
         self.hud = hud
         self.toastManager = toastManager
         self.contextBuilder = contextBuilder
-        self.sessionResolver = sessionResolver
+        self.workspaceResolver = workspaceResolver
         self.snippetHealthClassifier = snippetHealthClassifier
-        self.sessionProvider = sessionProvider
+        self.workspaceProvider = workspaceProvider
         self.usageTracker = usageTracker
         self.semanticEnrichment = semanticEnrichment
         self.pipelineQueryService = pipelineQueryService
@@ -100,7 +100,7 @@ final class SessionQuestionCoordinator {
                     activeRequestTask = Task {
                         await handleSessionQuestion(event: event, generation: generation)
                     }
-                case .explainSelection, .captureScreenshot, .openSession:
+                case .explainSelection, .captureScreenshot, .openSession, .openWorkspace:
                     break
                 }
             }
@@ -114,7 +114,7 @@ final class SessionQuestionCoordinator {
         activeRequestTask = nil
     }
 
-    // MARK: - Session Question Flow
+    // MARK: - Workspace Question Flow
 
     private func handleSessionQuestion(event: HotkeyEvent, generation: UInt64) async {
         // 1. Check AI provider.
@@ -123,9 +123,13 @@ final class SessionQuestionCoordinator {
             return
         }
 
-        // 2. Check that sessions exist.
-        guard let resolverInput = sessionProvider() else {
-            toastManager.show("No active session. Open a file in Session Mode first.", icon: "doc.badge.plus")
+        // 2. Check that workspaces exist.
+        guard let resolverInput = workspaceProvider() else {
+            toastManager.show("No active workspace. Open a file in Session Mode first.", icon: "doc.badge.plus")
+            return
+        }
+        guard !resolverInput.workspaces.isEmpty else {
+            toastManager.show("No active workspace. Open a file in Session Mode first.", icon: "doc.badge.plus")
             return
         }
 
@@ -139,7 +143,7 @@ final class SessionQuestionCoordinator {
             return
         }
 
-        // 4. Capture selected text (BEFORE session resolution).
+        // 4. Capture selected text (BEFORE workspace resolution).
         guard let sourceAppPID = event.sourceAppPID else {
             toastManager.show("Could not identify the source application.", icon: "exclamationmark.triangle")
             return
@@ -182,21 +186,33 @@ final class SessionQuestionCoordinator {
                 + "\n[Truncated to \(AILimits.maxSelectedTextCharacters) characters]"
         }
 
-        // 6. Resolve session automatically.
-        let resolution = sessionResolver.resolve(
+        // 6. Workspace resolution.
+        let resolution = workspaceResolver.resolve(
             snippet: snippetText,
-            sessions: resolverInput.sessions,
-            pinnedSessionId: resolverInput.pinnedSessionId,
-            activeSessionId: resolverInput.activeSessionId
+            workspaces: resolverInput.workspaces,
+            pinnedWorkspaceId: resolverInput.pinnedWorkspaceId,
+            activeWorkspaceId: resolverInput.activeWorkspaceId
         )
 
-        guard let managed = resolution.session else {
-            toastManager.show("No active session. Open a file in Session Mode first.", icon: "doc.badge.plus")
+        guard let managed = resolution.workspace else {
+            toastManager.show("No active workspace. Open a file in Session Mode first.", icon: "doc.badge.plus")
             return
         }
 
+        // For .directory workspaces, use the resolved file path if available.
+        // Otherwise fall back to the workspace's root path (for .file workspaces).
+        let effectiveFilePath = resolution.resolvedFilePath ?? managed.workspace.rootPath
+        let effectiveFileName = (effectiveFilePath as NSString).lastPathComponent
+        let effectiveEntities: [ParsedEntity]
+        if let resolvedPath = resolution.resolvedFilePath,
+           managed.workspace.kind == .directory {
+            effectiveEntities = managed.parsedEntitiesByFile[resolvedPath] ?? managed.parsedEntities
+        } else {
+            effectiveEntities = managed.parsedEntities
+        }
+
         #if DEBUG
-        print("[SessionQuestion] Resolved session: \(managed.session.fileName) (method=\(resolution.method), confidence=\(resolution.confidence))")
+        print("[SessionQuestion] Resolved workspace: \(effectiveFileName) (method=\(resolution.method), confidence=\(resolution.confidence), file=\(effectiveFileName))")
         #endif
 
         // 6b. Pipeline path: attempt the Software Intelligence Platform first.
@@ -205,9 +221,9 @@ final class SessionQuestionCoordinator {
         //     fall through to the legacy path below.
         if let pipelineQueryService {
             let pipelineResult = await attemptPipelineExplain(
-                filePath: managed.session.filePath,
+                filePath: effectiveFilePath,
                 snippetText: snippetText,
-                parsedEntities: managed.parsedEntities,
+                parsedEntities: effectiveEntities,
                 sourceAppName: sourceAppName,
                 provider: provider,
                 managed: managed,
@@ -224,26 +240,23 @@ final class SessionQuestionCoordinator {
             #endif
         }
 
-        // 7. Build snippet-anchored session context.
-        let snapshot = ActiveSessionSnapshot(
-            session: managed.session,
-            parsedEntities: managed.parsedEntities
-        )
-
+        // 7. Build snippet-anchored context.
         guard let context = contextBuilder.buildContext(
-            session: snapshot.session,
-            parsedEntities: snapshot.parsedEntities,
+            fileId: managed.workspace.id,
+            filePath: effectiveFilePath,
+            fileName: effectiveFileName,
+            parsedEntities: effectiveEntities,
             snippet: snippetText
         ) else {
-            toastManager.show("Could not read session file: \(snapshot.session.fileName)", icon: "doc.questionmark")
+            toastManager.show("Could not read file: \(effectiveFileName)", icon: "doc.questionmark")
             return
         }
 
         // 8. Code Health: classify snippet confidence tier.
         let healthClassification: HealthClassification
-        if let grammar = GrammarRegistration.from(fileName: managed.session.fileName) {
+        if let grammar = GrammarRegistration.from(fileName: effectiveFileName) {
             let fullFileSource = try? String(
-                contentsOf: URL(fileURLWithPath: managed.session.filePath),
+                contentsOf: URL(fileURLWithPath: effectiveFilePath),
                 encoding: .utf8
             )
             healthClassification = snippetHealthClassifier.classify(
@@ -280,7 +293,7 @@ final class SessionQuestionCoordinator {
             enrichedSafety = enrichment?.safety
             enrichedDesign = enrichment?.design
 
-            // Write enrichment back to ManagedSession for Knowledge Inspector.
+            // Write enrichment back to ManagedWorkspace for Knowledge Inspector.
             if let enrichment {
                 managed.fileIntelligence?.semanticEnrichment = enrichment
             }
@@ -327,12 +340,12 @@ final class SessionQuestionCoordinator {
         )
 
         // 10b. ARE: representation guidance.
-        let containingEntityType = snapshot.parsedEntities
+        let containingEntityType = effectiveEntities
             .filter { $0.sourceText.contains(snippetText) }
             .min(by: { $0.sourceText.count < $1.sourceText.count })?
             .entity.entityType
         let framework = ExplanationFramework.select(
-            fileName: managed.session.fileName,
+            fileName: effectiveFileName,
             codeSnippet: snippetText
         )
         systemPrompt += RepresentationGuidance.guidance(
@@ -357,7 +370,7 @@ final class SessionQuestionCoordinator {
         let contextTier = context.contextTier
 
         #if DEBUG
-        print("[SessionAnalytics] tier=\(contextTier) promptChars=\(systemPrompt.count + userMessage.count) session=\(managed.session.fileName)")
+        print("[SessionAnalytics] tier=\(contextTier) promptChars=\(systemPrompt.count + userMessage.count) workspace=\(effectiveFileName)")
         #endif
 
         // Store question context for Knowledge Inspector.
@@ -374,8 +387,8 @@ final class SessionQuestionCoordinator {
         )
 
         // Resolve language from file extension for analytics.
-        let fileExt = (managed.session.fileName as NSString).pathExtension.lowercased()
-        let language: String? = if let profile = LanguageProfile.from(fileName: managed.session.fileName) {
+        let fileExt = (effectiveFileName as NSString).pathExtension.lowercased()
+        let language: String? = if let profile = LanguageProfile.from(fileName: effectiveFileName) {
             profile.displayName
         } else if fileExt == "swift" {
             "Swift"
@@ -385,7 +398,7 @@ final class SessionQuestionCoordinator {
 
         // Show HUD immediately so the user sees loading state while
         // the AI request is in flight.
-        hud.showLoading(sourceApp: sourceAppName, mode: "session", sessionFile: managed.session.fileName, explanationProfile: explanationProfile)
+        hud.showLoading(sourceApp: sourceAppName, mode: "session", sessionFile: effectiveFileName, explanationProfile: explanationProfile)
 
         do {
             let stream = try await provider.streamChat(
@@ -443,7 +456,7 @@ final class SessionQuestionCoordinator {
         parsedEntities: [ParsedEntity],
         sourceAppName: String?,
         provider: any AIProviderProtocol,
-        managed: ManagedSession,
+        managed: ManagedWorkspace,
         generation: UInt64
     ) async -> Bool {
         // Find the smallest entity whose source contains the snippet.
@@ -473,11 +486,13 @@ final class SessionQuestionCoordinator {
 
         let explanationProfile = UserDefaults.standard.bool(forKey: "dsaModeEnabled") ? "dsa" : "general"
 
+        let pipelineFileName = (filePath as NSString).lastPathComponent
+
         // Show loading state immediately.
         hud.showLoading(
             sourceApp: sourceAppName,
             mode: "session",
-            sessionFile: managed.session.fileName,
+            sessionFile: pipelineFileName,
             explanationProfile: explanationProfile
         )
 
@@ -513,8 +528,8 @@ final class SessionQuestionCoordinator {
         }
 
         // Resolve language for analytics.
-        let fileExt = (managed.session.fileName as NSString).pathExtension.lowercased()
-        let language: String? = if let profile = LanguageProfile.from(fileName: managed.session.fileName) {
+        let fileExt = (pipelineFileName as NSString).pathExtension.lowercased()
+        let language: String? = if let profile = LanguageProfile.from(fileName: pipelineFileName) {
             profile.displayName
         } else if fileExt == "swift" {
             "Swift"
@@ -668,29 +683,4 @@ final class SessionQuestionCoordinator {
     private func containsAny(_ text: String, keywords: [String]) -> Bool {
         keywords.contains { text.contains($0) }
     }
-}
-
-// MARK: - Active Session Snapshot
-
-/// A point-in-time snapshot of the active session's state.
-///
-/// Provided by ``SessionViewModel`` via a closure so the coordinator
-/// doesn't take a direct dependency on the view model.
-struct ActiveSessionSnapshot: Sendable {
-    let session: Session
-    let parsedEntities: [ParsedEntity]
-}
-
-// MARK: - Session Resolver Input
-
-/// All data the ``SessionResolver`` needs to resolve a session.
-///
-/// Provided by a closure from ``AppDependencies`` so the coordinator
-/// doesn't take a direct dependency on ``SessionManager``.
-/// Used exclusively on `@MainActor` — not `Sendable` because it holds
-/// references to `ManagedSession`.
-struct SessionResolverInput {
-    let sessions: [UUID: ManagedSession]
-    let activeSessionId: UUID?
-    let pinnedSessionId: UUID?
 }

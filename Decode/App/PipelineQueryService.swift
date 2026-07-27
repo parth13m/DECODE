@@ -54,11 +54,14 @@ final class PipelineQueryService: Sendable {
         let changeResult = await understandingSystem.processChanges([changeEvent])
 
         // Step 2: Retrieve evidence for the entity.
+        // M5: Purpose determines retrieval scope — explain and followup include
+        // module-scope evidence; improve stays file-local.
+        let retrievalScope: RetrievalScope = (purpose == "improve") ? .local : .module
         let entityRef = EntityReference(qualifiedName: entityName)
         let retrievalRequest = RetrievalRequest(
             subject: .entity(entityRef),
             intent: .explain,
-            scope: .local,
+            scope: retrievalScope,
             budget: 500
         )
         let evidenceSet = await understandingSystem.evidenceRetrieval.retrieve(retrievalRequest)

@@ -7,7 +7,7 @@ import Foundation
 /// essential for context building, session resolution, and the Session
 /// Mode entity inspection UI.
 ///
-/// Currently held in memory on `ManagedSession.parsedEntities` and
+/// Currently held in memory on `ManagedWorkspace.parsedEntities` and
 /// rebuilt on each file parse. Future iterations will persist these
 /// fields to enable cached File Intelligence.
 struct ParsedEntity: Identifiable, Sendable {

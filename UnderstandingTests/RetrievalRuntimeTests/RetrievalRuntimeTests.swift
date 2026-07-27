@@ -532,6 +532,221 @@ struct ScopeEvidenceTests {
     }
 }
 
+// MARK: — Module Scope Evidence Tests (M5)
+
+@Suite("Module Scope Evidence")
+struct ModuleScopeEvidenceTests {
+
+    @Test("Module scope gathers module entity evidence at distance 2")
+    func moduleScopeGathersModuleEvidence() async {
+        let indexQuerying = MockIndexQuerying()
+        let dirAccess = MockDIRReadAccess()
+
+        // Entity in /src/ModA/File.swift
+        let entityUnit = makeUnitWithEntity(
+            id: 1, entity: "MyClass",
+            filePath: "/src/ModA/File.swift", startLine: 5, endLine: 20
+        )
+        setupEntity("MyClass", units: [entityUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
+
+        // File scope entity
+        let fileScopeUnit = makeUnitWithEntity(
+            id: 10, entity: "/src/ModA/File.swift",
+            filePath: "/src/ModA/File.swift", startLine: 1, endLine: 50
+        )
+        setupEntity("/src/ModA/File.swift", units: [fileScopeUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
+
+        // Module entity — T1 emergence predicate
+        let moduleUnit = makeUnit(
+            id: UnitIdentifier(rawValue: 100),
+            subject: .entity(EntityReference(qualifiedName: "module:ModA")),
+            predicate: PredicateIdentifier(name: "cohesion", domain: "emergence"),
+            value: .structured(["ratio": .float(0.8)]),
+            tier: .t1,
+            confidence: .high,
+            grounding: .derived([])
+        )
+        setupEntity("module:ModA", units: [moduleUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
+
+        let service = makeService(indexQuerying: indexQuerying, dirAccess: dirAccess)
+        let request = RetrievalRequest(
+            subject: .entity(makeEntityRef("MyClass")),
+            intent: .explain,
+            scope: .module
+        )
+        let result = await service.retrieve(request)
+
+        let moduleScopeUnits = result.evidence.filter {
+            $0.provenance.stage == .scope && $0.provenance.path.contains("module:ModA")
+        }
+        #expect(!moduleScopeUnits.isEmpty)
+        #expect(moduleScopeUnits.allSatisfy { $0.distance == 2 })
+    }
+
+    @Test("Local scope does not gather module evidence")
+    func localScopeNoModuleEvidence() async {
+        let indexQuerying = MockIndexQuerying()
+        let dirAccess = MockDIRReadAccess()
+
+        let entityUnit = makeUnitWithEntity(
+            id: 1, entity: "MyClass",
+            filePath: "/src/ModA/File.swift"
+        )
+        setupEntity("MyClass", units: [entityUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
+
+        let fileScopeUnit = makeUnitWithEntity(
+            id: 10, entity: "/src/ModA/File.swift",
+            filePath: "/src/ModA/File.swift"
+        )
+        setupEntity("/src/ModA/File.swift", units: [fileScopeUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
+
+        let moduleUnit = makeUnit(
+            id: UnitIdentifier(rawValue: 100),
+            subject: .entity(EntityReference(qualifiedName: "module:ModA")),
+            predicate: PredicateIdentifier(name: "cohesion", domain: "emergence"),
+            tier: .t1,
+            confidence: .high,
+            grounding: .derived([])
+        )
+        setupEntity("module:ModA", units: [moduleUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
+
+        let service = makeService(indexQuerying: indexQuerying, dirAccess: dirAccess)
+        let request = RetrievalRequest(
+            subject: .entity(makeEntityRef("MyClass")),
+            intent: .explain,
+            scope: .local
+        )
+        let result = await service.retrieve(request)
+
+        let moduleScopeUnits = result.evidence.filter {
+            $0.provenance.path.contains("module:ModA")
+        }
+        #expect(moduleScopeUnits.isEmpty)
+    }
+
+    @Test("Module scope includes both file and module evidence")
+    func moduleScopeIncludesBothLevels() async {
+        let indexQuerying = MockIndexQuerying()
+        let dirAccess = MockDIRReadAccess()
+
+        let entityUnit = makeUnitWithEntity(
+            id: 1, entity: "Svc",
+            filePath: "/src/Infra/Svc.swift", startLine: 1, endLine: 30
+        )
+        setupEntity("Svc", units: [entityUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
+
+        let fileScopeUnit = makeUnitWithEntity(
+            id: 10, entity: "/src/Infra/Svc.swift",
+            filePath: "/src/Infra/Svc.swift"
+        )
+        setupEntity("/src/Infra/Svc.swift", units: [fileScopeUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
+
+        let moduleRoleUnit = makeUnit(
+            id: UnitIdentifier(rawValue: 100),
+            subject: .entity(EntityReference(qualifiedName: "module:Infra")),
+            predicate: PredicateIdentifier(name: "moduleRole", domain: "emergence"),
+            value: .string("provider"),
+            tier: .t1,
+            confidence: .moderate,
+            grounding: .derived([])
+        )
+        setupEntity("module:Infra", units: [moduleRoleUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
+
+        let service = makeService(indexQuerying: indexQuerying, dirAccess: dirAccess)
+        let request = RetrievalRequest(
+            subject: .entity(makeEntityRef("Svc")),
+            intent: .explain,
+            scope: .module
+        )
+        let result = await service.retrieve(request)
+
+        let fileScopeEvidence = result.evidence.filter {
+            $0.provenance.stage == .scope && $0.distance == 1
+        }
+        let moduleScopeEvidence = result.evidence.filter {
+            $0.provenance.stage == .scope && $0.distance == 2
+        }
+
+        #expect(!fileScopeEvidence.isEmpty)
+        #expect(!moduleScopeEvidence.isEmpty)
+    }
+
+    @Test("Module scope with no module entity produces file-scope only")
+    func moduleScopeNoModuleEntity() async {
+        let indexQuerying = MockIndexQuerying()
+        let dirAccess = MockDIRReadAccess()
+
+        let entityUnit = makeUnitWithEntity(
+            id: 1, entity: "Solo",
+            filePath: "/src/Alone/Solo.swift", startLine: 1, endLine: 10
+        )
+        setupEntity("Solo", units: [entityUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
+
+        let fileScopeUnit = makeUnitWithEntity(
+            id: 10, entity: "/src/Alone/Solo.swift",
+            filePath: "/src/Alone/Solo.swift"
+        )
+        setupEntity("/src/Alone/Solo.swift", units: [fileScopeUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
+
+        // No module entity registered in index — module:Alone does not exist
+        let service = makeService(indexQuerying: indexQuerying, dirAccess: dirAccess)
+        let request = RetrievalRequest(
+            subject: .entity(makeEntityRef("Solo")),
+            intent: .explain,
+            scope: .module
+        )
+        let result = await service.retrieve(request)
+
+        let fileScopeEvidence = result.evidence.filter { $0.provenance.stage == .scope }
+        #expect(!fileScopeEvidence.isEmpty)
+        #expect(fileScopeEvidence.allSatisfy { $0.distance == 1 })
+    }
+
+    @Test("Module scope respects tier filter")
+    func moduleScopeRespectsTierFilter() async {
+        let indexQuerying = MockIndexQuerying()
+        let dirAccess = MockDIRReadAccess()
+
+        let entityUnit = makeUnitWithEntity(
+            id: 1, entity: "E",
+            filePath: "/src/Mod/E.swift"
+        )
+        setupEntity("E", units: [entityUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
+
+        let fileScopeUnit = makeUnitWithEntity(
+            id: 10, entity: "/src/Mod/E.swift",
+            filePath: "/src/Mod/E.swift"
+        )
+        setupEntity("/src/Mod/E.swift", units: [fileScopeUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
+
+        // Module entity at T1
+        let moduleUnit = makeUnit(
+            id: UnitIdentifier(rawValue: 100),
+            subject: .entity(EntityReference(qualifiedName: "module:Mod")),
+            predicate: PredicateIdentifier(name: "cohesion", domain: "emergence"),
+            tier: .t1,
+            confidence: .high,
+            grounding: .derived([])
+        )
+        setupEntity("module:Mod", units: [moduleUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
+
+        let service = makeService(indexQuerying: indexQuerying, dirAccess: dirAccess)
+        // Request with tierCeiling = .t0 should exclude T1 module evidence
+        let request = RetrievalRequest(
+            subject: .entity(makeEntityRef("E")),
+            intent: .explain,
+            scope: .module,
+            tierCeiling: .t0
+        )
+        let result = await service.retrieve(request)
+
+        let moduleEvidence = result.evidence.filter {
+            $0.provenance.path.contains("module:Mod")
+        }
+        #expect(moduleEvidence.isEmpty)
+    }
+}
+
 // MARK: — Budget Enforcement Tests
 
 @Suite("Budget Enforcement")

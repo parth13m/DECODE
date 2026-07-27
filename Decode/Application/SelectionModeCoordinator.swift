@@ -94,7 +94,7 @@ final class SelectionModeCoordinator {
                     activeRequestTask = Task {
                         await handleExplainSelection(event: event, generation: generation)
                     }
-                case .captureScreenshot, .askSessionQuestion, .openSession:
+                case .captureScreenshot, .askSessionQuestion, .openSession, .openWorkspace:
                     break  // Handled by other coordinators
                 }
             }

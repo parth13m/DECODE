@@ -50,6 +50,17 @@
                ReferencedContainer = "container:Decode.xcodeproj">
             </BuildableReference>
          </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "38AF66A8C03831FADD3BF1DD"
+               BuildableName = "RetrievalRuntimeTests.xctest"
+               BlueprintName = "RetrievalRuntimeTests"
+               ReferencedContainer = "container:Decode.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
       <CommandLineArguments>
       </CommandLineArguments>

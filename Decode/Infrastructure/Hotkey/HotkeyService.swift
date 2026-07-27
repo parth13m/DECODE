@@ -40,9 +40,10 @@ final class HotkeyService: HotkeyServiceProtocol {
         .command, .shift, .option, .control,
     ]
 
-    // Key code: O = 31
+    // Key codes: O = 31, P = 35
     private static let chordBindings: [ChordBinding] = [
         ChordBinding(modifiers: [.control, .shift], keyCode: 31, action: .openSession),
+        ChordBinding(modifiers: [.control, .shift], keyCode: 35, action: .openWorkspace),
     ]
 
     // MARK: - Double-Tap Bindings (modifier-only)

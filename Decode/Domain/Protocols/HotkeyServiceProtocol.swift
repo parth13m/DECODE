@@ -10,6 +10,8 @@ enum HotkeyAction: Sendable {
     case askSessionQuestion
     /// User pressed the "open session" hotkey.
     case openSession
+    /// User pressed the "open workspace" hotkey (⌃⇧P — directory selection).
+    case openWorkspace
 }
 
 /// A hotkey event bundling the action with context about the source application.

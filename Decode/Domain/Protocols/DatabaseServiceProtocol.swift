@@ -9,14 +9,6 @@ import Foundation
 /// All methods are async to support actor-isolated database access.
 protocol DatabaseServiceProtocol: Sendable {
 
-    // MARK: - Sessions
-
-    func createSession(_ session: Session) async throws
-    func fetchSession(id: UUID) async throws -> Session?
-    func fetchAllSessions() async throws -> [Session]
-    func updateSession(_ session: Session) async throws
-    func deleteSession(id: UUID) async throws
-
     // MARK: - Entities
 
     func createEntity(_ entity: CodeEntity) async throws
@@ -26,6 +18,14 @@ protocol DatabaseServiceProtocol: Sendable {
     func updateEntity(_ entity: CodeEntity) async throws
     func deleteEntity(id: UUID) async throws
     func deleteEntities(ids: [UUID]) async throws
+
+    // MARK: - Workspaces
+
+    func createWorkspace(_ workspace: Workspace) async throws
+    func fetchWorkspace(id: UUID) async throws -> Workspace?
+    func fetchAllWorkspaces() async throws -> [Workspace]
+    func updateWorkspace(_ workspace: Workspace) async throws
+    func deleteWorkspace(id: UUID) async throws
 
     // MARK: - Entity Dependencies
 

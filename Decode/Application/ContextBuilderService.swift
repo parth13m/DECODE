@@ -34,22 +34,25 @@ struct ContextBuilderService: Sendable {
     /// and assembles the appropriate context tier. Returns `nil` only if the
     /// file cannot be read.
     func buildContext(
-        session: Session,
+        fileId: UUID,
+        filePath: String,
+        fileName: String,
         parsedEntities: [ParsedEntity],
         snippet: String
     ) -> SessionContext? {
-        let url = URL(fileURLWithPath: session.filePath)
+        let url = URL(fileURLWithPath: filePath)
         guard let fileContent = try? String(contentsOf: url, encoding: .utf8) else {
             return nil
         }
 
-        let languageGuidance = LanguageProfile.from(fileName: session.fileName)?.promptFragment
+        let languageGuidance = LanguageProfile.from(fileName: fileName)?.promptFragment
 
         let location = locateSnippet(snippet: snippet, entities: parsedEntities)
 
         if let location {
             return buildEntityMatchedContext(
-                session: session,
+                fileId: fileId,
+                fileName: fileName,
                 parsedEntities: parsedEntities,
                 location: location,
                 languageGuidance: languageGuidance
@@ -90,8 +93,8 @@ struct ContextBuilderService: Sendable {
                 )
 
                 return SessionContext(
-                    sessionId: session.id,
-                    fileName: session.fileName,
+                    sessionId: fileId,
+                    fileName: fileName,
                     entityCount: parsedEntities.count,
                     fileStructureOutline: markedOutline,
                     snippetLocationDescription: "Lines \(snippetStartLine)–\(snippetEndLine).",
@@ -109,8 +112,8 @@ struct ContextBuilderService: Sendable {
             // Snippet not found in file — send full file without markers.
             // hasSourceInContext is false so the snippet remains in the user message.
             return SessionContext(
-                sessionId: session.id,
-                fileName: session.fileName,
+                sessionId: fileId,
+                fileName: fileName,
                 entityCount: parsedEntities.count,
                 fileStructureOutline: outline,
                 snippetLocationDescription: "",
@@ -137,8 +140,8 @@ struct ContextBuilderService: Sendable {
                 snippetLineRange: localContext.snippetLineRange
             )
             return SessionContext(
-                sessionId: session.id,
-                fileName: session.fileName,
+                sessionId: fileId,
+                fileName: fileName,
                 entityCount: parsedEntities.count,
                 fileStructureOutline: markedOutline,
                 snippetLocationDescription: localContext.locationDescription,
@@ -155,8 +158,8 @@ struct ContextBuilderService: Sendable {
 
         // Tier 3: large file, snippet not found — outline only.
         return SessionContext(
-            sessionId: session.id,
-            fileName: session.fileName,
+            sessionId: fileId,
+            fileName: fileName,
             entityCount: parsedEntities.count,
             fileStructureOutline: outline,
             snippetLocationDescription: "",
@@ -173,7 +176,8 @@ struct ContextBuilderService: Sendable {
 
     /// Build focused context when the snippet was matched to an entity.
     private func buildEntityMatchedContext(
-        session: Session,
+        fileId: UUID,
+        fileName: String,
         parsedEntities: [ParsedEntity],
         location: SnippetLocation,
         languageGuidance: String?
@@ -202,8 +206,8 @@ struct ContextBuilderService: Sendable {
         )
 
         return SessionContext(
-            sessionId: session.id,
-            fileName: session.fileName,
+            sessionId: fileId,
+            fileName: fileName,
             entityCount: parsedEntities.count,
             fileStructureOutline: outline,
             snippetLocationDescription: locationDesc,

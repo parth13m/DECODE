@@ -3,7 +3,7 @@ import SwiftUI
 /// Knowledge Inspector — Decode's brain, exposed.
 ///
 /// Three-column layout:
-/// 1. Session list sidebar (left) — all open sessions with active indicator
+/// 1. Workspace list sidebar (left) — all open workspaces with active indicator
 /// 2. Knowledge content (center) — scrollable sections showing everything Decode knows
 /// 3. Entity detail panel (right) — metadata for the selected entity
 struct SessionView: View {
@@ -50,7 +50,33 @@ struct SessionView: View {
                 .foregroundStyle(textPrimary)
                 .lineLimit(1)
 
-            if viewModel.isWatching {
+            if viewModel.isDirectoryWorkspace {
+                if let state = viewModel.indexingState, state.isActive {
+                    HStack(spacing: 4) {
+                        ProgressView()
+                            .controlSize(.mini)
+                            .tint(accentOrange)
+                        if let fraction = state.progressFraction {
+                            Text("Indexing \(Int(fraction * 100))%")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(accentOrange)
+                        } else {
+                            Text("Scanning...")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(accentOrange)
+                        }
+                    }
+                } else {
+                    HStack(spacing: 4) {
+                        Image(systemName: "folder.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(accentOrange.opacity(0.7))
+                        Text("\(viewModel.discoveredFiles.count) files")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(textSecondary)
+                    }
+                }
+            } else if viewModel.isWatching {
                 HStack(spacing: 4) {
                     Circle()
                         .fill(subtleGreen)
@@ -69,7 +95,7 @@ struct SessionView: View {
                     .tint(accentOrange)
             }
 
-            Text("\(viewModel.allSessions.count) session\(viewModel.allSessions.count == 1 ? "" : "s")")
+            Text("\(viewModel.allWorkspaces.count) session\(viewModel.allWorkspaces.count == 1 ? "" : "s")")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(textSecondary)
 
@@ -92,7 +118,7 @@ struct SessionView: View {
     private var contentArea: some View {
         if let error = viewModel.errorMessage {
             errorView(error)
-        } else if viewModel.allSessions.isEmpty && viewModel.activeSession == nil {
+        } else if viewModel.allWorkspaces.isEmpty && viewModel.activeWorkspace == nil {
             emptyState
         } else {
             mainContent
@@ -106,12 +132,50 @@ struct SessionView: View {
             sessionListPanel
                 .frame(minWidth: 150, idealWidth: 180, maxWidth: 240)
 
+            if viewModel.isDirectoryWorkspace {
+                projectExplorerPanel
+                    .frame(minWidth: 180, idealWidth: 220, maxWidth: 300)
+            }
+
             knowledgeContentPanel
                 .frame(minWidth: 320, idealWidth: 440)
 
             detailPanel
                 .frame(minWidth: 280, idealWidth: 380)
         }
+    }
+
+    // MARK: - Project Explorer (Directory Workspaces)
+
+    @ViewBuilder
+    private var projectExplorerPanel: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Image(systemName: "folder.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(accentOrange)
+                Text("Project Files")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(textPrimary)
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+
+            Divider().overlay(cardBorder)
+
+            if let workspace = viewModel.activeWorkspace {
+                ProjectExplorerView(
+                    rootPath: workspace.workspace.rootPath,
+                    filePaths: viewModel.discoveredFiles,
+                    activeFilePath: viewModel.navigationState.activeFilePath,
+                    onSelectFile: { path in
+                        viewModel.navigationState.selectFile(path: path)
+                    }
+                )
+            }
+        }
+        .background(warmBackground.opacity(0.95))
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -263,15 +327,14 @@ struct SessionView: View {
     @ViewBuilder
     private var fileOverviewSection: some View {
         collapsibleSection("fileOverview", title: "File Overview", icon: "doc.text") {
-            if let intel = viewModel.intelligence, let session = viewModel.activeSession {
+            if let intel = viewModel.intelligence, let workspace = viewModel.activeWorkspace {
                 VStack(alignment: .leading, spacing: 6) {
                     metadataRow("File", intel.fileName)
                     metadataRow("Language", intel.language.capitalized)
                     metadataRow("Lines", "\(intel.lineCount)")
-                    metadataRow("Size", formatFileSize(session.session.fileSize))
                     metadataRow("Hash", String(intel.fileHash.prefix(12)))
                     metadataRow("Built", formatRelativeDate(intel.buildDate))
-                    if !session.isFileAccessible {
+                    if !workspace.isFileAccessible {
                         HStack(spacing: 4) {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .font(.system(size: 10))
@@ -629,16 +692,16 @@ struct SessionView: View {
     @ViewBuilder
     private var timelineSection: some View {
         collapsibleSection("timeline", title: "Events", icon: "list.bullet.rectangle") {
-            if let session = viewModel.activeSession {
+            if let workspace = viewModel.activeWorkspace {
                 VStack(alignment: .leading, spacing: 4) {
-                    timelineEvent("File opened", date: session.session.createdAt)
+                    timelineEvent("File opened", date: workspace.workspace.createdAt)
                     if let intel = viewModel.intelligence {
                         timelineEvent("Parsed & analyzed", date: intel.buildDate)
                     }
                     if let enrichment = viewModel.enrichment {
                         timelineEvent("Semantic enrichment generated", date: enrichment.computedAt)
                     }
-                    if let refreshed = session.lastRefreshedAt {
+                    if let refreshed = workspace.lastRefreshedAt {
                         timelineEvent("Last refreshed", date: refreshed)
                     }
                     if let ctx = viewModel.lastQuestionContext {
@@ -650,7 +713,7 @@ struct SessionView: View {
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // MARK: - Session List Panel (left column — reused)
+    // MARK: - Workspace List Panel (left column)
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     private var sessionListPanel: some View {
@@ -679,8 +742,8 @@ struct SessionView: View {
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(viewModel.allSessions) { managed in
-                        sessionRow(managed)
+                    ForEach(viewModel.allWorkspaces) { managed in
+                        workspaceRow(managed)
                         Divider().overlay(cardBorder.opacity(0.5))
                     }
                 }
@@ -689,8 +752,8 @@ struct SessionView: View {
         .background(warmBackground)
     }
 
-    private func sessionRow(_ managed: ManagedSession) -> some View {
-        let isActive = viewModel.activeSessionId == managed.session.id
+    private func workspaceRow(_ managed: ManagedWorkspace) -> some View {
+        let isActive = viewModel.activeWorkspaceId == managed.workspace.id
 
         return HStack(spacing: 8) {
             Circle()
@@ -702,7 +765,7 @@ struct SessionView: View {
                 .frame(width: 8, height: 8)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(managed.session.fileName)
+                Text(managed.workspace.rootFileName)
                     .font(.system(size: 12, weight: isActive ? .semibold : .medium))
                     .foregroundStyle(isActive ? textPrimary : textSecondary)
                     .lineLimit(1)
@@ -715,7 +778,7 @@ struct SessionView: View {
             Spacer()
 
             Button {
-                viewModel.closeSession(id: managed.session.id)
+                viewModel.closeWorkspace(id: managed.workspace.id)
             } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 9, weight: .medium))
@@ -728,7 +791,7 @@ struct SessionView: View {
         .background(isActive ? accentOrange.opacity(0.08) : Color.clear)
         .contentShape(Rectangle())
         .onTapGesture {
-            viewModel.switchToSession(id: managed.session.id)
+            viewModel.switchToWorkspace(id: managed.workspace.id)
         }
     }
 
@@ -1055,14 +1118,6 @@ struct SessionView: View {
     }
 
     // MARK: Formatting Helpers
-
-    private func formatFileSize(_ bytes: Int) -> String {
-        if bytes < 1024 { return "\(bytes) B" }
-        let kb = Double(bytes) / 1024.0
-        if kb < 1024 { return String(format: "%.1f KB", kb) }
-        let mb = kb / 1024.0
-        return String(format: "%.1f MB", mb)
-    }
 
     private func formatRelativeDate(_ date: Date) -> String {
         let formatter = RelativeDateTimeFormatter()

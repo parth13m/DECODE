@@ -115,7 +115,7 @@ private func makeContextFrame(
         purpose: purpose,
         strategyVersion: "test-1.0",
         strata: [stratum],
-        budgetSummary: BudgetSummary(total: 1000, denomination: .units, used: units.count),
+        budgetSummary: BudgetSummary(total: 1000, denomination: .unitCount, used: units.count),
         metadata: ContextFrameMetadata(
             evidenceSetSize: units.count,
             selectedCount: units.count,

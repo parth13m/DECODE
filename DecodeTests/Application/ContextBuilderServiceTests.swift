@@ -7,31 +7,18 @@ import Foundation
 
 // MARK: - Test Helpers
 
-/// Creates a temp file with given content and returns its path and a Session pointing to it.
-private func makeTempFileAndSession(
+/// Creates a temp file with given content and returns its path and file metadata.
+private func makeTempFile(
     content: String,
     fileName: String = "TestFile.swift"
-) -> (path: String, session: Session) {
+) -> (path: String, fileId: UUID, fileName: String) {
     let dir = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString)
     try! FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let fileURL = dir.appendingPathComponent(fileName)
     try! content.write(to: fileURL, atomically: true, encoding: .utf8)
 
-    let session = Session(
-        id: UUID(),
-        createdAt: Date(),
-        updatedAt: Date(),
-        bookmarkData: Data(),
-        filePath: fileURL.path,
-        fileName: fileName,
-        fileSize: content.utf8.count,
-        fileModifiedAt: Date(),
-        fileHash: "testhash",
-        summaryText: "",
-        isCorrupted: false
-    )
-    return (fileURL.path, session)
+    return (fileURL.path, UUID(), fileName)
 }
 
 /// Creates a ParsedEntity for testing.
@@ -52,7 +39,8 @@ private func makeEntity(
         entityType: entityType,
         name: name,
         summaryText: "",
-        bodyHash: "hash_\(name)"
+        hash: "hash_\(name)",
+        lastUpdated: Date()
     )
     return ParsedEntity(
         entity: entity,
@@ -75,22 +63,10 @@ struct ContextBuilderServiceTests {
     // MARK: - File Cannot Be Read
 
     @Test func returnsNilWhenFileDoesNotExist() {
-        let session = Session(
-            id: UUID(),
-            createdAt: Date(),
-            updatedAt: Date(),
-            bookmarkData: Data(),
+        let result = service.buildContext(
+            fileId: UUID(),
             filePath: "/nonexistent/path/file.swift",
             fileName: "file.swift",
-            fileSize: 0,
-            fileModifiedAt: Date(),
-            fileHash: "",
-            summaryText: "",
-            isCorrupted: false
-        )
-
-        let result = service.buildContext(
-            session: session,
             parsedEntities: [],
             snippet: "test"
         )
@@ -103,7 +79,7 @@ struct ContextBuilderServiceTests {
         let snippet = "let result = compute(input)"
         let entitySource = "func process() {\n    let result = compute(input)\n    return result\n}"
 
-        let (_, session) = makeTempFileAndSession(
+        let (path, fileId, fileName) = makeTempFile(
             content: "import Foundation\n\n\(entitySource)\n"
         )
         let entity = makeEntity(
@@ -114,7 +90,9 @@ struct ContextBuilderServiceTests {
         )
 
         let result = service.buildContext(
-            session: session,
+            fileId: fileId,
+            filePath: path,
+            fileName: fileName,
             parsedEntities: [entity],
             snippet: snippet
         )
@@ -131,12 +109,14 @@ struct ContextBuilderServiceTests {
         let outerSource = "func outer() {\n    func inner() {\n        return x + y\n    }\n}"
         let innerSource = "func inner() {\n    return x + y\n}"
 
-        let (_, session) = makeTempFileAndSession(content: outerSource)
+        let (path, fileId, fileName) = makeTempFile(content: outerSource)
         let outer = makeEntity(name: "outer", sourceText: outerSource, startLine: 1, endLine: 5)
         let inner = makeEntity(name: "inner", sourceText: innerSource, startLine: 2, endLine: 4)
 
         let result = service.buildContext(
-            session: session,
+            fileId: fileId,
+            filePath: path,
+            fileName: fileName,
             parsedEntities: [outer, inner],
             snippet: snippet
         )
@@ -150,11 +130,13 @@ struct ContextBuilderServiceTests {
         let entitySource = "func  test()  {\n    return  42\n}"
         let snippet = "func test() { return 42 }"
 
-        let (_, session) = makeTempFileAndSession(content: entitySource)
+        let (path, fileId, fileName) = makeTempFile(content: entitySource)
         let entity = makeEntity(name: "test", sourceText: entitySource, startLine: 1, endLine: 3)
 
         let result = service.buildContext(
-            session: session,
+            fileId: fileId,
+            filePath: path,
+            fileName: fileName,
             parsedEntities: [entity],
             snippet: snippet
         )
@@ -168,10 +150,12 @@ struct ContextBuilderServiceTests {
     @Test func tier2SmallFileReturnsFallbackContent() {
         // Build a file under 200 lines with no entity match.
         let content = (1...50).map { "let line\($0) = \($0)" }.joined(separator: "\n")
-        let (_, session) = makeTempFileAndSession(content: content)
+        let (path, fileId, fileName) = makeTempFile(content: content)
 
         let result = service.buildContext(
-            session: session,
+            fileId: fileId,
+            filePath: path,
+            fileName: fileName,
             parsedEntities: [],
             snippet: "unmatched snippet that is long enough"
         )
@@ -185,10 +169,12 @@ struct ContextBuilderServiceTests {
     @Test func tier2SmallFileWithSnippetFoundInsertsMarkers() {
         let content = "import Foundation\n\nfunc hello() {\n    print(\"world\")\n}\n"
         let snippet = "print(\"world\")"
-        let (_, session) = makeTempFileAndSession(content: content)
+        let (path, fileId, fileName) = makeTempFile(content: content)
 
         let result = service.buildContext(
-            session: session,
+            fileId: fileId,
+            filePath: path,
+            fileName: fileName,
             parsedEntities: [],
             snippet: snippet
         )
@@ -202,10 +188,12 @@ struct ContextBuilderServiceTests {
 
     @Test func tier2SmallFileSnippetNotFoundSendsFullFile() {
         let content = "import Foundation\n\nfunc hello() {}\n"
-        let (_, session) = makeTempFileAndSession(content: content)
+        let (path, fileId, fileName) = makeTempFile(content: content)
 
         let result = service.buildContext(
-            session: session,
+            fileId: fileId,
+            filePath: path,
+            fileName: fileName,
             parsedEntities: [],
             snippet: "something not in the file at all"
         )
@@ -224,10 +212,12 @@ struct ContextBuilderServiceTests {
         lines.append("// TARGET SNIPPET LINE HERE")
         for i in 101...200 { lines.append("let b\(i) = \(i)") }
         let content = lines.joined(separator: "\n")
-        let (_, session) = makeTempFileAndSession(content: content)
+        let (path, fileId, fileName) = makeTempFile(content: content)
 
         let result = service.buildContext(
-            session: session,
+            fileId: fileId,
+            filePath: path,
+            fileName: fileName,
             parsedEntities: [],
             snippet: "// TARGET SNIPPET LINE HERE"
         )
@@ -245,7 +235,7 @@ struct ContextBuilderServiceTests {
         // Build a file over 200 lines.
         let lines = (1...250).map { "let x\($0) = \($0)" }
         let content = lines.joined(separator: "\n")
-        let (_, session) = makeTempFileAndSession(content: content)
+        let (path, fileId, fileName) = makeTempFile(content: content)
 
         let entity = makeEntity(
             name: "someFunc",
@@ -255,7 +245,9 @@ struct ContextBuilderServiceTests {
         )
 
         let result = service.buildContext(
-            session: session,
+            fileId: fileId,
+            filePath: path,
+            fileName: fileName,
             parsedEntities: [entity],
             snippet: "completely unrelated text that appears nowhere in file"
         )
@@ -272,7 +264,7 @@ struct ContextBuilderServiceTests {
 
     @Test func outlineContainsEntitySignatures() {
         let content = "struct Foo {\n    func bar() {}\n}\n"
-        let (_, session) = makeTempFileAndSession(content: content)
+        let (path, fileId, fileName) = makeTempFile(content: content)
         let parent = makeEntity(
             name: "Foo",
             signature: "struct Foo",
@@ -291,7 +283,9 @@ struct ContextBuilderServiceTests {
         )
 
         let result = service.buildContext(
-            session: session,
+            fileId: fileId,
+            filePath: path,
+            fileName: fileName,
             parsedEntities: [parent, child],
             snippet: "unmatched snippet long enough text"
         )
@@ -304,7 +298,7 @@ struct ContextBuilderServiceTests {
     @Test func outlineMarksSelectedEntity() {
         let snippet = "func bar() {}"
         let content = "struct Foo {\n    func bar() {}\n    func baz() {}\n}\n"
-        let (_, session) = makeTempFileAndSession(content: content)
+        let (path, fileId, fileName) = makeTempFile(content: content)
         let parent = makeEntity(
             name: "Foo",
             signature: "struct Foo",
@@ -323,7 +317,9 @@ struct ContextBuilderServiceTests {
         )
 
         let result = service.buildContext(
-            session: session,
+            fileId: fileId,
+            filePath: path,
+            fileName: fileName,
             parsedEntities: [parent, child],
             snippet: snippet
         )
@@ -338,7 +334,7 @@ struct ContextBuilderServiceTests {
         let snippet = "return 42"
         let entitySource = "func compute() -> Int {\n    return 42\n}"
         let content = "\(entitySource)\n"
-        let (_, session) = makeTempFileAndSession(content: content)
+        let (path, fileId, fileName) = makeTempFile(content: content)
         let entity = makeEntity(
             name: "compute",
             signature: "func compute() -> Int",
@@ -348,7 +344,9 @@ struct ContextBuilderServiceTests {
         )
 
         let result = service.buildContext(
-            session: session,
+            fileId: fileId,
+            filePath: path,
+            fileName: fileName,
             parsedEntities: [entity],
             snippet: snippet
         )
@@ -361,10 +359,12 @@ struct ContextBuilderServiceTests {
 
     @Test func emptySnippetFallsToFileContent() {
         let content = "let x = 1\nlet y = 2\n"
-        let (_, session) = makeTempFileAndSession(content: content)
+        let (path, fileId, fileName) = makeTempFile(content: content)
 
         let result = service.buildContext(
-            session: session,
+            fileId: fileId,
+            filePath: path,
+            fileName: fileName,
             parsedEntities: [],
             snippet: ""
         )
@@ -376,25 +376,29 @@ struct ContextBuilderServiceTests {
 
     // MARK: - Session Context Fields
 
-    @Test func sessionIdPreserved() {
+    @Test func fileIdPreserved() {
         let content = "let x = 1\n"
-        let (_, session) = makeTempFileAndSession(content: content)
+        let (path, fileId, fileName) = makeTempFile(content: content)
 
         let result = service.buildContext(
-            session: session,
+            fileId: fileId,
+            filePath: path,
+            fileName: fileName,
             parsedEntities: [],
             snippet: "test"
         )
 
-        #expect(result?.sessionId == session.id)
+        #expect(result?.sessionId == fileId)
     }
 
     @Test func fileNamePreserved() {
         let content = "let x = 1\n"
-        let (_, session) = makeTempFileAndSession(content: content, fileName: "MyFile.swift")
+        let (path, fileId, _) = makeTempFile(content: content, fileName: "MyFile.swift")
 
         let result = service.buildContext(
-            session: session,
+            fileId: fileId,
+            filePath: path,
+            fileName: "MyFile.swift",
             parsedEntities: [],
             snippet: "test"
         )
@@ -404,12 +408,14 @@ struct ContextBuilderServiceTests {
 
     @Test func entityCountReflectsInput() {
         let content = "func a() {}\nfunc b() {}\n"
-        let (_, session) = makeTempFileAndSession(content: content)
+        let (path, fileId, fileName) = makeTempFile(content: content)
         let e1 = makeEntity(name: "a", sourceText: "func a() {}", startLine: 1, endLine: 1)
         let e2 = makeEntity(name: "b", sourceText: "func b() {}", startLine: 2, endLine: 2)
 
         let result = service.buildContext(
-            session: session,
+            fileId: fileId,
+            filePath: path,
+            fileName: fileName,
             parsedEntities: [e1, e2],
             snippet: "unmatched"
         )
