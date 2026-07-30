@@ -157,8 +157,6 @@ struct EvaluationRunner: Sendable {
             groundingCoverage: groundingCoverage,
             totalClaims: output.claims.count,
             groundedClaims: groundedClaims.count,
-            ungroundedClaimsRemoved: 0, // Pre-verification — engine output, not consumer output
-            confidenceAdjustments: 0,
             claimTypeDistribution: claimTypeDist,
             evidenceSetSize: contextFrame.metadata.evidenceSetSize,
             selectedCount: contextFrame.metadata.selectedCount,
@@ -170,14 +168,11 @@ struct EvaluationRunner: Sendable {
             budgetTotal: contextFrame.budgetSummary.total,
             budgetUsed: contextFrame.budgetSummary.used,
             completeness: output.completeness.rawValue,
-            reasoningDuration: 0, // Measured at ConsumerRuntime level, not engine level
             contentLength: output.content.count,
             entityCount: entityNames.count,
             engineIdentifier: engineIdentifier,
             engineVersion: engineVersion,
-            usedFallback: false,
-            isStale: contextFrame.metadata.freshnessState != .fresh,
-            conversationStateDiscarded: false
+            isStale: contextFrame.metadata.freshnessState != .fresh
         )
     }
 
@@ -220,15 +215,6 @@ struct EvaluationRunner: Sendable {
             ))
         }
 
-        if let maxUngrounded = expectations.maxUngroundedClaimsRemoved,
-           metrics.ungroundedClaimsRemoved > maxUngrounded {
-            violations.append(ExpectationViolation(
-                expectation: "ungroundedClaimsRemoved <= \(maxUngrounded)",
-                actual: "\(metrics.ungroundedClaimsRemoved)",
-                description: "Ungrounded claims removed \(metrics.ungroundedClaimsRemoved) exceeds maximum \(maxUngrounded)"
-            ))
-        }
-
         if expectations.requireNonEmptyContent && content.isEmpty {
             violations.append(ExpectationViolation(
                 expectation: "content is non-empty",
@@ -254,8 +240,6 @@ struct EvaluationRunner: Sendable {
             : Double(totalClaims) / Double(successMetrics.count)
         let avgContentLength = successMetrics.isEmpty ? 0.0
             : Double(successMetrics.reduce(0) { $0 + $1.contentLength }) / Double(successMetrics.count)
-        let avgDuration = successMetrics.isEmpty ? 0.0
-            : successMetrics.reduce(0.0) { $0 + $1.reasoningDuration } / Double(successMetrics.count)
         let avgBudget = successMetrics.isEmpty ? 0.0
             : successMetrics.reduce(0.0) { $0 + $1.budgetUtilization } / Double(successMetrics.count)
 
@@ -295,7 +279,6 @@ struct EvaluationRunner: Sendable {
             averageGroundingCoverage: avgGrounding,
             averageClaimCount: avgClaims,
             averageContentLength: avgContentLength,
-            averageReasoningDuration: avgDuration,
             averageBudgetUtilization: avgBudget,
             completenessDistribution: completenessDist,
             totalClaimTypeDistribution: totalClaimTypes,

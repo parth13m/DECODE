@@ -14,7 +14,9 @@ Stage: Pre-beta alpha, invite-only, 5–50 users.
 
 The **Software Intelligence Platform**, **Session Mode**, and **Workspace Mode** epics are all **complete** and production-ready. All are frozen except for bug fixes, reliability improvements, security fixes, or RFC-driven changes.
 
-The next engineering epic is **Project Intelligence** — understanding the whole codebase as architecture. Currently in **discovery phase** (not yet started).
+A **Product Validation Sprint** (July 2026) audited the completed epics, fixed engineering health findings, completed the folder upload UI flow, and introduced the **Session State architecture** — separating workspace history (database) from application session state (JSON file).
+
+The next engineering epic is **Project Intelligence** — understanding the whole codebase as architecture. Phase 1 (Module Intelligence, milestones M1–M7) is **complete**. Phase 2 (Project Intelligence, milestones M8–M12) is **not started**.
 
 The architecture is fully specified across three document layers (DAS → DDS → IAG). All specifications are frozen. Implementation follows these documents exactly. Architecture changes require an RFC (IAG-004 §21).
 
@@ -75,7 +77,7 @@ Protocols for cross-layer communication (dependency inversion). No layer imports
 ### Key Services by Layer
 
 **App**: `AppDependencies` — root DI container, deferred startup, hotkey fan-out.
-**Application**: `SelectionModeCoordinator`, `ScreenshotModeCoordinator`, `SessionQuestionCoordinator`, `WorkspaceManager`, `WorkspaceResolver`, `IndexingCoordinator`, `NavigationState`, `SessionManager`, `SessionResolver`, `ContextBuilderService`, `ExplanationFramework`, `RepresentationGuidance`, `SnippetHealthClassifier`, `ImprovementService`, `SemanticEnrichmentService`, `FilePurposeDeriver`, `FileIdentityClassifier`.
+**Application**: `SelectionModeCoordinator`, `ScreenshotModeCoordinator`, `SessionQuestionCoordinator`, `WorkspaceManager`, `WorkspaceResolver`, `IndexingCoordinator`, `NavigationState`, `SessionState`, `SessionStatePersistence`, `SessionManager`, `SessionResolver`, `ContextBuilderService`, `ExplanationFramework`, `RepresentationGuidance`, `SnippetHealthClassifier`, `ImprovementService`, `SemanticEnrichmentService`, `FilePurposeDeriver`, `FileIdentityClassifier`.
 **Domain**: Models (`Workspace`, `WorkspaceKind`, `Session`, `CodeEntity`, `SessionContext`, `AILimits`, `FileIntelligence`, `Relationship`, `SemanticEnrichment`, `ImportDeclaration`), Protocols (`AIProviderProtocol`, `DatabaseProtocol`, `DirectoryWatcherProtocol`).
 **Infrastructure**: `DecodeGatewayProvider`, `AccessibilityCapture`, `HotkeyService`, `SwiftSyntaxParser`, `TreeSitterParser`, `DatabaseService`, `KeychainService`, `FileWatcherService`, `DirectoryWatcherService`, `ScreenCaptureService`, `VisionOCRService`, `TextReplacementService`, `AnalyticsEventService`.
 **Presentation**: `FloatingExplanationHUD`, `ExplanationHUDViewModel`, `ExplanationTagParser`, `ImprovementSectionView`, `FloatingSessionDock`, `SessionView`, `ProjectExplorerView`.
@@ -163,7 +165,10 @@ Lazy, cached LLM-derived understanding that augments deterministic analysis.
 User opens a file (`⌃⇧O`) or directory (`⌃⇧P`) → `WorkspaceManager` creates a `ManagedWorkspace` → file is parsed/directory is indexed → user asks a question (Double-tap Shift) → `SessionQuestionCoordinator` resolves workspace → builds context → AI → HUD.
 
 ### Workspace Model
-`Workspace` (Domain) — persisted via GRDB. `ManagedWorkspace` (Application) — runtime wrapper with `parsedEntities`, `parsedEntitiesByFile`, `indexingCoordinator`, `directoryWatcher`, `isFileAccessible`.
+`Workspace` (Domain) — persisted via GRDB. Represents persistent workspace history/bookmarks. Every workspace ever created remains in the database — closing a workspace does NOT delete its record. `ManagedWorkspace` (Application) — runtime wrapper with `parsedEntities`, `parsedEntitiesByFile`, `indexingCoordinator`, `directoryWatcher`, `isFileAccessible`.
+
+### Session State (`SessionState` + `SessionStatePersistence`)
+Transient application state that survives restart. Stored as `~/Library/Application Support/Decode/session-state.json`. Tracks which workspaces were open (`openWorkspaceIDs`), which was active (`activeWorkspaceID`), and which was pinned (`pinnedWorkspaceID`). Saved incrementally on every open/close/activate/pin mutation (crash-resilient) and again on `willTerminateNotification` (belt-and-suspenders). On launch, `restoreWorkspaces()` restores only workspaces listed in the saved session state. If the file is missing or corrupt (first launch, reset), no workspaces are restored — clean slate.
 
 ### Workspace Resolution (`WorkspaceResolver`)
 Pinned workspace → unconditional override. Single workspace → trivial. Multiple workspaces → scored by entity containment (100), normalized match (80), file content (60), recency bonus, active bonus. For `.directory` workspaces, searches `parsedEntitiesByFile` across all indexed files and returns `resolvedFilePath`. Low confidence or ambiguous → fallback to `activeWorkspaceId`.
@@ -366,7 +371,8 @@ Each phase has objective exit criteria (IAG-004 §3–§8). Verification is bina
 2. ~~**Architecture**~~ — **Complete.** DAS-000–012, DDS-000–009, IAG-001–004 all frozen.
 3. ~~**Understanding Pipeline Implementation (Session Mode)**~~ — **Complete.** All 6 phases, all 8 modules, application integration, pipeline-first execution for Explain/Follow-Up/Improve, production hardening, and comprehensive test coverage.
 4. ~~**Workspace Mode**~~ — **Complete.** All 8 milestones (W0–W7). Workspace-first architecture, directory support, indexing, watching, multi-file resolution.
-5. **Project Intelligence** — **Next.** Understand the whole codebase as architecture. Discovery phase — not yet started.
+5. ~~**Product Validation Sprint**~~ — **Complete.** Engineering health cleanup (E1-01, E2-00, E3-01 findings), folder upload UI completion, SessionState architecture (workspace history vs application session separation).
+6. **Project Intelligence** — **In progress.** Phase 1 (Module Intelligence, M1–M7) complete. Phase 2 (Project Intelligence, M8–M12) not started. See `PROJECT_INTELLIGENCE_IMPLEMENTATION_STATUS.md`.
 
 ### Implementation Status Tracking
 
@@ -385,7 +391,7 @@ Workspace Mode implementation is tracked in `WORKSPACE_IMPLEMENTATION_STATUS.md`
 6. **Replace ⌘V targeting** — HUD panel may capture key window after Replace click, causing paste to target the panel instead of the editor.
 7. **Pre-existing tree-sitter linker issue** — All tree-sitter C package targets fail to link with `___llvm_profile_runtime` undefined symbol. Swift compilation succeeds. Unrelated to pipeline.
 8. **Directory watcher monitors root FD only** — relies on FSEvents propagation for deeply nested changes.
-9. **No persistent NavigationState** — active file/entity within directory workspaces resets on app restart.
+9. **No persistent NavigationState** — active file/entity within directory workspaces resets on app restart. `SessionState` provides the foundation for persisting this (add `activeFilePaths: [UUID: String]` to `SessionState`) but this is not yet implemented.
 
 ### Pre-Existing Test Failures (4)
 
@@ -433,6 +439,11 @@ All 18 specification-defined Session Mode capabilities are implemented. Future S
 
 ### Completed Workspace Mode (Frozen)
 All 8 milestones (W0–W7) are implemented: domain model, GRDB persistence, WorkspaceManager, IndexingCoordinator, DirectoryWatcherService, WorkspaceResolver multi-file resolution, NavigationState, ProjectExplorerView, SessionQuestionCoordinator directory-aware question handling. Future Workspace Mode work limited to bug fixes or explicitly approved changes.
+
+### Session State Architecture
+13. **Workspace history vs session state separation** — `Workspace` (database) stores persistent history. `SessionState` (JSON file) stores transient runtime state. Do not add `isOpen` or similar state flags to the `Workspace` model. Do not conflate workspace history with application session state.
+14. **Incremental session state persistence** — `saveSessionState()` is called on every open/close/activate/pin mutation. Do not rely solely on `willTerminateNotification` for persistence — unexpected termination must not lose the current session.
+15. **Clean-slate first launch** — When no `session-state.json` exists, the app starts with zero workspaces. Do not fall back to restoring all database workspaces.
 
 ---
 
@@ -507,6 +518,6 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
 Main branch: `main`. Build must pass before committing. Run `xcodegen generate` after adding/removing Swift files.
 
 ### Tests
-35 test files in `DecodeTests/`. 518 tests in main suite + 43 in understanding pipeline suite. Key coverage: `WorkspaceManager`, `WorkspaceResolver`, `WorkspaceResolverMultiFile`, `IndexingCoordinator`, `DirectoryWatcherService`, `NavigationState`, `ProjectExplorerTree`, `SessionResolver`, `ContextBuilderService`, `SnippetHealthClassifier`, `ExplanationTagParser`, `ExplainReasoningEngine`, `ImproveReasoningEngine`, `FollowUpReasoningEngine`, `SelectionModeCoordinator`, `SwiftSyntaxFrontend`, `TreeSitterFrontend`, `ModuleBoundaryPass`.
+41 test files in `DecodeTests/`. Key coverage: `WorkspaceManager`, `WorkspaceResolver`, `WorkspaceResolverMultiFile`, `IndexingCoordinator`, `DirectoryWatcherService`, `NavigationState`, `ProjectExplorerTree`, `SessionState`, `SessionViewModelDirectory`, `SessionResolver`, `ContextBuilderService`, `SnippetHealthClassifier`, `ExplanationTagParser`, `ExplainReasoningEngine`, `ImproveReasoningEngine`, `FollowUpReasoningEngine`, `SelectionModeCoordinator`, `SwiftSyntaxFrontend`, `TreeSitterFrontend`, `ModuleBoundaryPass`, `CrossFileResolutionPass`, `ModuleEmergentProperties`, `ModuleContextStrategy`, `ModuleObservation`, `ModuleIntelligenceValidation`.
 
 4 pre-existing test failures (see Known Limitations).

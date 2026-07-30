@@ -145,14 +145,18 @@ struct BenchmarkRunner: Sendable {
         _ = await understandingSystem.processChanges(events)
 
         // Stage 2: Retrieve evidence.
+        // E3-01: Question-aware scope selection — use QuestionClassifier
+        // instead of hardcoded purpose→scope mapping.
         let retrievalStart = ContinuousClock.now
-        let purpose = benchmarkCase.purpose
-        let retrievalScope: RetrievalScope = (purpose == "improve") ? .local : .module
+        let classification = QuestionClassifier.classify(
+            purpose: benchmarkCase.purpose,
+            questionHint: benchmarkCase.questionHint
+        )
         let entityRef = EntityReference(qualifiedName: benchmarkCase.queryEntity)
         let retrievalRequest = RetrievalRequest(
             subject: .entity(entityRef),
-            intent: .explain,
-            scope: retrievalScope,
+            intent: classification.intent,
+            scope: classification.scope,
             budget: contextBudget
         )
         let evidenceSet = await understandingSystem.evidenceRetrieval.retrieve(retrievalRequest)
@@ -168,7 +172,7 @@ struct BenchmarkRunner: Sendable {
 
         // Stage 3: Assemble context.
         let assemblyStart = ContinuousClock.now
-        let contextPurpose = ContextPurpose(purpose)
+        let contextPurpose = ContextPurpose(benchmarkCase.purpose)
         let assemblyRequest = AssemblyRequest(
             evidenceSet: evidenceSet,
             purpose: contextPurpose,
@@ -303,10 +307,10 @@ struct BenchmarkRunner: Sendable {
         let relationshipRecall = expectations.expectedRelationships.isEmpty ? 1.0
             : Double(foundRels.count) / Double(expectations.expectedRelationships.count)
 
-        // Predicate recall
+        // Predicate recall — collect all predicates across the entire evidence set
         let entityPredicates = extractPredicates(
             from: evidenceSet,
-            forEntity: expectations.expectedEntities.isEmpty ? nil : nil
+            forEntity: nil
         )
         let (foundPreds, missingPreds) = computeRecall(
             expected: expectations.expectedPredicates,
@@ -743,9 +747,7 @@ struct BenchmarkComparator: Sendable {
         EvaluationMetrics(
             groundingCoverage: bm.groundingCoverage,
             totalClaims: bm.totalClaims,
-            groundedClaims: bm.totalClaims,
-            ungroundedClaimsRemoved: 0,
-            confidenceAdjustments: 0,
+            groundedClaims: bm.totalClaims, // Claim-level grounding not tracked in benchmarks
             claimTypeDistribution: bm.claimTypeDistribution,
             evidenceSetSize: bm.evidenceUnitCount,
             selectedCount: bm.contextUnitCount,
@@ -754,17 +756,14 @@ struct BenchmarkComparator: Sendable {
             stratumDistribution: bm.stratumDistribution,
             degradationLevel: bm.degradationLevel,
             budgetUtilization: bm.budgetUtilization,
-            budgetTotal: 500,
+            budgetTotal: bm.contextUnitCount > 0 ? Int(Double(bm.contextUnitCount) / max(bm.budgetUtilization, 0.001)) : 0,
             budgetUsed: bm.contextUnitCount,
             completeness: bm.completeness,
-            reasoningDuration: bm.reasoningLatency,
             contentLength: bm.contentLength,
             entityCount: bm.foundEntities.count,
             engineIdentifier: bm.engineIdentifier,
             engineVersion: bm.engineVersion,
-            usedFallback: false,
-            isStale: false,
-            conversationStateDiscarded: false
+            isStale: false
         )
     }
 }

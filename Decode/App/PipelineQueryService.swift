@@ -36,12 +36,14 @@ final class PipelineQueryService: Sendable {
     ///   - filePath: The source file to analyze.
     ///   - entityName: The qualified name of the entity to explain.
     ///   - purpose: The consumer purpose (e.g., "explain", "improve", "followup").
+    ///   - questionHint: Optional question text for question-aware scope selection (E3-01).
     ///   - conversationState: Prior conversation state for follow-up queries.
     /// - Returns: The pipeline result — either a produced `Understanding` or a failure description.
     func query(
         filePath: String,
         entityName: String,
         purpose: String = "explain",
+        questionHint: String? = nil,
         conversationState: ConversationState? = nil
     ) async -> PipelineQueryResult {
         let contextPurpose = ContextPurpose(purpose)
@@ -54,14 +56,17 @@ final class PipelineQueryService: Sendable {
         let changeResult = await understandingSystem.processChanges([changeEvent])
 
         // Step 2: Retrieve evidence for the entity.
-        // M5: Purpose determines retrieval scope — explain and followup include
-        // module-scope evidence; improve stays file-local.
-        let retrievalScope: RetrievalScope = (purpose == "improve") ? .local : .module
+        // E3-01: Question-aware scope selection — classify purpose and optional
+        // question text into (intent, scope) instead of hardcoding.
+        let classification = QuestionClassifier.classify(
+            purpose: purpose,
+            questionHint: questionHint
+        )
         let entityRef = EntityReference(qualifiedName: entityName)
         let retrievalRequest = RetrievalRequest(
             subject: .entity(entityRef),
-            intent: .explain,
-            scope: retrievalScope,
+            intent: classification.intent,
+            scope: classification.scope,
             budget: 500
         )
         let evidenceSet = await understandingSystem.evidenceRetrieval.retrieve(retrievalRequest)
@@ -140,6 +145,7 @@ final class PipelineQueryService: Sendable {
             filePath: filePath,
             entityName: entityName,
             purpose: "followup",
+            questionHint: question,
             conversationState: injectedState
         )
     }

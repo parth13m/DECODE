@@ -335,7 +335,6 @@ struct EvaluationRunnerTests {
 
         #expect(metrics.engineIdentifier == "com.decode.explain")
         #expect(metrics.engineVersion == "1.0.0")
-        #expect(metrics.usedFallback == false)
         #expect(metrics.isStale == false)
     }
 
@@ -551,8 +550,6 @@ struct BaselineComparatorTests {
             groundingCoverage: groundingCoverage,
             totalClaims: totalClaims,
             groundedClaims: totalClaims,
-            ungroundedClaimsRemoved: 0,
-            confidenceAdjustments: 0,
             claimTypeDistribution: ["factual": totalClaims],
             evidenceSetSize: 10,
             selectedCount: 10,
@@ -564,14 +561,11 @@ struct BaselineComparatorTests {
             budgetTotal: 1000,
             budgetUsed: 10,
             completeness: completeness,
-            reasoningDuration: 0.01,
             contentLength: contentLength,
             entityCount: 2,
             engineIdentifier: "com.decode.explain",
             engineVersion: "1.0.0",
-            usedFallback: false,
-            isStale: false,
-            conversationStateDiscarded: false
+            isStale: false
         )
     }
 
@@ -595,7 +589,6 @@ struct BaselineComparatorTests {
                 averageGroundingCoverage: avgGrounding,
                 averageClaimCount: avgClaims,
                 averageContentLength: 200,
-                averageReasoningDuration: 0.01,
                 averageBudgetUtilization: 0.3,
                 completenessDistribution: ["partial": results.count],
                 totalClaimTypeDistribution: ["factual": Int(avgClaims) * results.count],
@@ -705,7 +698,6 @@ struct BaselineComparatorTests {
             groundingCoverageThreshold: 0.01,
             claimCountThreshold: 0.01,
             contentLengthThreshold: 0.01,
-            reasoningDurationThreshold: 0.01,
             budgetUtilizationThreshold: 0.01
         )
         let comparator = BaselineComparator(thresholds: tightThresholds)
@@ -741,8 +733,6 @@ struct EvaluationSerializationTests {
             groundingCoverage: 0.75,
             totalClaims: 8,
             groundedClaims: 7,
-            ungroundedClaimsRemoved: 1,
-            confidenceAdjustments: 0,
             claimTypeDistribution: ["factual": 5, "derived": 2, "interpretive": 1],
             evidenceSetSize: 20,
             selectedCount: 15,
@@ -754,14 +744,11 @@ struct EvaluationSerializationTests {
             budgetTotal: 500,
             budgetUsed: 300,
             completeness: "complete",
-            reasoningDuration: 1.234,
             contentLength: 1500,
             entityCount: 4,
             engineIdentifier: "com.decode.explain",
             engineVersion: "1.0.0",
-            usedFallback: false,
-            isStale: false,
-            conversationStateDiscarded: false
+            isStale: false
         )
 
         let encoder = JSONEncoder()
@@ -804,7 +791,6 @@ struct EvaluationSerializationTests {
                 averageGroundingCoverage: 0.5,
                 averageClaimCount: 3.0,
                 averageContentLength: 150.0,
-                averageReasoningDuration: 0.5,
                 averageBudgetUtilization: 0.3,
                 completenessDistribution: ["partial": 1],
                 totalClaimTypeDistribution: ["factual": 3],

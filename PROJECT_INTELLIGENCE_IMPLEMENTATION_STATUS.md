@@ -193,9 +193,20 @@ File → Entity containment (`contains` predicate) migrated from CrossFileResolu
 
 #### Milestone 7: Module Intelligence Validation
 
-- **Status:** Not Started
+- **Status:** Complete (2026-07-28)
 - **Dependencies:** M6 (module-aware explanations operational)
-- **Notes:** Verify that explanations for cross-file questions are measurably richer than file-only explanations. The explanation contains previously absent information (cross-file callers, module role). The information is grounded in DIR evidence. The explanation does not become longer or noisier.
+- **Validated by:** 34 tests in `DecodeTests/Application/ModuleIntelligenceValidationTests.swift` (8 suites: M7-V1 through M7-V8)
+- **Validation results:**
+  1. **Multi-file module observations**: Provider/consumer/isolated modules produce correct observations with role, visibility, cohesion, style, and boundary fields. Public vs internal entity distinction works.
+  2. **Single-file module suppression**: Single-file modules are fully suppressed regardless of role (provider, consumer, mixed, isolated). No false observations.
+  3. **Prompt injection**: MODULE OBSERVATIONS block is formatted correctly with module name, role, guidance. Module entities filtered from entity section (AI path). System prompt includes weaving instruction. Follow-up instruction is reactive.
+  4. **ExplainReasoningEngine integration**: Deterministic output includes entity information. AI prompt path filters module entities and injects observations. Single-file modules produce no observations for AI prompt.
+  5. **Suppression rules**: Moderate cohesion (0.3-0.8), mixed role for internal entities, balanced interaction profiles, and low relationship counts (<5) are all correctly suppressed.
+  6. **Guidance generation**: Provider+public generates cross-module impact guidance. Consumer generates dependency guidance. Isolated generates self-containment guidance.
+  7. **Context strategy**: Explain v2.0.0 has 4 strata (direct 50%, relational 25%, module 10%, scope 15%). Module stratum selects T1 scope evidence. No T0/T1 overlap (SI-2). Budget fractions sum to 1.0. Improve has no module stratum. Followup mirrors explain.
+  8. **Richness comparison**: Multi-file module produces role, visibility, cohesion observations absent from file-only. Single-file produces none.
+- **Benchmark integration:** 4 module benchmark cases added to BenchmarkCorpus (mod-01 through mod-04): multi-file service, protocol conformance across files, layered architecture, single-file suppression.
+- **No pipeline module modifications.** All validation through tests that exercise existing code paths.
 
 ### Phase 2: Project Intelligence
 
@@ -313,19 +324,13 @@ File → Entity containment (`contains` predicate) migrated from CrossFileResolu
 
 ## Current Immediate Task
 
-### Milestone 7: Module Intelligence Validation
+### Milestone 8: System Entity Creation via Composition Pass
 
-**Purpose:** Verify that the complete Module Intelligence stack (M1–M6) produces measurably richer explanations for cross-file questions compared to file-only explanations.
+**Purpose:** Create a system-level entity that represents the entire codebase, aggregating module-level entities (DAS-004). This is the first milestone of Phase 2.
 
-**Dependencies:** M6 (Module-Aware Explanation Enhancement — COMPLETE). Module observations are injected into prompts. The full pipeline is operational: evidence gathering → assembly → observation extraction → prompt injection → LLM synthesis.
+**Dependencies:** M7 (Module Intelligence Validation — COMPLETE). The complete Module Intelligence stack is validated and operational.
 
-**Success criteria:**
-1. Explanations for entities in multi-file modules contain module-context framing (role, visibility, cohesion).
-2. Explanations for entities in single-file modules are unchanged (suppression works end-to-end).
-3. Module framing is naturally woven into explanations, not a separate section.
-4. Follow-up questions about cross-file impact reference module context reactively.
-5. No performance regression in explanation latency.
-6. No modification to any pipeline module.
+**Not started.** See Phase 2 milestones above for specification.
 
 ---
 
@@ -396,9 +401,9 @@ No Project Intelligence-specific blockers exist.
 | Item | Value |
 |------|-------|
 | Current branch | `main` |
-| Working tree | Clean |
+| Working tree | Uncommitted (Product Validation Sprint + SessionState) |
 | Swift compilation | Clean (zero errors in all pipeline + app targets) |
-| Full app build | Blocked by pre-existing tree-sitter linker issue (not PI-related) |
+| Full app build | Succeeds (BUILD SUCCEEDED) |
 | Pipeline unit tests | 361 passing (36+34+45+42+54+38+60+52) |
 | Pipeline integration tests | 24 passing |
 | ModuleBoundaryPass tests | 43 passing |
@@ -409,6 +414,9 @@ No Project Intelligence-specific blockers exist.
 | Module Scope Evidence tests | 4 passing |
 | Reasoning engine tests | 22 passing (7+7+8) |
 | Frontend tests | 23 passing (10+13) |
+| SessionState tests | 23 passing (2+5+16) |
+| SessionViewModelDirectory tests | 8 passing |
+| WorkspaceManager tests | 32 passing (16+4+5+7) |
 | Strict concurrency | Clean (zero warnings in pipeline modules) |
 
 ---
@@ -441,8 +449,8 @@ M1 (Cross-File Entity Resolution)     ← COMPLETE
 M4 (Module Emergent Properties)        ← COMPLETE (depends on M1 + M2+M3)
 M5 (Module-Scope Context Strategy)     ← COMPLETE (depends on M4)
 M6 (Module-Aware Explanation)          ← COMPLETE (depends on M5)
-M7 (Module Intelligence Validation)    ← integration verification
-M8–M12 (Project Intelligence Phase 2)  ← depends on M7
+M7 (Module Intelligence Validation)    ← COMPLETE
+M8–M12 (Project Intelligence Phase 2)  ← NEXT (depends on M7)
 ```
 
-M2 and M3 are already complete. No need to revisit them.
+M2 and M3 are already complete. Phase 1 (Module Intelligence) is fully complete.

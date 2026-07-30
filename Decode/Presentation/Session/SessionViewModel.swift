@@ -220,6 +220,36 @@ final class SessionViewModel {
         }
     }
 
+    /// Open a folder picker and create/activate a directory workspace.
+    func openDirectory() {
+        let panel = NSOpenPanel()
+        panel.title = "Select a project folder"
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        Task {
+            await loadDirectory(url: url)
+        }
+    }
+
+    /// Create or activate a directory workspace for the given URL.
+    func loadDirectory(url: URL) async {
+        isLoading = true
+        errorMessage = nil
+        selectedEntityID = nil
+
+        do {
+            try await workspaceManager.createDirectoryWorkspace(url: url)
+            isLoading = false
+        } catch {
+            errorMessage = "Failed to open folder: \(error.localizedDescription)"
+            isLoading = false
+        }
+    }
+
     /// Code file types accepted by the file picker.
     private static let supportedCodeTypes: [UTType] = {
         var types: [UTType] = [.swiftSource]

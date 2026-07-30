@@ -41,6 +41,11 @@ struct BenchmarkCase: Sendable {
     /// The consumer purpose for the query.
     let purpose: String
 
+    /// Optional question text for question-aware scope selection (E3-01).
+    /// When provided, the QuestionClassifier uses this to determine
+    /// retrieval intent and scope instead of using purpose-based defaults.
+    var questionHint: String? = nil
+
     /// Structural expectations for the pipeline output.
     let expectations: BenchmarkExpectations
 }

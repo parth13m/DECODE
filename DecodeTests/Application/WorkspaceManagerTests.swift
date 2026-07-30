@@ -29,6 +29,17 @@ private func cleanupTempFile(_ url: URL) {
     try? FileManager.default.removeItem(at: dir)
 }
 
+/// Creates a temporary session state file URL for test isolation.
+private func makeTempSessionStateURL() -> URL {
+    FileManager.default.temporaryDirectory
+        .appendingPathComponent("decode-ss-\(UUID().uuidString).json")
+}
+
+/// Cleans up a temporary session state file.
+private func cleanupSessionStateFile(_ url: URL) {
+    try? FileManager.default.removeItem(at: url)
+}
+
 /// Creates an in-memory database with all migrations applied.
 private func makeInMemoryDatabase() throws -> DatabaseService {
     // Use a temporary file-based DB since DatabaseService uses DatabasePool
@@ -276,7 +287,9 @@ struct WorkspaceManagerPersistenceTests {
 
     @Test @MainActor func createFileWorkspace_persistsToDatabase() async throws {
         let db = try makeInMemoryDatabase()
-        let manager = WorkspaceManager(database: db)
+        let ssURL = makeTempSessionStateURL()
+        defer { cleanupSessionStateFile(ssURL) }
+        let manager = WorkspaceManager(database: db, sessionStateURL: ssURL)
         let file = try createTempSwiftFile()
         defer { cleanupTempFile(file) }
 
@@ -291,18 +304,21 @@ struct WorkspaceManagerPersistenceTests {
 
     @Test @MainActor func restoreWorkspaces_loadsFromDatabase() async throws {
         let db = try makeInMemoryDatabase()
+        let ssURL = makeTempSessionStateURL()
+        defer { cleanupSessionStateFile(ssURL) }
 
         // Create and close a workspace.
         let file = try createTempSwiftFile(name: "Persistent.swift", content: "class Foo {}\n")
         defer { cleanupTempFile(file) }
 
-        let manager1 = WorkspaceManager(database: db)
+        let manager1 = WorkspaceManager(database: db, sessionStateURL: ssURL)
         try await manager1.createFileWorkspace(url: file)
         let originalId = manager1.activeWorkspaceId!
         // Simulate app shutdown — drop all in-memory state.
 
         // New manager instance — simulates app restart.
-        let manager2 = WorkspaceManager(database: db)
+        // Uses the same session state URL so it reads the saved state.
+        let manager2 = WorkspaceManager(database: db, sessionStateURL: ssURL)
         #expect(manager2.workspaces.isEmpty)
 
         await manager2.restoreWorkspaces()
@@ -318,23 +334,27 @@ struct WorkspaceManagerPersistenceTests {
 
     @Test @MainActor func restoreWorkspaces_skipsDeletedFiles() async throws {
         let db = try makeInMemoryDatabase()
+        let ssURL = makeTempSessionStateURL()
+        defer { cleanupSessionStateFile(ssURL) }
         let file = try createTempSwiftFile()
         defer { cleanupTempFile(file) }
 
-        let manager1 = WorkspaceManager(database: db)
+        let manager1 = WorkspaceManager(database: db, sessionStateURL: ssURL)
         try await manager1.createFileWorkspace(url: file)
 
         // Delete the file before restore.
         try FileManager.default.removeItem(at: file)
 
-        let manager2 = WorkspaceManager(database: db)
+        let manager2 = WorkspaceManager(database: db, sessionStateURL: ssURL)
         await manager2.restoreWorkspaces()
         #expect(manager2.workspaces.isEmpty)
     }
 
     @Test @MainActor func closeWorkspace_preservesInDatabase() async throws {
         let db = try makeInMemoryDatabase()
-        let manager = WorkspaceManager(database: db)
+        let ssURL = makeTempSessionStateURL()
+        defer { cleanupSessionStateFile(ssURL) }
+        let manager = WorkspaceManager(database: db, sessionStateURL: ssURL)
         let file = try createTempSwiftFile()
         defer { cleanupTempFile(file) }
 

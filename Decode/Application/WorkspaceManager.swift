@@ -9,14 +9,29 @@ import UpdateEngine
 /// `SessionManager` for the single-file case. For `.directory` workspaces,
 /// `IndexingCoordinator` handles batch ingestion through the pipeline.
 ///
+/// ## Workspace History vs Session State
+///
+/// The **database** (`workspaces` table) stores every workspace ever created.
+/// Closing a workspace does NOT delete its database record — records serve as
+/// persistent history/bookmarks.
+///
+/// **Session state** (`session-state.json`) tracks which workspaces were open
+/// in the current application session. It is saved when the open-workspace set
+/// changes (open, close, activate) and on app termination. On launch,
+/// `restoreWorkspaces()` restores only the workspaces listed in the saved
+/// session state — not every historical workspace.
+///
+/// If no session state file exists (first launch, corruption, reset), the app
+/// starts with a clean session and no workspaces restored.
+///
 /// ## Workspace Lifecycle
 /// ```
-/// createFileWorkspace(url:)  → workspace added, set as active, watcher started
-/// activateWorkspace(id:)     → activeWorkspaceId updated
-/// pinWorkspace(id:)          → pinnedWorkspaceId set (overrides auto-resolution)
-/// unpinWorkspace()           → pinnedWorkspaceId cleared
-/// closeWorkspace(id:)        → watcher stopped, workspace removed from memory
-/// restoreWorkspaces()        → all workspaces loaded from DB, most recent activated
+/// createFileWorkspace(url:)  → workspace added, set as active, watcher started, session saved
+/// activateWorkspace(id:)     → activeWorkspaceId updated, session saved
+/// pinWorkspace(id:)          → pinnedWorkspaceId set, session saved
+/// unpinWorkspace()           → pinnedWorkspaceId cleared, session saved
+/// closeWorkspace(id:)        → watcher stopped, workspace removed from memory, session saved
+/// restoreWorkspaces()        → workspaces in session state loaded from DB
 /// ```
 @Observable
 @MainActor
@@ -52,6 +67,11 @@ final class WorkspaceManager {
     private let treeSitterParser: TreeSitterParser
     private let database: DatabaseService?
 
+    /// File URL for session state persistence. Defaults to
+    /// `~/Library/Application Support/Decode/session-state.json`.
+    /// Overridable for testing.
+    private let sessionStateURL: URL
+
     /// Bridge for forwarding file change events to the understanding pipeline.
     /// Called when a workspace's watched file is modified. The closure receives
     /// the file path and change kind.
@@ -70,11 +90,29 @@ final class WorkspaceManager {
     init(
         swiftParser: SwiftSyntaxParser = SwiftSyntaxParser(),
         treeSitterParser: TreeSitterParser = TreeSitterParser(),
-        database: DatabaseService? = nil
+        database: DatabaseService? = nil,
+        sessionStateURL: URL? = nil
     ) {
         self.swiftParser = swiftParser
         self.treeSitterParser = treeSitterParser
         self.database = database
+        self.sessionStateURL = sessionStateURL ?? SessionStatePersistence.defaultFileURL
+    }
+
+    // MARK: - Session State Persistence
+
+    /// Save the current session state to disk.
+    ///
+    /// Called automatically when the open-workspace set changes (create, close,
+    /// activate, pin/unpin) to ensure crash resilience. Also called explicitly
+    /// on app termination via `saveSessionState()`.
+    func saveSessionState() {
+        let state = SessionState(
+            openWorkspaceIDs: Array(workspaces.keys),
+            activeWorkspaceID: activeWorkspaceId,
+            pinnedWorkspaceID: pinnedWorkspaceId
+        )
+        SessionStatePersistence.save(state, to: sessionStateURL)
     }
 
     /// Whether the given URL is a Swift source file eligible for AST parsing.
@@ -401,21 +439,29 @@ final class WorkspaceManager {
     func activateWorkspace(id: UUID) {
         guard workspaces[id] != nil else { return }
         activeWorkspaceId = id
+        saveSessionState()
     }
 
     /// Pin a workspace for manual override of automatic resolution.
     func pinWorkspace(id: UUID) {
         guard workspaces[id] != nil else { return }
         pinnedWorkspaceId = id
+        saveSessionState()
     }
 
     /// Unpin the currently pinned workspace, restoring automatic resolution.
     func unpinWorkspace() {
         pinnedWorkspaceId = nil
+        saveSessionState()
     }
 
     /// Close a workspace: stop its watcher and remove from memory.
-    /// The workspace remains in the database for future restoration.
+    ///
+    /// The workspace remains in the database as persistent history — it is NOT
+    /// deleted. However, its ID is removed from the saved session state, so it
+    /// will not be restored on next launch. To reopen a closed workspace, the
+    /// user must explicitly open it again (via file/folder picker or a future
+    /// "Recent Workspaces" feature).
     func closeWorkspace(id: UUID) {
         guard let managed = workspaces[id] else { return }
         managed.stopWatching()
@@ -429,17 +475,35 @@ final class WorkspaceManager {
         if activeWorkspaceId == id {
             activeWorkspaceId = orderedWorkspaces.first?.workspace.id
         }
+
+        saveSessionState()
     }
 
-    /// Restore all workspaces from the database on app launch.
-    /// The most recently updated workspace becomes active.
+    /// Restore workspaces from the database, filtered by the saved session state.
+    ///
+    /// Only workspaces whose IDs appear in `session-state.json` are restored.
+    /// If no session state file exists (first launch, corruption, reset), no
+    /// workspaces are restored and the app starts with a clean session.
+    ///
+    /// The active and pinned workspace IDs are also restored from session state.
     func restoreWorkspaces() async {
         guard let db = database else { return }
+
+        // Load session state. If missing or corrupt, start clean.
+        let sessionState = SessionStatePersistence.load(from: sessionStateURL)
+        guard let sessionState, !sessionState.openWorkspaceIDs.isEmpty else {
+            #if DEBUG
+            print("[WorkspaceManager] No session state found — starting with clean session")
+            #endif
+            return
+        }
+
+        let openIDs = Set(sessionState.openWorkspaceIDs)
 
         do {
             let allWorkspaces = try await db.fetchAllWorkspaces()
 
-            for stored in allWorkspaces {
+            for stored in allWorkspaces where openIDs.contains(stored.id) {
                 let url = URL(fileURLWithPath: stored.rootPath)
                 guard FileManager.default.fileExists(atPath: url.path) else { continue }
 
@@ -497,7 +561,25 @@ final class WorkspaceManager {
                 }
             }
 
-            activeWorkspaceId = orderedWorkspaces.first?.workspace.id
+            // Restore active workspace from session state.
+            // Fall back to first open workspace if the saved active ID
+            // was not successfully restored.
+            if let savedActive = sessionState.activeWorkspaceID,
+               workspaces[savedActive] != nil {
+                activeWorkspaceId = savedActive
+            } else {
+                activeWorkspaceId = orderedWorkspaces.first?.workspace.id
+            }
+
+            // Restore pinned workspace from session state.
+            if let savedPinned = sessionState.pinnedWorkspaceID,
+               workspaces[savedPinned] != nil {
+                pinnedWorkspaceId = savedPinned
+            }
+
+            // Save the restored state (may differ from saved if some
+            // workspaces could not be restored due to missing files).
+            saveSessionState()
         } catch {
             #if DEBUG
             print("[WorkspaceManager] Failed to load workspaces: \(error)")

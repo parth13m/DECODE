@@ -63,9 +63,6 @@ struct QualityExpectations: Sendable {
     /// Expected completeness level.
     let expectedCompleteness: CompletenessAssessment?
 
-    /// Maximum allowed ungrounded claims removed.
-    let maxUngroundedClaimsRemoved: Int?
-
     /// Whether content must be non-empty.
     let requireNonEmptyContent: Bool
 
@@ -73,13 +70,11 @@ struct QualityExpectations: Sendable {
         minGroundingCoverage: Double? = nil,
         minClaimCount: Int? = nil,
         expectedCompleteness: CompletenessAssessment? = nil,
-        maxUngroundedClaimsRemoved: Int? = nil,
         requireNonEmptyContent: Bool = true
     ) {
         self.minGroundingCoverage = minGroundingCoverage
         self.minClaimCount = minClaimCount
         self.expectedCompleteness = expectedCompleteness
-        self.maxUngroundedClaimsRemoved = maxUngroundedClaimsRemoved
         self.requireNonEmptyContent = requireNonEmptyContent
     }
 }
@@ -105,12 +100,6 @@ struct EvaluationMetrics: Codable, Sendable, Equatable {
 
     /// Claims with at least one grounding reference.
     let groundedClaims: Int
-
-    /// Claims removed due to grounding failure.
-    let ungroundedClaimsRemoved: Int
-
-    /// Claims whose confidence was capped.
-    let confidenceAdjustments: Int
 
     /// Distribution of claim types: factual, derived, interpretive, inferred.
     let claimTypeDistribution: [String: Int]
@@ -149,9 +138,6 @@ struct EvaluationMetrics: Codable, Sendable, Equatable {
     /// Completeness assessment.
     let completeness: String
 
-    /// Wall-clock reasoning duration (seconds).
-    let reasoningDuration: TimeInterval
-
     /// Length of the output content (characters).
     let contentLength: Int
 
@@ -166,14 +152,8 @@ struct EvaluationMetrics: Codable, Sendable, Equatable {
     /// Reasoning engine version.
     let engineVersion: String
 
-    /// Whether a fallback engine was used.
-    let usedFallback: Bool
-
     /// Whether the context frame was stale.
     let isStale: Bool
-
-    /// Whether conversation state was discarded.
-    let conversationStateDiscarded: Bool
 }
 
 // MARK: - Evaluation Result
@@ -262,9 +242,6 @@ struct EvaluationSummary: Codable, Sendable {
 
     /// Average content length across successful cases.
     let averageContentLength: Double
-
-    /// Average reasoning duration across successful cases (seconds).
-    let averageReasoningDuration: TimeInterval
 
     /// Average budget utilization across successful cases.
     let averageBudgetUtilization: Double
@@ -366,9 +343,6 @@ struct ComparisonThresholds: Sendable {
     /// Maximum allowed decrease in content length (fractional).
     let contentLengthThreshold: Double
 
-    /// Maximum allowed increase in reasoning duration (fractional).
-    let reasoningDurationThreshold: Double
-
     /// Maximum allowed decrease in budget utilization.
     let budgetUtilizationThreshold: Double
 
@@ -377,7 +351,6 @@ struct ComparisonThresholds: Sendable {
         groundingCoverageThreshold: 0.1,
         claimCountThreshold: 0.2,
         contentLengthThreshold: 0.3,
-        reasoningDurationThreshold: 0.5,
         budgetUtilizationThreshold: 0.15
     )
 }

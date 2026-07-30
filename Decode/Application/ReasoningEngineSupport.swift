@@ -29,11 +29,11 @@ struct ExtractedKnowledge: Sendable {
     let detectedLanguage: String?
 }
 
-// MARK: - Module Observations (M6)
+// MARK: - Module Observations (M6 ConsumerRuntime support)
 
 /// Semantic observation layer for module-level context.
 ///
-/// M6: Transforms raw module emergent properties (M4) from the context frame
+/// Transforms raw module emergent properties (M4) from the context frame
 /// into interpreted, actionable observations that reasoning engines inject into
 /// prompts. The LLM receives structured observations with guidance directives,
 /// not raw data or pre-written sentences.
@@ -234,7 +234,7 @@ enum ReasoningEngineSupport {
         }
     }
 
-    // MARK: - Module Observation Extraction (M6)
+    // MARK: - Module Observation Extraction
 
     /// Extracts module observations from extracted knowledge.
     ///
@@ -603,7 +603,8 @@ enum ReasoningEngineSupport {
         properties: ModuleProperties
     ) -> Bool {
         guard let entities = properties.publicInterfaceEntities else { return false }
-        return entities.contains(entityName)
+        let entitySet = Set(entities.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
+        return entitySet.contains(entityName)
     }
 
     // MARK: - Claim Generation

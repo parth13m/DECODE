@@ -62,7 +62,7 @@ Epic 2: Software Intelligence ←── gates ──→ Epic 3: Context Intellig
 - Comparison tool: `BaselineComparator` diffs two evaluation runs, flags regressions by configurable thresholds
 - `BenchmarkTypes.swift`: Pipeline-level benchmark types — BenchmarkCase, BenchmarkExpectations (entities, relationships, predicates, evidence bounds, stages, tiers, grounding, completeness), BenchmarkMetrics (28 fields: latency, evidence, precision/recall, context quality, size, engine), BenchmarkResult, BenchmarkReport, BenchmarkSummary, BenchmarkThresholds
 - `BenchmarkRunner.swift`: Full-pipeline benchmark runner (processChanges→retrieve→assemble→invoke with per-stage ContinuousClock timing), `runCorpus()` single-command entry point, BenchmarkComparator (reuses BaselineComparison), BenchmarkReportFormatter (Markdown with summary tables, category scores, total score, regressions/improvements, per-case detail)
-- `BenchmarkCorpus.swift`: 22 canonical benchmark cases across 6 categories (entity discovery, relationships, cross-file, data flow/module, DI/architecture, edge cases). Auto-discovery via `allCases`, category filtering via `cases(for:)`, ID lookup via `findCase(id:)`. Progressive difficulty within each category.
+- `BenchmarkCorpus.swift`: 30 canonical benchmark cases across 6 categories (entity discovery, relationships, cross-file, data flow/module, DI/architecture, question-aware scope, edge cases). Auto-discovery via `allCases`, category filtering via `cases(for:)`, ID lookup via `findCase(id:)`. Progressive difficulty within each category. Extended by E3-01 with 4 question-aware cases (qa-01 through qa-04).
 - `BenchmarkSuiteTests.swift`: 42 tests across 10 suites — types, comparator, formatter, expectations, thresholds, JSON export, runner units, corpus integrity (uniqueness, coverage, ordering, naming), category scores, formatter category output
 
 ---
@@ -121,31 +121,30 @@ Epic 2: Software Intelligence ←── gates ──→ Epic 3: Context Intellig
 - **Dependencies:** M1–M6 complete (verified)
 - **Complexity:** S
 - **Expected user impact:** Confirms that module-aware explanations work as intended. May reveal tuning adjustments needed.
-- **Status:** Now
+- **Status:** Complete (2026-07-28)
 
 **Deliverables:**
-- Process representative multi-file codebase through the pipeline
-- Document: module observations appear in prompts for multi-file modules
-- Document: suppression works for single-file modules
-- Document: framing is woven naturally, not a separate section
-- Tuning adjustments to suppression thresholds or budget fractions if needed
-- `PROJECT_INTELLIGENCE_IMPLEMENTATION_STATUS.md` updated: M7 complete
+- `ModuleIntelligenceValidationTests.swift`: 34 tests across 8 suites (M7-V1 through M7-V8) validating end-to-end Module Intelligence
+- 4 module benchmark cases in BenchmarkCorpus (mod-01 through mod-04)
+- `PROJECT_INTELLIGENCE_IMPLEMENTATION_STATUS.md` updated: M7 complete with detailed validation results
 
-**Validation criteria:**
-- Cross-file information present in multi-file module explanations
-- Single-file module explanations unchanged
-- No pipeline module modifications
-- No performance regression
+**Validated criteria:**
+- Multi-file module observations contain role, visibility, cohesion, style, boundary — measurably richer than file-only
+- Single-file module suppression works end-to-end (all roles suppressed)
+- Module framing woven naturally via guidance directives (system prompt instruction verified)
+- Follow-up references module context reactively (follow-up instruction verified)
+- No pipeline module modifications — all validation through tests exercising existing code paths
+- No suppression threshold tuning needed — all rules validated as correct
 
 ---
 
 #### E2-01: System Entity Creation
 
 - **Objective:** Create a System entity in the DIR representing the entire codebase, composing over module entities.
-- **Dependencies:** E2-00
+- **Dependencies:** E2-00 (complete)
 - **Complexity:** M
 - **Expected user impact:** Not directly user-facing. Enables E2-02 and E2-03.
-- **Status:** Next
+- **Status:** Now
 
 **Deliverables:**
 - `SystemCompositionPass` in `Decode/App/` — T1 composition pass, `perSystem` scope
@@ -240,16 +239,26 @@ Epic 2: Software Intelligence ←── gates ──→ Epic 3: Context Intellig
 
 #### E3-01: Question-Aware Scope Selection
 
-- **Objective:** Dynamically determine retrieval scope from entity properties instead of static purpose→scope mapping.
+- **Objective:** Dynamically determine retrieval scope from question context instead of static purpose→scope mapping.
 - **Dependencies:** E2-00
 - **Complexity:** S
-- **Expected user impact:** Faster explanations for simple entities. Richer evidence for cross-file entities.
-- **Status:** Now
+- **Expected user impact:** Faster explanations for simple entities. Richer evidence for cross-file entities. Impact/dependency/overview questions get appropriately tuned retrieval.
+- **Status:** Complete (2026-07-28)
 
 **Deliverables:**
-- Scope selection logic in `PipelineQueryService` or `ScopeSelector` in `Decode/App/`
-- Rules: 0 cross-file relationships → `.local`; public interface entity → `.module`; multi-module boundary → `.system` (after E2-03)
-- Tests against known entity profiles
+- `QuestionClassifier.swift` in `Decode/App/`: Stateless, deterministic classifier mapping `(purpose, questionHint)` → `(RetrievalIntent, RetrievalScope)`. Four keyword-based rules (impact, dependencies, overview, narrow) with priority ordering and purpose-based defaults as fallback.
+- `PipelineQueryService` updated: Replaced hardcoded `(purpose == "improve") ? .local : .module` and always-`.explain` intent with `QuestionClassifier.classify()`. Follow-up questions now pass question text as `questionHint` for intent selection.
+- `BenchmarkCase` extended: Optional `questionHint` field enables question-type-specific benchmarks.
+- `BenchmarkRunner` updated: Uses `QuestionClassifier` for scope/intent selection instead of hardcoded values.
+- `BenchmarkCorpus` extended: 4 new question-aware cases (qa-01 through qa-04) — impact callers, dependency chain, overview architecture, narrow simple. Corpus total: 30 cases.
+- `QuestionClassifierTests.swift`: 52 tests across 9 suites — purpose defaults (6), impact keywords (8), dependency keywords (5), overview keywords (6), narrow keywords (4), priority order (5), determinism (2), keyword coverage (4), benchmark integration (8).
+
+**Measurable improvement:**
+- Impact questions ("who calls this?") now use `.impact` intent with inverse traversal (callers found) and 60% relational budget, vs `.explain`'s forward-only traversal with 30% relational budget.
+- Dependency questions ("what does this depend on?") now use `.dependencies` intent with forward depth 2 and 60% relational budget, vs `.explain`'s depth 1.
+- Overview questions ("how does this fit?") now use `.overview` intent with bidirectional traversal, vs `.explain`'s forward-only.
+- Narrow questions ("what does this do?") now use `.local` scope, reducing retrieval breadth for simple questions.
+- All four `RetrievalIntent` values (.explain, .impact, .dependencies, .overview) are now used in production, each with different budget weights and traversal configurations that were already implemented but never activated.
 
 ---
 
@@ -534,7 +543,7 @@ Epic 2: Software Intelligence ←── gates ──→ Epic 3: Context Intellig
 | E2-03 | System Context and Observations | Software Intel | E2-02 | L | Next |
 | E2-04 | Architectural Layer Detection | Software Intel | E2-02 | M | Later |
 | E2-05 | Cross-Cutting Pattern Detection | Software Intel | E2-02, E2-04 | L | Later |
-| E3-01 | Question-Aware Scope Selection | Context Intel | E2-00 | S | Now |
+| E3-01 | Question-Aware Scope Selection | Context Intel | E2-00 | S | Complete |
 | E3-02 | Multi-Hop Relational Traversal | Context Intel | E2-00 | S | Next |
 | E3-03 | Inverse Relationship Index | Context Intel | — | M | Now |
 | E3-04 | Containment-Based Scope Lookup | Context Intel | E3-03 | S | Next |
@@ -583,7 +592,7 @@ This is the longest dependency chain. Every milestone on this path must complete
 **Parallel:**
 - **E1-01** Explanation Quality Baseline (M) — uses E2-00's validation work as a starting point. Captures the baseline before system-scope changes.
 - **E2-01** System Entity Creation (M) — first Phase 2 milestone.
-- **E3-01** Question-Aware Scope Selection (S) — independent, immediate product improvement.
+- ~~**E3-01** Question-Aware Scope Selection (S) — independent, immediate product improvement.~~ **Complete (2026-07-28)**
 
 **Rationale:** E1-01 establishes measurement before the system-scope work changes explanation quality. E2-01 begins the critical path. E3-01 is a quick win that improves explanations today.
 

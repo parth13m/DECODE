@@ -102,7 +102,16 @@ struct SessionView: View {
             Button {
                 viewModel.openFile()
             } label: {
-                Label("Open File", systemImage: "folder")
+                Label("Open File", systemImage: "doc")
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(accentOrange)
+
+            Button {
+                viewModel.openDirectory()
+            } label: {
+                Label("Open Folder", systemImage: "folder")
                     .font(.system(size: 12, weight: .medium))
             }
             .buttonStyle(.borderedProminent)
@@ -724,14 +733,25 @@ struct SessionView: View {
                     .foregroundStyle(textSecondary)
                     .textCase(.uppercase)
                 Spacer()
-                Button {
-                    viewModel.openFile()
+                Menu {
+                    Button {
+                        viewModel.openFile()
+                    } label: {
+                        Label("Open File", systemImage: "doc")
+                    }
+                    Button {
+                        viewModel.openDirectory()
+                    } label: {
+                        Label("Open Folder", systemImage: "folder")
+                    }
                 } label: {
                     Image(systemName: "plus")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(accentOrange)
                 }
-                .buttonStyle(.plain)
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
                 .help("Add Session")
             }
             .padding(.horizontal, 12)
@@ -1138,18 +1158,29 @@ struct SessionView: View {
                 .font(.system(size: 36, weight: .light))
                 .foregroundStyle(textSecondary.opacity(0.5))
 
-            Text("Open a code file to see what Decode knows")
+            Text("Open a code file or project folder to see what Decode knows")
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(textSecondary)
 
-            Button {
-                viewModel.openFile()
-            } label: {
-                Label("Select File", systemImage: "folder")
-                    .font(.system(size: 13, weight: .medium))
+            HStack(spacing: 12) {
+                Button {
+                    viewModel.openFile()
+                } label: {
+                    Label("Select File", systemImage: "doc")
+                        .font(.system(size: 13, weight: .medium))
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(accentOrange)
+
+                Button {
+                    viewModel.openDirectory()
+                } label: {
+                    Label("Select Folder", systemImage: "folder")
+                        .font(.system(size: 13, weight: .medium))
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(accentOrange)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(accentOrange)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

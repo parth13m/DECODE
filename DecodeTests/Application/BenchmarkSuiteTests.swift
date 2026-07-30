@@ -937,7 +937,7 @@ struct BenchmarkCorpusTests {
 
     @Test("IDs follow naming convention")
     func testIdNamingConvention() {
-        let prefixes = ["sf-", "rel-", "cf-", "df-", "di-", "arch-", "edge-"]
+        let prefixes = ["sf-", "rel-", "cf-", "df-", "di-", "arch-", "mod-", "qa-", "edge-"]
         for benchCase in BenchmarkCorpus.allCases {
             let hasValidPrefix = prefixes.contains { benchCase.id.hasPrefix($0) }
             #expect(hasValidPrefix, "Case \(benchCase.id) doesn't follow naming convention")

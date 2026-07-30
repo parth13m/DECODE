@@ -1,5 +1,5 @@
 // BenchmarkCorpus.swift — Decode Application
-// E1-01: Canonical Benchmark Corpus — 20+ cases that permanently measure
+// E1-01: Canonical Benchmark Corpus — 30 cases that permanently measure
 // Decode's understanding pipeline intelligence.
 //
 // Cases are organized by category and progressively increase in difficulty.
@@ -23,7 +23,7 @@ import ConsumerRuntime
 ///
 /// ## Usage
 /// ```swift
-/// let cases = BenchmarkCorpus.allCases          // all 22 cases
+/// let cases = BenchmarkCorpus.allCases          // all 30 cases
 /// let single = BenchmarkCorpus.cases(for: .entityDiscovery) // category filter
 /// let runner = BenchmarkRunner(understandingSystem: system, engineVersion: "1.0.0")
 /// let report = await runner.run(cases: cases)
@@ -50,18 +50,26 @@ enum BenchmarkCorpus {
         crossFileTypeUsage,
         crossFileImportChain,
 
-        // Data Flow (3 cases)
+        // Data Flow / Module Context (7 cases)
         dataFlowPipeline,
         dataFlowRepository,
         dataFlowPythonTransform,
+        moduleMultiFileService,
+        moduleProtocolConformanceAcrossFiles,
+        moduleLayeredArchitecture,
+        moduleSingleFileSuppression,
 
-        // Dependency Injection (2 cases)
+        // Dependency Injection / Architecture (4 cases)
         diProtocolAbstraction,
         diServiceLayer,
-
-        // Architecture (2 cases)
         architectureMVVM,
         architectureCoordinator,
+
+        // Question-Aware Scope Selection (4 cases, E3-01)
+        questionImpactCallers,
+        questionDependencyChain,
+        questionOverviewArchitecture,
+        questionNarrowSimple,
 
         // Edge Cases (3 cases)
         edgeCaseEmptyStruct,
@@ -1238,6 +1246,692 @@ enum BenchmarkCorpus {
                 ExpectedRelationship(source: "AuthCoordinator", predicate: "conformsTo", target: "Coordinator")
             ],
             minEvidenceCount: 4,
+            requireSuccess: true
+        )
+    )
+
+    // MARK: - Module Context (E2-00)
+
+    /// Case 23: Multi-file service module — validates module entity creation
+    /// and cross-file entity discovery within a module directory.
+    static let moduleMultiFileService = BenchmarkCase(
+        id: "mod-01-multi-file-service",
+        name: "Multi-File Service Module",
+        description: "Validates module boundary detection and entity discovery across a service module with multiple files in the same directory",
+        category: .moduleContext,
+        sourceFiles: [
+            BenchmarkSourceFile(
+                fileName: "UserModel.swift",
+                content: """
+                import Foundation
+
+                struct UserModel {
+                    let id: String
+                    let name: String
+                    let email: String
+
+                    func displayName() -> String {
+                        return name.isEmpty ? email : name
+                    }
+                }
+                """
+            ),
+            BenchmarkSourceFile(
+                fileName: "UserRepository.swift",
+                content: """
+                import Foundation
+
+                class UserRepository {
+                    private var users: [String: UserModel] = [:]
+
+                    func save(_ user: UserModel) {
+                        users[user.id] = user
+                    }
+
+                    func findById(_ id: String) -> UserModel? {
+                        return users[id]
+                    }
+
+                    func findAll() -> [UserModel] {
+                        return Array(users.values)
+                    }
+
+                    func delete(_ id: String) {
+                        users.removeValue(forKey: id)
+                    }
+                }
+                """
+            ),
+            BenchmarkSourceFile(
+                fileName: "UserService.swift",
+                content: """
+                import Foundation
+
+                class UserService {
+                    let repository: UserRepository
+
+                    init(repository: UserRepository) {
+                        self.repository = repository
+                    }
+
+                    func createUser(name: String, email: String) -> UserModel {
+                        let user = UserModel(id: UUID().uuidString, name: name, email: email)
+                        repository.save(user)
+                        return user
+                    }
+
+                    func getUser(_ id: String) -> UserModel? {
+                        return repository.findById(id)
+                    }
+
+                    func listUsers() -> [UserModel] {
+                        return repository.findAll()
+                    }
+                }
+                """
+            )
+        ],
+        queryEntity: "UserService",
+        purpose: "explain",
+        expectations: BenchmarkExpectations(
+            expectedEntities: [
+                "UserService",
+                "UserRepository",
+                "UserModel",
+                "UserService.createUser",
+                "UserService.getUser",
+                "UserService.listUsers",
+                "UserRepository.save",
+                "UserRepository.findById"
+            ],
+            expectedRelationships: [
+                ExpectedRelationship(source: "UserService.createUser", predicate: "calls", target: "save"),
+                ExpectedRelationship(source: "UserService.getUser", predicate: "calls", target: "findById")
+            ],
+            minEvidenceCount: 5,
+            expectedStages: Set(["direct"]),
+            expectedTiers: Set(["t0"]),
+            requireSuccess: true
+        )
+    )
+
+    /// Case 24: Protocol conformance across files in a module — validates
+    /// cross-file relationship resolution within module boundaries.
+    static let moduleProtocolConformanceAcrossFiles = BenchmarkCase(
+        id: "mod-02-protocol-across-files",
+        name: "Module Protocol Conformance",
+        description: "Validates cross-file conformsTo resolution and module-level entity grouping",
+        category: .moduleContext,
+        sourceFiles: [
+            BenchmarkSourceFile(
+                fileName: "Persistable.swift",
+                content: """
+                import Foundation
+
+                protocol Persistable {
+                    var identifier: String { get }
+                    func toDictionary() -> [String: Any]
+                }
+                """
+            ),
+            BenchmarkSourceFile(
+                fileName: "Document.swift",
+                content: """
+                import Foundation
+
+                class Document: Persistable {
+                    let identifier: String
+                    let title: String
+                    let content: String
+                    let createdAt: Date
+
+                    init(identifier: String, title: String, content: String) {
+                        self.identifier = identifier
+                        self.title = title
+                        self.content = content
+                        self.createdAt = Date()
+                    }
+
+                    func toDictionary() -> [String: Any] {
+                        return [
+                            "id": identifier,
+                            "title": title,
+                            "content": content
+                        ]
+                    }
+                }
+                """
+            ),
+            BenchmarkSourceFile(
+                fileName: "Settings.swift",
+                content: """
+                import Foundation
+
+                struct Settings: Persistable {
+                    let identifier: String
+                    let theme: String
+                    let fontSize: Int
+
+                    func toDictionary() -> [String: Any] {
+                        return [
+                            "id": identifier,
+                            "theme": theme,
+                            "fontSize": fontSize
+                        ]
+                    }
+                }
+                """
+            )
+        ],
+        queryEntity: "Document",
+        purpose: "explain",
+        expectations: BenchmarkExpectations(
+            expectedEntities: [
+                "Persistable",
+                "Document",
+                "Settings",
+                "Document.identifier",
+                "Document.title",
+                "Document.content",
+                "Document.toDictionary"
+            ],
+            expectedRelationships: [
+                ExpectedRelationship(source: "Document", predicate: "conformsTo", target: "Persistable"),
+                ExpectedRelationship(source: "Settings", predicate: "conformsTo", target: "Persistable")
+            ],
+            minEvidenceCount: 4,
+            requireSuccess: true
+        )
+    )
+
+    /// Case 25: Layered architecture — validates module boundary detection
+    /// across multiple directories simulating architectural layers.
+    static let moduleLayeredArchitecture = BenchmarkCase(
+        id: "mod-03-layered-architecture",
+        name: "Layered Architecture Module",
+        description: "Validates entity discovery and relationships in a multi-layer architecture pattern",
+        category: .moduleContext,
+        sourceFiles: [
+            BenchmarkSourceFile(
+                fileName: "Event.swift",
+                content: """
+                import Foundation
+
+                struct Event {
+                    let id: String
+                    let name: String
+                    let date: Date
+                    let capacity: Int
+                    var attendees: [String]
+
+                    var isFull: Bool {
+                        return attendees.count >= capacity
+                    }
+
+                    mutating func addAttendee(_ name: String) -> Bool {
+                        guard !isFull else { return false }
+                        attendees.append(name)
+                        return true
+                    }
+                }
+                """
+            ),
+            BenchmarkSourceFile(
+                fileName: "EventStore.swift",
+                content: """
+                import Foundation
+
+                class EventStore {
+                    private var events: [String: Event] = [:]
+
+                    func save(_ event: Event) {
+                        events[event.id] = event
+                    }
+
+                    func find(_ id: String) -> Event? {
+                        return events[id]
+                    }
+
+                    func upcoming() -> [Event] {
+                        let now = Date()
+                        return events.values.filter { $0.date > now }
+                    }
+                }
+                """
+            ),
+            BenchmarkSourceFile(
+                fileName: "EventCoordinator.swift",
+                content: """
+                import Foundation
+
+                class EventCoordinator {
+                    let store: EventStore
+
+                    init(store: EventStore) {
+                        self.store = store
+                    }
+
+                    func createEvent(name: String, date: Date, capacity: Int) -> Event {
+                        let event = Event(
+                            id: UUID().uuidString,
+                            name: name,
+                            date: date,
+                            capacity: capacity,
+                            attendees: []
+                        )
+                        store.save(event)
+                        return event
+                    }
+
+                    func registerAttendee(_ name: String, eventId: String) -> Bool {
+                        guard var event = store.find(eventId) else { return false }
+                        let added = event.addAttendee(name)
+                        if added { store.save(event) }
+                        return added
+                    }
+
+                    func upcomingEvents() -> [Event] {
+                        return store.upcoming()
+                    }
+                }
+                """
+            )
+        ],
+        queryEntity: "EventCoordinator",
+        purpose: "explain",
+        expectations: BenchmarkExpectations(
+            expectedEntities: [
+                "Event",
+                "EventStore",
+                "EventCoordinator",
+                "EventCoordinator.createEvent",
+                "EventCoordinator.registerAttendee",
+                "EventCoordinator.upcomingEvents",
+                "EventStore.save",
+                "EventStore.find"
+            ],
+            expectedRelationships: [
+                ExpectedRelationship(source: "EventCoordinator.createEvent", predicate: "calls", target: "save"),
+                ExpectedRelationship(source: "EventCoordinator.registerAttendee", predicate: "calls", target: "find"),
+                ExpectedRelationship(source: "EventCoordinator.registerAttendee", predicate: "calls", target: "addAttendee")
+            ],
+            minEvidenceCount: 5,
+            requireSuccess: true
+        )
+    )
+
+    /// Case 26: Single-file module — validates that single-file modules
+    /// do not produce unnecessary module context noise.
+    static let moduleSingleFileSuppression = BenchmarkCase(
+        id: "mod-04-single-file-suppression",
+        name: "Single-File Module Suppression",
+        description: "Validates that a single-file directory produces no module noise in output",
+        category: .moduleContext,
+        sourceFiles: [
+            BenchmarkSourceFile(
+                fileName: "Constants.swift",
+                content: """
+                import Foundation
+
+                enum Constants {
+                    static let appName = "Decode"
+                    static let version = "1.0.0"
+                    static let maxRetries = 3
+                    static let timeoutInterval: TimeInterval = 30.0
+
+                    enum API {
+                        static let baseURL = "https://api.example.com"
+                        static let apiVersion = "v1"
+                    }
+
+                    enum UI {
+                        static let cornerRadius: Double = 8.0
+                        static let defaultPadding: Double = 16.0
+                    }
+                }
+                """
+            )
+        ],
+        queryEntity: "Constants",
+        purpose: "explain",
+        expectations: BenchmarkExpectations(
+            expectedEntities: [
+                "Constants",
+                "Constants.API",
+                "Constants.UI"
+            ],
+            expectedRelationships: [
+                ExpectedRelationship(source: "Constants", predicate: "owns", target: "API"),
+                ExpectedRelationship(source: "Constants", predicate: "owns", target: "UI")
+            ],
+            minEvidenceCount: 2,
+            requireSuccess: true
+        )
+    )
+
+    // MARK: - Question-Aware Scope Selection (E3-01)
+
+    /// Case 27: Impact question — "who calls this?" on a method with known callers.
+    /// Validates that .impact intent uses inverse traversal to find callers.
+    /// With .explain intent, only forward callees are found.
+    /// With .impact intent, reverse callers should also appear in evidence.
+    static let questionImpactCallers = BenchmarkCase(
+        id: "qa-01-impact-callers",
+        name: "Impact: Who Calls This",
+        description: "Validates impact intent finds callers via inverse traversal",
+        category: .contextAssembly,
+        sourceFiles: [
+            BenchmarkSourceFile(
+                fileName: "Validator.swift",
+                content: """
+                import Foundation
+
+                class Validator {
+                    func validate(_ input: String) -> Bool {
+                        return !input.isEmpty && input.count < 1000
+                    }
+
+                    func sanitize(_ input: String) -> String {
+                        return input.trimmingCharacters(in: .whitespacesAndNewlines)
+                    }
+                }
+                """
+            ),
+            BenchmarkSourceFile(
+                fileName: "FormHandler.swift",
+                content: """
+                import Foundation
+
+                class FormHandler {
+                    let validator: Validator
+
+                    init(validator: Validator) {
+                        self.validator = validator
+                    }
+
+                    func submit(name: String, email: String) -> Bool {
+                        let cleanName = validator.sanitize(name)
+                        let cleanEmail = validator.sanitize(email)
+                        guard validator.validate(cleanName) else { return false }
+                        guard validator.validate(cleanEmail) else { return false }
+                        return true
+                    }
+                }
+                """
+            ),
+            BenchmarkSourceFile(
+                fileName: "APIEndpoint.swift",
+                content: """
+                import Foundation
+
+                class APIEndpoint {
+                    let formHandler: FormHandler
+
+                    init(formHandler: FormHandler) {
+                        self.formHandler = formHandler
+                    }
+
+                    func handleRequest(name: String, email: String) -> String {
+                        if formHandler.submit(name: name, email: email) {
+                            return "success"
+                        }
+                        return "validation_failed"
+                    }
+                }
+                """
+            )
+        ],
+        queryEntity: "Validator",
+        purpose: "followup",
+        questionHint: "who calls this validator? what uses validate?",
+        expectations: BenchmarkExpectations(
+            expectedEntities: [
+                "Validator",
+                "Validator.validate",
+                "Validator.sanitize",
+                "FormHandler",
+                "FormHandler.submit"
+            ],
+            expectedRelationships: [
+                ExpectedRelationship(source: "FormHandler.submit", predicate: "calls", target: "validate"),
+                ExpectedRelationship(source: "FormHandler.submit", predicate: "calls", target: "sanitize")
+            ],
+            minEvidenceCount: 3,
+            requireSuccess: true
+        )
+    )
+
+    /// Case 28: Dependency question — "what does this depend on?"
+    /// Validates that .dependencies intent uses forward traversal with depth 2,
+    /// discovering transitive dependencies.
+    static let questionDependencyChain = BenchmarkCase(
+        id: "qa-02-dependency-chain",
+        name: "Dependencies: What Does This Depend On",
+        description: "Validates dependency intent discovers transitive call chains at depth 2",
+        category: .contextAssembly,
+        sourceFiles: [
+            BenchmarkSourceFile(
+                fileName: "Encoder.swift",
+                content: """
+                import Foundation
+
+                class Encoder {
+                    func encode(_ data: String) -> String {
+                        return compress(data)
+                    }
+
+                    func compress(_ input: String) -> String {
+                        return input.replacingOccurrences(of: " ", with: "")
+                    }
+                }
+                """
+            ),
+            BenchmarkSourceFile(
+                fileName: "Serializer.swift",
+                content: """
+                import Foundation
+
+                class Serializer {
+                    let encoder: Encoder
+
+                    init(encoder: Encoder) {
+                        self.encoder = encoder
+                    }
+
+                    func serialize(_ object: String) -> String {
+                        let encoded = encoder.encode(object)
+                        return wrap(encoded)
+                    }
+
+                    func wrap(_ content: String) -> String {
+                        return "{\\(content)}"
+                    }
+                }
+                """
+            ),
+            BenchmarkSourceFile(
+                fileName: "Exporter.swift",
+                content: """
+                import Foundation
+
+                class Exporter {
+                    let serializer: Serializer
+
+                    init(serializer: Serializer) {
+                        self.serializer = serializer
+                    }
+
+                    func export(_ data: String) -> String {
+                        let result = serializer.serialize(data)
+                        return format(result)
+                    }
+
+                    func format(_ output: String) -> String {
+                        return "EXPORT: \\(output)"
+                    }
+                }
+                """
+            )
+        ],
+        queryEntity: "Exporter",
+        purpose: "followup",
+        questionHint: "what does this depend on? what does exporter call?",
+        expectations: BenchmarkExpectations(
+            expectedEntities: [
+                "Exporter",
+                "Exporter.export",
+                "Exporter.format",
+                "Serializer",
+                "Serializer.serialize"
+            ],
+            expectedRelationships: [
+                ExpectedRelationship(source: "Exporter.export", predicate: "calls", target: "serialize"),
+                ExpectedRelationship(source: "Exporter.export", predicate: "calls", target: "format")
+            ],
+            minEvidenceCount: 3,
+            requireSuccess: true
+        )
+    )
+
+    /// Case 29: Overview question — "how does this fit in the architecture?"
+    /// Validates that .overview intent uses balanced shallow traversal with
+    /// both forward and inverse directions.
+    static let questionOverviewArchitecture = BenchmarkCase(
+        id: "qa-03-overview-architecture",
+        name: "Overview: How Does This Fit",
+        description: "Validates overview intent gathers balanced evidence from both directions",
+        category: .contextAssembly,
+        sourceFiles: [
+            BenchmarkSourceFile(
+                fileName: "MessageBus.swift",
+                content: """
+                import Foundation
+
+                protocol MessageHandler {
+                    func handle(_ message: String)
+                }
+
+                class MessageBus {
+                    private var handlers: [MessageHandler] = []
+
+                    func register(_ handler: MessageHandler) {
+                        handlers.append(handler)
+                    }
+
+                    func publish(_ message: String) {
+                        for handler in handlers {
+                            handler.handle(message)
+                        }
+                    }
+                }
+                """
+            ),
+            BenchmarkSourceFile(
+                fileName: "NotificationService.swift",
+                content: """
+                import Foundation
+
+                class NotificationService: MessageHandler {
+                    func handle(_ message: String) {
+                        sendNotification(message)
+                    }
+
+                    func sendNotification(_ text: String) {
+                        // push notification
+                    }
+                }
+                """
+            ),
+            BenchmarkSourceFile(
+                fileName: "AppBootstrap.swift",
+                content: """
+                import Foundation
+
+                class AppBootstrap {
+                    let bus: MessageBus
+
+                    init() {
+                        self.bus = MessageBus()
+                    }
+
+                    func configure() {
+                        let notifier = NotificationService()
+                        bus.register(notifier)
+                    }
+
+                    func start() {
+                        configure()
+                        bus.publish("app_started")
+                    }
+                }
+                """
+            )
+        ],
+        queryEntity: "MessageBus",
+        purpose: "followup",
+        questionHint: "how does this fit in the architecture? overview of message bus role",
+        expectations: BenchmarkExpectations(
+            expectedEntities: [
+                "MessageBus",
+                "MessageHandler",
+                "MessageBus.register",
+                "MessageBus.publish",
+                "NotificationService"
+            ],
+            expectedRelationships: [
+                ExpectedRelationship(source: "NotificationService", predicate: "conformsTo", target: "MessageHandler")
+            ],
+            minEvidenceCount: 3,
+            requireSuccess: true
+        )
+    )
+
+    /// Case 30: Narrow question — "what does this line do?"
+    /// Validates that narrow intent uses local scope for simple, focused questions.
+    static let questionNarrowSimple = BenchmarkCase(
+        id: "qa-04-narrow-simple",
+        name: "Narrow: What Does This Do",
+        description: "Validates narrow classification uses local scope for focused questions",
+        category: .contextAssembly,
+        sourceFiles: [
+            BenchmarkSourceFile(
+                fileName: "Calculator.swift",
+                content: """
+                import Foundation
+
+                class Calculator {
+                    func add(_ a: Int, _ b: Int) -> Int {
+                        return a + b
+                    }
+
+                    func subtract(_ a: Int, _ b: Int) -> Int {
+                        return a - b
+                    }
+
+                    func multiply(_ a: Int, _ b: Int) -> Int {
+                        return a * b
+                    }
+
+                    func divide(_ a: Int, _ b: Int) -> Int? {
+                        guard b != 0 else { return nil }
+                        return a / b
+                    }
+                }
+                """
+            )
+        ],
+        queryEntity: "Calculator",
+        purpose: "followup",
+        questionHint: "what does this do? just this simple calculator",
+        expectations: BenchmarkExpectations(
+            expectedEntities: [
+                "Calculator",
+                "Calculator.add",
+                "Calculator.subtract",
+                "Calculator.multiply",
+                "Calculator.divide"
+            ],
+            minEvidenceCount: 2,
             requireSuccess: true
         )
     )

@@ -520,7 +520,7 @@ final class AppDependencies {
 
     /// Handle the ⌃⇧P hotkey: open folder picker, create directory workspace, present sheet.
     private func handleOpenWorkspace() {
-        guard workspaceManager != nil else { return }
+        guard sessionViewModel != nil else { return }
 
         // Bring Decode to the front so NSOpenPanel is visible.
         NSApp.activate(ignoringOtherApps: true)
@@ -534,15 +534,10 @@ final class AppDependencies {
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
         Task { [weak self] in
-            guard let self, let wsManager = self.workspaceManager else { return }
+            guard let self else { return }
 
-            do {
-                try await wsManager.createDirectoryWorkspace(url: url)
-            } catch {
-                #if DEBUG
-                print("[AppDependencies] Failed to create directory workspace: \(error)")
-                #endif
-                return
+            if let vm = self.sessionViewModel {
+                await vm.loadDirectory(url: url)
             }
 
             // Present session sheet if a workspace is now active.

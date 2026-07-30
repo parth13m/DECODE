@@ -36,6 +36,12 @@ struct DecodeApp: App {
                     )
                 ) { _ in
                     appLog.notice("[DIAG] willTerminateNotification received")
+
+                    // Save session state (which workspaces are open, active, pinned).
+                    // This is a belt-and-suspenders final save — session state is also
+                    // saved incrementally on every open/close/activate change.
+                    dependencies.workspaceManager?.saveSessionState()
+
                     // IAG-003 §4.2: Shutdown understanding pipeline on app termination.
                     // Task.detached avoids @MainActor inheritance — pipeline has no @MainActor (IAG-003 §6.3).
                     let system = dependencies.understandingSystem
