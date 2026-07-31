@@ -24,6 +24,7 @@ final class ScreenshotModeCoordinator {
     private let hud: FloatingExplanationHUD
     private let toastManager: DecodeToastManager
     private let usageTracker: AIUsageTracker
+    private let virtualSessionManager: VirtualSessionManager
 
     // MARK: - State
 
@@ -39,7 +40,8 @@ final class ScreenshotModeCoordinator {
         aiProvider: @escaping @MainActor () -> (any AIProviderProtocol)?,
         hud: FloatingExplanationHUD,
         toastManager: DecodeToastManager,
-        usageTracker: AIUsageTracker
+        usageTracker: AIUsageTracker,
+        virtualSessionManager: VirtualSessionManager
     ) {
         self.screenCapture = screenCapture
         self.ocrService = ocrService
@@ -47,6 +49,7 @@ final class ScreenshotModeCoordinator {
         self.hud = hud
         self.toastManager = toastManager
         self.usageTracker = usageTracker
+        self.virtualSessionManager = virtualSessionManager
     }
 
     // MARK: - Lifecycle
@@ -185,7 +188,14 @@ final class ScreenshotModeCoordinator {
         let sourceAppName = event.sourceAppName
         let dsaMode = UserDefaults.standard.bool(forKey: "dsaModeEnabled")
         let explanationProfile = dsaMode ? "dsa" : "general"
-        let systemPrompt = buildSystemPrompt(sourceApp: sourceAppName, ocrContent: ocrText, dsaMode: dsaMode)
+        var systemPrompt = buildSystemPrompt(sourceApp: sourceAppName, ocrContent: ocrText, dsaMode: dsaMode)
+
+        // Virtual Session: inject working memory into system prompt.
+        if virtualSessionManager.isEnabled,
+           let wmBlock = virtualSessionManager.workingMemoryBlock() {
+            systemPrompt += "\n\n\(wmBlock)"
+        }
+
         let detectedFramework = ExplanationFramework.detect(fromContent: ocrText)
         let messages = [AIMessage(role: .user, content: ocrText)]
 
@@ -226,7 +236,23 @@ final class ScreenshotModeCoordinator {
                 pipelineFilePath: nil,
                 pipelineEntityName: nil
             )
-            hud.showStream(stream, sourceApp: sourceAppName, followUpContext: followUpCtx)
+
+            // Virtual Session: record insight on stream completion.
+            let vsManager = virtualSessionManager
+            let capturedSourceApp = sourceAppName
+            hud.showStream(stream, sourceApp: sourceAppName, followUpContext: followUpCtx) { explanationText in
+                guard vsManager.isEnabled else { return }
+                let understanding = VirtualSessionManager.extractUnderstanding(
+                    from: explanationText,
+                    sourceApp: capturedSourceApp
+                )
+                let context = InsightContext.minimal(sourceApp: capturedSourceApp)
+                vsManager.recordInsight(
+                    understanding: understanding,
+                    mode: .screenshot,
+                    context: context
+                )
+            }
         } catch {
             guard generation == requestGeneration else { return }
             #if DEBUG

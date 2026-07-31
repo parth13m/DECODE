@@ -38,6 +38,7 @@ final class SessionQuestionCoordinator {
     private let usageTracker: AIUsageTracker
     private let semanticEnrichment: SemanticEnrichmentService
     private let pipelineQueryService: PipelineQueryService?
+    private let virtualSessionManager: VirtualSessionManager
 
     // MARK: - State
 
@@ -68,7 +69,8 @@ final class SessionQuestionCoordinator {
         workspaceProvider: @escaping @MainActor () -> WorkspaceResolverInput?,
         usageTracker: AIUsageTracker,
         semanticEnrichment: SemanticEnrichmentService,
-        pipelineQueryService: PipelineQueryService? = nil
+        pipelineQueryService: PipelineQueryService? = nil,
+        virtualSessionManager: VirtualSessionManager
     ) {
         self.selectionCapture = selectionCapture
         self.aiProvider = aiProvider
@@ -81,6 +83,7 @@ final class SessionQuestionCoordinator {
         self.usageTracker = usageTracker
         self.semanticEnrichment = semanticEnrichment
         self.pipelineQueryService = pipelineQueryService
+        self.virtualSessionManager = virtualSessionManager
     }
 
     // MARK: - Lifecycle
@@ -354,6 +357,23 @@ final class SessionQuestionCoordinator {
             containingEntityType: containingEntityType
         )
 
+        // Virtual Session: build full InsightContext from file intelligence.
+        let insightContext = buildInsightContext(
+            filePath: effectiveFilePath,
+            fileName: effectiveFileName,
+            entities: effectiveEntities,
+            snippet: snippetText,
+            intelligence: managed.fileIntelligence,
+            sourceApp: sourceAppName,
+            workspaceID: managed.workspace.id
+        )
+
+        // Virtual Session: inject working memory into system prompt.
+        if virtualSessionManager.isEnabled,
+           let wmBlock = virtualSessionManager.workingMemoryBlock() {
+            systemPrompt += "\n\n\(wmBlock)"
+        }
+
         // When the system prompt already contains source code (Tier 1, 2, 2.5),
         // avoid sending the snippet again in the user message — the outline's
         // ← selected marker identifies the code. Tier 3 has no source in the
@@ -435,7 +455,22 @@ final class SessionQuestionCoordinator {
                 pipelineFilePath: nil,
                 pipelineEntityName: nil
             )
-            hud.showStream(stream, sourceApp: sourceAppName, followUpContext: followUpCtx)
+
+            // Virtual Session: record insight on stream completion.
+            let vsManager = virtualSessionManager
+            let capturedInsightContext = insightContext
+            hud.showStream(stream, sourceApp: sourceAppName, followUpContext: followUpCtx) { explanationText in
+                guard vsManager.isEnabled else { return }
+                let understanding = VirtualSessionManager.extractUnderstanding(
+                    from: explanationText,
+                    sourceApp: sourceAppName
+                )
+                vsManager.recordInsight(
+                    understanding: understanding,
+                    mode: .session,
+                    context: capturedInsightContext
+                )
+            }
         } catch {
             guard generation == requestGeneration else { return }
             hud.showError("AI request failed: \(error.localizedDescription)")
@@ -563,7 +598,30 @@ final class SessionQuestionCoordinator {
             pipelineEntityName: entityName
         )
 
-        hud.showStream(stream, sourceApp: sourceAppName, followUpContext: followUpCtx)
+        // Virtual Session: record insight on pipeline stream completion.
+        let pipelineInsightContext = buildInsightContext(
+            filePath: filePath,
+            fileName: pipelineFileName,
+            entities: parsedEntities,
+            snippet: snippetText,
+            intelligence: managed.fileIntelligence,
+            sourceApp: sourceAppName,
+            workspaceID: managed.workspace.id
+        )
+        let vsManager = virtualSessionManager
+        let capturedPipelineContext = pipelineInsightContext
+        hud.showStream(stream, sourceApp: sourceAppName, followUpContext: followUpCtx) { explanationText in
+            guard vsManager.isEnabled else { return }
+            let understanding = VirtualSessionManager.extractUnderstanding(
+                from: explanationText,
+                sourceApp: sourceAppName
+            )
+            vsManager.recordInsight(
+                understanding: understanding,
+                mode: .session,
+                context: capturedPipelineContext
+            )
+        }
 
         #if DEBUG
         print("[SessionQuestion] Pipeline: Understanding delivered — engine=\(understanding.metadata.engineIdentifier), completeness=\(understanding.metadata.completeness)")
@@ -682,5 +740,73 @@ final class SessionQuestionCoordinator {
 
     private func containsAny(_ text: String, keywords: [String]) -> Bool {
         keywords.contains { text.contains($0) }
+    }
+
+    // MARK: - Virtual Session: InsightContext Construction
+
+    /// Builds a full InsightContext from file intelligence and workspace resolution data.
+    private func buildInsightContext(
+        filePath: String,
+        fileName: String,
+        entities: [ParsedEntity],
+        snippet: String,
+        intelligence: FileIntelligence?,
+        sourceApp: String?,
+        workspaceID: UUID
+    ) -> InsightContext {
+        // Find the smallest containing entity for the snippet.
+        let containingEntity = entities
+            .filter { $0.sourceText.contains(snippet) }
+            .min(by: { $0.sourceText.count < $1.sourceText.count })
+
+        // Build entity name (qualified if nested).
+        let entityName: String?
+        if let entity = containingEntity {
+            if let parentStableId = entity.parentStableId,
+               let parent = entities.first(where: { $0.entity.stableId == parentStableId }) {
+                entityName = "\(parent.entity.name).\(entity.entity.name)"
+            } else {
+                entityName = entity.entity.name
+            }
+        } else {
+            entityName = nil
+        }
+
+        // Derive module name from directory path.
+        let moduleName: String? = {
+            let components = filePath.components(separatedBy: "/")
+            // Look for known layer directory names in the path.
+            let layerDirs = ["Application", "Domain", "Infrastructure", "Presentation", "App", "Understanding"]
+            for dir in layerDirs where components.contains(dir) {
+                return dir
+            }
+            return nil
+        }()
+
+        // Collect related entities from relationships.
+        let relatedEntities: [String]
+        if let intelligence {
+            relatedEntities = intelligence.relationships
+                .compactMap { rel -> String? in
+                    // Include call targets and conformance/inheritance targets.
+                    return rel.targetName
+                }
+        } else {
+            relatedEntities = []
+        }
+
+        return InsightContext(
+            filePath: filePath,
+            fileName: fileName,
+            entityName: entityName,
+            entityType: containingEntity?.entity.entityType.rawValue,
+            moduleName: moduleName,
+            layer: intelligence?.identity.layer.rawValue,
+            fileRole: intelligence?.identity.role.rawValue,
+            language: intelligence?.language,
+            sourceApp: sourceApp,
+            workspaceID: workspaceID,
+            relatedEntities: relatedEntities
+        )
     }
 }

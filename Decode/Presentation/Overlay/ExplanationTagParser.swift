@@ -208,6 +208,23 @@ enum ExplanationTagParser {
         return result
     }
 
+    // MARK: - TLDR Extraction
+
+    /// Extract the first `<tldr>` content from raw explanation text.
+    ///
+    /// Reuses the tag scanner without the full block-detection pipeline.
+    /// Returns `nil` if no `<tldr>` tag is present or its content is empty.
+    static func extractTLDR(from raw: String) -> String? {
+        let segments = parse(raw)
+        for segment in segments {
+            if case .tagged(.tldr, let content) = segment {
+                let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : trimmed
+            }
+        }
+        return nil
+    }
+
     // MARK: - Convenience
 
     /// Raw string -> content blocks in one call.

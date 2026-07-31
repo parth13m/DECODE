@@ -24,6 +24,7 @@ final class SelectionModeCoordinator {
     private let hud: FloatingExplanationHUD
     private let toastManager: DecodeToastManager
     private let usageTracker: AIUsageTracker
+    private let virtualSessionManager: VirtualSessionManager
 
     // MARK: - State
 
@@ -54,13 +55,15 @@ final class SelectionModeCoordinator {
         aiProvider: @escaping @MainActor () -> (any AIProviderProtocol)?,
         hud: FloatingExplanationHUD,
         toastManager: DecodeToastManager,
-        usageTracker: AIUsageTracker
+        usageTracker: AIUsageTracker,
+        virtualSessionManager: VirtualSessionManager
     ) {
         self.selectionCapture = selectionCapture
         self.aiProvider = aiProvider
         self.hud = hud
         self.toastManager = toastManager
         self.usageTracker = usageTracker
+        self.virtualSessionManager = virtualSessionManager
     }
 
     // MARK: - Lifecycle
@@ -211,6 +214,13 @@ final class SelectionModeCoordinator {
             framework: detectedFramework,
             containingEntityType: nil
         )
+
+        // Virtual Session: inject working memory into system prompt.
+        if virtualSessionManager.isEnabled,
+           let wmBlock = virtualSessionManager.workingMemoryBlock() {
+            systemPrompt += "\n\n\(wmBlock)"
+        }
+
         let messages = [AIMessage(role: .user, content: text)]
 
         // Show HUD immediately so the user sees loading state while
@@ -262,7 +272,23 @@ final class SelectionModeCoordinator {
                 pipelineFilePath: nil,
                 pipelineEntityName: nil
             )
-            hud.showStream(stream, sourceApp: sourceAppName, followUpContext: followUpCtx)
+
+            // Virtual Session: record insight on stream completion.
+            let vsManager = virtualSessionManager
+            let capturedSourceApp = sourceAppName
+            hud.showStream(stream, sourceApp: sourceAppName, followUpContext: followUpCtx) { explanationText in
+                guard vsManager.isEnabled else { return }
+                let understanding = VirtualSessionManager.extractUnderstanding(
+                    from: explanationText,
+                    sourceApp: capturedSourceApp
+                )
+                let context = InsightContext.minimal(sourceApp: capturedSourceApp)
+                vsManager.recordInsight(
+                    understanding: understanding,
+                    mode: .selection,
+                    context: context
+                )
+            }
         } catch {
             guard generation == requestGeneration else { return }
             #if DEBUG

@@ -263,10 +263,14 @@ final class ExplanationHUDViewModel {
     ///   - stream: The token stream from the AI provider.
     ///   - sourceApp: The name of the app the text was captured from.
     ///   - context: Optional follow-up context for post-explanation questions.
+    ///   - onComplete: Called with the full explanation text when streaming
+    ///     completes (including partial completion on error). Not called on
+    ///     cancellation. Runs on MainActor.
     func showStream(
         _ stream: AsyncThrowingStream<String, Error>,
         sourceApp: String?,
-        followUpContext context: FollowUpContext? = nil
+        followUpContext context: FollowUpContext? = nil,
+        onComplete: (@MainActor (String) -> Void)? = nil
     ) {
         // Cancel any previous stream, follow-up, or improvement.
         activeStreamTask?.cancel()
@@ -327,6 +331,7 @@ final class ExplanationHUDViewModel {
                     print("[DIAG_HUD] complete total_ms=\(String(format: "%.0f", totalMs)) tokens=\(diagTokenCount) ui_updates=\(diagUIUpdateCount) final_length=\(explanationText.count)")
                     #endif
                     displayState = .complete
+                    onComplete?(explanationText)
                 }
             } catch is CancellationError {
                 // Stream was cancelled (dismiss or new stream). No error state.
@@ -341,6 +346,7 @@ final class ExplanationHUDViewModel {
                         // content stays visible, and append the error as a note.
                         errorMessage = error.localizedDescription
                         displayState = .complete
+                        onComplete?(explanationText)
                     }
                 }
             }

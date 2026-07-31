@@ -40,12 +40,13 @@ final class FloatingExplanationHUD {
     func showStream(
         _ stream: AsyncThrowingStream<String, Error>,
         sourceApp: String?,
-        followUpContext: ExplanationHUDViewModel.FollowUpContext? = nil
+        followUpContext: ExplanationHUDViewModel.FollowUpContext? = nil,
+        onComplete: (@MainActor (String) -> Void)? = nil
     ) {
         #if DEBUG
         print("[DEBUG HUD] showStream called, sourceApp=\(sourceApp ?? "nil")")
         #endif
-        viewModel.showStream(stream, sourceApp: sourceApp, followUpContext: followUpContext)
+        viewModel.showStream(stream, sourceApp: sourceApp, followUpContext: followUpContext, onComplete: onComplete)
         ensurePanelVisible()
     }
 

@@ -9,7 +9,9 @@ struct ContentView: View {
     @Environment(AppDependencies.self) private var dependencies
     @State private var showingSession = false
     @State private var showingOnboarding = !OnboardingState.hasCompleted
+    @State private var showingMemoryInspector = false
     @AppStorage("dsaModeEnabled") private var dsaModeEnabled = false
+    @AppStorage("virtualSessionEnabled") private var virtualSessionEnabled = false
 
     // MARK: - WhisperFlow-inspired palette
 
@@ -128,6 +130,37 @@ struct ContentView: View {
                 Spacer()
             }
             .padding(.horizontal, 60)
+
+            // Virtual Session toggle
+            HStack(spacing: 10) {
+                Toggle("Virtual Session", isOn: $virtualSessionEnabled)
+                    .toggleStyle(.switch)
+                    .tint(accentOrange)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(textPrimary)
+                Text("Remember investigation context")
+                    .font(.system(size: 11))
+                    .foregroundStyle(textSecondary)
+                Spacer()
+                if virtualSessionEnabled {
+                    Button {
+                        showingMemoryInspector.toggle()
+                    } label: {
+                        Text("View Memory")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(accentOrange)
+                    }
+                    .buttonStyle(.plain)
+                    .popover(isPresented: $showingMemoryInspector) {
+                        VirtualSessionInspectorView()
+                            .environment(dependencies)
+                    }
+                }
+            }
+            .padding(.horizontal, 60)
+            .onChange(of: virtualSessionEnabled) { _, newValue in
+                dependencies.virtualSessionManager.handleToggleChanged(enabled: newValue)
+            }
 
             Spacer().frame(height: 12)
 

@@ -70,6 +70,12 @@ final class AppDependencies {
     /// Observation task that watches workspace count and updates dock visibility.
     private var dockVisibilityTask: Task<Void, Never>?
 
+    // MARK: - Virtual Sessions
+
+    /// Manages optional cross-mode investigation memory.
+    /// Created at init (lightweight). Restored during deferred startup.
+    let virtualSessionManager: VirtualSessionManager
+
     // MARK: - Understanding Pipeline
 
     /// The understanding pipeline composition root (IAG-001 §6).
@@ -137,6 +143,7 @@ final class AppDependencies {
         self.toastManager = DecodeToastManager()
         self.screenCapture = ScreenCaptureServiceImpl()
         self.ocrService = VisionOCRService()
+        self.virtualSessionManager = VirtualSessionManager()
 
         // Understanding pipeline — lightweight construction only (no I/O).
         // Snapshot directory: ~/Library/Application Support/Decode/understanding/
@@ -206,8 +213,14 @@ final class AppDependencies {
             #endif
         }
 
+        // 0c. Restore virtual session state.
+        virtualSessionManager.restore()
+
         // 1. Build AI provider (Keychain access).
         rebuildAIProvider()
+
+        // 1a. Wire AI provider into virtual session manager for compression.
+        virtualSessionManager.aiProvider = { [weak self] in self?.aiProvider }
 
         // 1b. Create shared usage tracker.
         let tracker = AIUsageTracker()
@@ -219,7 +232,8 @@ final class AppDependencies {
             aiProvider: { [weak self] in self?.aiProvider },
             hud: hud,
             toastManager: toastManager,
-            usageTracker: tracker
+            usageTracker: tracker,
+            virtualSessionManager: virtualSessionManager
         )
         self.selectionCoordinator = selCoordinator
 
@@ -229,7 +243,8 @@ final class AppDependencies {
             aiProvider: { [weak self] in self?.aiProvider },
             hud: hud,
             toastManager: toastManager,
-            usageTracker: tracker
+            usageTracker: tracker,
+            virtualSessionManager: virtualSessionManager
         )
         self.screenshotCoordinator = ssCoordinator
 
@@ -325,7 +340,8 @@ final class AppDependencies {
             },
             usageTracker: tracker,
             semanticEnrichment: enrichment,
-            pipelineQueryService: pipelineQueryService
+            pipelineQueryService: pipelineQueryService,
+            virtualSessionManager: virtualSessionManager
         )
         self.sessionQuestionCoordinator = sqCoordinator
 

@@ -99,7 +99,8 @@ struct SelectionModeCoordinatorTests {
             aiProvider: { provider },
             hud: hud,
             toastManager: DecodeToastManager(),
-            usageTracker: AIUsageTracker()
+            usageTracker: AIUsageTracker(),
+            virtualSessionManager: VirtualSessionManager()
         )
 
         let (stream, continuation) = AsyncStream.makeStream(of: HotkeyEvent.self)
@@ -134,7 +135,8 @@ struct SelectionModeCoordinatorTests {
             aiProvider: { provider },
             hud: hud,
             toastManager: DecodeToastManager(),
-            usageTracker: AIUsageTracker()
+            usageTracker: AIUsageTracker(),
+            virtualSessionManager: VirtualSessionManager()
         )
 
         let (stream, continuation) = AsyncStream.makeStream(of: HotkeyEvent.self)
@@ -165,7 +167,8 @@ struct SelectionModeCoordinatorTests {
             aiProvider: { nil },
             hud: hud,
             toastManager: DecodeToastManager(),
-            usageTracker: AIUsageTracker()
+            usageTracker: AIUsageTracker(),
+            virtualSessionManager: VirtualSessionManager()
         )
 
         let (stream, continuation) = AsyncStream.makeStream(of: HotkeyEvent.self)
@@ -196,7 +199,8 @@ struct SelectionModeCoordinatorTests {
             aiProvider: { provider },
             hud: hud,
             toastManager: DecodeToastManager(),
-            usageTracker: AIUsageTracker()
+            usageTracker: AIUsageTracker(),
+            virtualSessionManager: VirtualSessionManager()
         )
 
         let (stream, continuation) = AsyncStream.makeStream(of: HotkeyEvent.self)
@@ -229,7 +233,8 @@ struct SelectionModeCoordinatorTests {
             aiProvider: { provider },
             hud: hud,
             toastManager: DecodeToastManager(),
-            usageTracker: AIUsageTracker()
+            usageTracker: AIUsageTracker(),
+            virtualSessionManager: VirtualSessionManager()
         )
 
         let (stream, continuation) = AsyncStream.makeStream(of: HotkeyEvent.self)
@@ -259,7 +264,8 @@ struct SelectionModeCoordinatorTests {
             aiProvider: { provider },
             hud: hud,
             toastManager: DecodeToastManager(),
-            usageTracker: AIUsageTracker()
+            usageTracker: AIUsageTracker(),
+            virtualSessionManager: VirtualSessionManager()
         )
 
         let (stream, continuation) = AsyncStream.makeStream(of: HotkeyEvent.self)
@@ -294,7 +300,8 @@ struct SelectionModeCoordinatorTests {
             aiProvider: { provider },
             hud: hud,
             toastManager: DecodeToastManager(),
-            usageTracker: AIUsageTracker()
+            usageTracker: AIUsageTracker(),
+            virtualSessionManager: VirtualSessionManager()
         )
 
         let (stream, continuation) = AsyncStream.makeStream(of: HotkeyEvent.self)
@@ -325,7 +332,8 @@ struct SelectionModeCoordinatorTests {
             aiProvider: { provider },
             hud: hud,
             toastManager: DecodeToastManager(),
-            usageTracker: AIUsageTracker()
+            usageTracker: AIUsageTracker(),
+            virtualSessionManager: VirtualSessionManager()
         )
 
         let (stream, continuation) = AsyncStream.makeStream(of: HotkeyEvent.self)
@@ -356,7 +364,8 @@ struct SelectionModeCoordinatorTests {
             aiProvider: { provider },
             hud: hud,
             toastManager: DecodeToastManager(),
-            usageTracker: AIUsageTracker()
+            usageTracker: AIUsageTracker(),
+            virtualSessionManager: VirtualSessionManager()
         )
 
         let (stream, continuation) = AsyncStream.makeStream(of: HotkeyEvent.self)
@@ -382,7 +391,8 @@ struct SelectionModeCoordinatorTests {
             aiProvider: { nil },
             hud: FloatingExplanationHUD(),
             toastManager: DecodeToastManager(),
-            usageTracker: AIUsageTracker()
+            usageTracker: AIUsageTracker(),
+            virtualSessionManager: VirtualSessionManager()
         )
 
         coordinator.stopListening()
@@ -406,7 +416,8 @@ struct SelectionModeCoordinatorTests {
             aiProvider: { provider },
             hud: hud,
             toastManager: DecodeToastManager(),
-            usageTracker: AIUsageTracker()
+            usageTracker: AIUsageTracker(),
+            virtualSessionManager: VirtualSessionManager()
         )
 
         let (stream, continuation) = AsyncStream.makeStream(of: HotkeyEvent.self)
@@ -437,7 +448,8 @@ struct SelectionModeCoordinatorTests {
             aiProvider: { provider },
             hud: hud,
             toastManager: DecodeToastManager(),
-            usageTracker: AIUsageTracker()
+            usageTracker: AIUsageTracker(),
+            virtualSessionManager: VirtualSessionManager()
         )
 
         let (stream, continuation) = AsyncStream.makeStream(of: HotkeyEvent.self)
