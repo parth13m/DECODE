@@ -747,6 +747,255 @@ struct ModuleScopeEvidenceTests {
     }
 }
 
+// MARK: — System Scope Evidence Tests (M10)
+
+@Suite("System Scope Evidence")
+struct SystemScopeEvidenceTests {
+
+    @Test("System scope gathers system entity evidence at distance 3")
+    func systemScopeGathersSystemEvidence() async {
+        let indexQuerying = MockIndexQuerying()
+        let dirAccess = MockDIRReadAccess()
+
+        // Entity in /src/ModA/File.swift
+        let entityUnit = makeUnitWithEntity(
+            id: 1, entity: "MyClass",
+            filePath: "/src/ModA/File.swift", startLine: 5, endLine: 20
+        )
+        setupEntity("MyClass", units: [entityUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
+
+        // File scope entity
+        let fileScopeUnit = makeUnitWithEntity(
+            id: 10, entity: "/src/ModA/File.swift",
+            filePath: "/src/ModA/File.swift", startLine: 1, endLine: 50
+        )
+        setupEntity("/src/ModA/File.swift", units: [fileScopeUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
+
+        // Module entity
+        let moduleUnit = makeUnit(
+            id: UnitIdentifier(rawValue: 100),
+            subject: .entity(EntityReference(qualifiedName: "module:ModA")),
+            predicate: PredicateIdentifier(name: "cohesion", domain: "emergence"),
+            value: .structured(["ratio": .float(0.8)]),
+            tier: .t1,
+            confidence: .high,
+            grounding: .derived([])
+        )
+        setupEntity("module:ModA", units: [moduleUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
+
+        // System entity — T1 kind:structure = "system"
+        let systemKindUnit = makeUnit(
+            id: UnitIdentifier(rawValue: 200),
+            subject: .entity(EntityReference(qualifiedName: "system:MyProject")),
+            predicate: PredicateIdentifier(name: "kind", domain: "structure"),
+            value: .string("system"),
+            tier: .t1,
+            confidence: .high,
+            grounding: .derived([])
+        )
+        dirAccess.units[systemKindUnit.id] = systemKindUnit
+
+        // System entity properties
+        let systemPropUnit = makeUnit(
+            id: UnitIdentifier(rawValue: 201),
+            subject: .entity(EntityReference(qualifiedName: "system:MyProject")),
+            predicate: PredicateIdentifier(name: "architectureStyle", domain: "emergence"),
+            value: .string("layered"),
+            tier: .t1,
+            confidence: .moderate,
+            grounding: .derived([])
+        )
+        setupEntity("system:MyProject", units: [systemKindUnit, systemPropUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
+
+        let service = makeService(indexQuerying: indexQuerying, dirAccess: dirAccess)
+        let request = RetrievalRequest(
+            subject: .entity(makeEntityRef("MyClass")),
+            intent: .explain,
+            scope: .system
+        )
+        let result = await service.retrieve(request)
+
+        let systemScopeUnits = result.evidence.filter {
+            $0.provenance.stage == .scope && $0.provenance.path.contains("system:MyProject")
+        }
+        #expect(!systemScopeUnits.isEmpty)
+        #expect(systemScopeUnits.allSatisfy { $0.distance == 3 })
+    }
+
+    @Test("Module scope does not gather system evidence")
+    func moduleScopeNoSystemEvidence() async {
+        let indexQuerying = MockIndexQuerying()
+        let dirAccess = MockDIRReadAccess()
+
+        let entityUnit = makeUnitWithEntity(
+            id: 1, entity: "MyClass",
+            filePath: "/src/ModA/File.swift"
+        )
+        setupEntity("MyClass", units: [entityUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
+
+        let fileScopeUnit = makeUnitWithEntity(
+            id: 10, entity: "/src/ModA/File.swift",
+            filePath: "/src/ModA/File.swift"
+        )
+        setupEntity("/src/ModA/File.swift", units: [fileScopeUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
+
+        // System entity
+        let systemKindUnit = makeUnit(
+            id: UnitIdentifier(rawValue: 200),
+            subject: .entity(EntityReference(qualifiedName: "system:MyProject")),
+            predicate: PredicateIdentifier(name: "kind", domain: "structure"),
+            value: .string("system"),
+            tier: .t1,
+            confidence: .high,
+            grounding: .derived([])
+        )
+        dirAccess.units[systemKindUnit.id] = systemKindUnit
+        setupEntity("system:MyProject", units: [systemKindUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
+
+        let service = makeService(indexQuerying: indexQuerying, dirAccess: dirAccess)
+        let request = RetrievalRequest(
+            subject: .entity(makeEntityRef("MyClass")),
+            intent: .explain,
+            scope: .module
+        )
+        let result = await service.retrieve(request)
+
+        let systemUnits = result.evidence.filter {
+            $0.provenance.path.contains("system:MyProject")
+        }
+        #expect(systemUnits.isEmpty)
+    }
+
+    @Test("System scope includes file, module, and system evidence")
+    func systemScopeIncludesAllLevels() async {
+        let indexQuerying = MockIndexQuerying()
+        let dirAccess = MockDIRReadAccess()
+
+        let entityUnit = makeUnitWithEntity(
+            id: 1, entity: "Svc",
+            filePath: "/src/Infra/Svc.swift", startLine: 1, endLine: 30
+        )
+        setupEntity("Svc", units: [entityUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
+
+        let fileScopeUnit = makeUnitWithEntity(
+            id: 10, entity: "/src/Infra/Svc.swift",
+            filePath: "/src/Infra/Svc.swift"
+        )
+        setupEntity("/src/Infra/Svc.swift", units: [fileScopeUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
+
+        let moduleRoleUnit = makeUnit(
+            id: UnitIdentifier(rawValue: 100),
+            subject: .entity(EntityReference(qualifiedName: "module:Infra")),
+            predicate: PredicateIdentifier(name: "moduleRole", domain: "emergence"),
+            value: .string("provider"),
+            tier: .t1,
+            confidence: .moderate,
+            grounding: .derived([])
+        )
+        setupEntity("module:Infra", units: [moduleRoleUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
+
+        let systemKindUnit = makeUnit(
+            id: UnitIdentifier(rawValue: 200),
+            subject: .entity(EntityReference(qualifiedName: "system:App")),
+            predicate: PredicateIdentifier(name: "kind", domain: "structure"),
+            value: .string("system"),
+            tier: .t1,
+            confidence: .high,
+            grounding: .derived([])
+        )
+        dirAccess.units[systemKindUnit.id] = systemKindUnit
+
+        let systemStyleUnit = makeUnit(
+            id: UnitIdentifier(rawValue: 201),
+            subject: .entity(EntityReference(qualifiedName: "system:App")),
+            predicate: PredicateIdentifier(name: "architectureStyle", domain: "emergence"),
+            value: .string("layered"),
+            tier: .t1,
+            confidence: .moderate,
+            grounding: .derived([])
+        )
+        setupEntity("system:App", units: [systemKindUnit, systemStyleUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
+
+        let service = makeService(indexQuerying: indexQuerying, dirAccess: dirAccess)
+        let request = RetrievalRequest(
+            subject: .entity(makeEntityRef("Svc")),
+            intent: .explain,
+            scope: .system
+        )
+        let result = await service.retrieve(request)
+
+        let fileScopeEvidence = result.evidence.filter {
+            $0.provenance.stage == .scope && $0.distance == 1
+        }
+        let moduleScopeEvidence = result.evidence.filter {
+            $0.provenance.stage == .scope && $0.distance == 2
+        }
+        let systemScopeEvidence = result.evidence.filter {
+            $0.provenance.stage == .scope && $0.distance == 3
+        }
+
+        #expect(!fileScopeEvidence.isEmpty)
+        #expect(!moduleScopeEvidence.isEmpty)
+        #expect(!systemScopeEvidence.isEmpty)
+    }
+
+    @Test("System scope respects tier filter")
+    func systemScopeRespectsTierFilter() async {
+        let indexQuerying = MockIndexQuerying()
+        let dirAccess = MockDIRReadAccess()
+
+        let entityUnit = makeUnitWithEntity(
+            id: 1, entity: "E",
+            filePath: "/src/Mod/E.swift"
+        )
+        setupEntity("E", units: [entityUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
+
+        let fileScopeUnit = makeUnitWithEntity(
+            id: 10, entity: "/src/Mod/E.swift",
+            filePath: "/src/Mod/E.swift"
+        )
+        setupEntity("/src/Mod/E.swift", units: [fileScopeUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
+
+        // System entity at T1
+        let systemKindUnit = makeUnit(
+            id: UnitIdentifier(rawValue: 200),
+            subject: .entity(EntityReference(qualifiedName: "system:Proj")),
+            predicate: PredicateIdentifier(name: "kind", domain: "structure"),
+            value: .string("system"),
+            tier: .t1,
+            confidence: .high,
+            grounding: .derived([])
+        )
+        dirAccess.units[systemKindUnit.id] = systemKindUnit
+
+        let systemPropUnit = makeUnit(
+            id: UnitIdentifier(rawValue: 201),
+            subject: .entity(EntityReference(qualifiedName: "system:Proj")),
+            predicate: PredicateIdentifier(name: "architectureStyle", domain: "emergence"),
+            value: .string("layered"),
+            tier: .t1,
+            confidence: .moderate,
+            grounding: .derived([])
+        )
+        setupEntity("system:Proj", units: [systemKindUnit, systemPropUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
+
+        let service = makeService(indexQuerying: indexQuerying, dirAccess: dirAccess)
+        // Request with tierCeiling = .t0 should exclude T1 system evidence
+        let request = RetrievalRequest(
+            subject: .entity(makeEntityRef("E")),
+            intent: .explain,
+            scope: .system,
+            tierCeiling: .t0
+        )
+        let result = await service.retrieve(request)
+
+        let systemEvidence = result.evidence.filter {
+            $0.provenance.path.contains("system:Proj")
+        }
+        #expect(systemEvidence.isEmpty)
+    }
+}
+
 // MARK: — Budget Enforcement Tests
 
 @Suite("Budget Enforcement")

@@ -89,6 +89,14 @@ See [DAS-002](das/DAS-002-Decode-Intermediate-Representation.md) for the complet
 | [RFC-005](rfc/RFC-005-Atomic-Unit-Contract.md) | Contract of the Atomic Unit | Accepted | DAS-002 |
 | [RFC-006](rfc/RFC-006-DIR-Hypothesis.md) | The Intermediate Representation Hypothesis | Accepted | DAS-001, DAS-002 |
 
+## Feature Architecture Specifications
+
+Feature-level architecture specifications define cross-platform behavior for application-layer features that sit alongside the understanding pipeline.
+
+| Spec | Title | Status |
+|------|-------|--------|
+| [VAS-001](VAS-001-VirtualSessionArchitecture.md) | Virtual Session Architecture | Canonical |
+
 ## Dependency Order
 
 Chapters must be authored and approved in dependency order. The critical path is:

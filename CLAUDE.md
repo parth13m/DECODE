@@ -16,6 +16,8 @@ The **Software Intelligence Platform**, **Session Mode**, and **Workspace Mode**
 
 A **Product Validation Sprint** (July 2026) audited the completed epics, fixed engineering health findings, completed the folder upload UI flow, and introduced the **Session State architecture** — separating workspace history (database) from application session state (JSON file).
 
+**Virtual Session** — cross-mode investigation memory — is **complete** and production-ready. Provides Working Memory (bounded, topic-aware prompt augmentation), Investigation tracking (living knowledge documents), and a Memory Inspector UI. Canonical architecture specification: `architecture/VAS-001-VirtualSessionArchitecture.md`.
+
 The next engineering epic is **Project Intelligence** — understanding the whole codebase as architecture. Phase 1 (Module Intelligence, milestones M1–M7) is **complete**. Phase 2 (Project Intelligence, milestones M8–M12) is **not started**.
 
 The architecture is fully specified across three document layers (DAS → DDS → IAG). All specifications are frozen. Implementation follows these documents exactly. Architecture changes require an RFC (IAG-004 §21).
@@ -56,6 +58,15 @@ All four File Intelligence understanding layers (Identity, Purpose, Behavior, Sa
 - **Semantic Enrichment Pipeline**: lazy, cached LLM-derived understanding (all four layers in a single call). Computed on first user question per file version. Cached by `fileHash`. Falls back to deterministic purpose on failure.
 - **Question-aware Context Selection**: deterministic routing that selects which understanding layers to include in the explanation prompt based on snippet content and file role.
 
+**Virtual Session** — optional cross-mode investigation memory:
+- **VirtualSessionManager**: session lifecycle, insight recording, investigation boundary detection, knowledge evolution, retrieval scoring, prompt augmentation.
+- **Working Memory**: bounded (1000 chars), topic-aware, unconditional prompt injection, async LLM compression with deterministic fallback.
+- **Investigations**: living knowledge documents with sentence-level evolution, importance-scored eviction, structural anchors.
+- **Topic Switching**: two-layer detection — structural (Session Mode), semantic keyword overlap (Selection/Screenshot).
+- **Memory Inspector**: popover showing statistics, Working Memory, investigations, known files/entities.
+- **Persistence**: JSON file at `~/Library/Application Support/Decode/virtual-session.json`, incremental save after every mutation.
+- **Architecture specification**: `architecture/VAS-001-VirtualSessionArchitecture.md` (canonical, cross-platform).
+
 **Backend**: FastAPI + PostgreSQL on Railway. Full analytics pipeline, admin dashboard, invite management.
 
 **Client**: Swift 6, macOS 15+, SwiftUI, Apple Development signed (Team `P5Y864DV5S`).
@@ -77,10 +88,10 @@ Protocols for cross-layer communication (dependency inversion). No layer imports
 ### Key Services by Layer
 
 **App**: `AppDependencies` — root DI container, deferred startup, hotkey fan-out.
-**Application**: `SelectionModeCoordinator`, `ScreenshotModeCoordinator`, `SessionQuestionCoordinator`, `WorkspaceManager`, `WorkspaceResolver`, `IndexingCoordinator`, `NavigationState`, `SessionState`, `SessionStatePersistence`, `SessionManager`, `SessionResolver`, `ContextBuilderService`, `ExplanationFramework`, `RepresentationGuidance`, `SnippetHealthClassifier`, `ImprovementService`, `SemanticEnrichmentService`, `FilePurposeDeriver`, `FileIdentityClassifier`.
-**Domain**: Models (`Workspace`, `WorkspaceKind`, `Session`, `CodeEntity`, `SessionContext`, `AILimits`, `FileIntelligence`, `Relationship`, `SemanticEnrichment`, `ImportDeclaration`), Protocols (`AIProviderProtocol`, `DatabaseProtocol`, `DirectoryWatcherProtocol`).
+**Application**: `SelectionModeCoordinator`, `ScreenshotModeCoordinator`, `SessionQuestionCoordinator`, `WorkspaceManager`, `WorkspaceResolver`, `IndexingCoordinator`, `NavigationState`, `SessionState`, `SessionStatePersistence`, `SessionManager`, `SessionResolver`, `ContextBuilderService`, `ExplanationFramework`, `RepresentationGuidance`, `SnippetHealthClassifier`, `ImprovementService`, `SemanticEnrichmentService`, `FilePurposeDeriver`, `FileIdentityClassifier`, `VirtualSessionManager`.
+**Domain**: Models (`Workspace`, `WorkspaceKind`, `Session`, `CodeEntity`, `SessionContext`, `AILimits`, `FileIntelligence`, `Relationship`, `SemanticEnrichment`, `ImportDeclaration`, `VirtualSession`, `Investigation`, `Insight`, `InsightContext`, `WorkingMemory`, `InvestigationAnchor`), Protocols (`AIProviderProtocol`, `DatabaseProtocol`, `DirectoryWatcherProtocol`).
 **Infrastructure**: `DecodeGatewayProvider`, `AccessibilityCapture`, `HotkeyService`, `SwiftSyntaxParser`, `TreeSitterParser`, `DatabaseService`, `KeychainService`, `FileWatcherService`, `DirectoryWatcherService`, `ScreenCaptureService`, `VisionOCRService`, `TextReplacementService`, `AnalyticsEventService`.
-**Presentation**: `FloatingExplanationHUD`, `ExplanationHUDViewModel`, `ExplanationTagParser`, `ImprovementSectionView`, `FloatingSessionDock`, `SessionView`, `ProjectExplorerView`.
+**Presentation**: `FloatingExplanationHUD`, `ExplanationHUDViewModel`, `ExplanationTagParser`, `ImprovementSectionView`, `FloatingSessionDock`, `SessionView`, `ProjectExplorerView`, `VirtualSessionInspectorView`.
 
 ### Dependency Injection
 `AppDependencies` (`@Observable @MainActor`) passed via `.environment()`. Manual DI — no framework.
@@ -98,7 +109,7 @@ Decode/Presentation/   → Overlay/, Session/, Onboarding/, Settings/
 Decode/Understanding/  → Understanding pipeline modules (IAG-001 §5 — created during implementation)
 backend/app/           → routers/, models/, static/, gateway_service.py, auth.py, config.py
 backend/alembic/       → Database migrations
-architecture/          → Frozen specifications: das/, dds/, iag/, rfc/, glossary/
+architecture/          → Frozen specifications: das/, dds/, iag/, rfc/, glossary/, VAS-001 (Virtual Session)
 docs/                  → VISION.md (product vision and philosophy)
 ```
 
@@ -284,6 +295,7 @@ Implementation — Source code that realizes all of the above
 | DAS | DAS-000 through DAS-012 | Architecture: principles, DIR, tiers, entities, relationships, passes, indexes, retrieval, context assembly, incremental update, consumers, storage |
 | DDS | DDS-000 through DDS-009 | Design: authoring standard, producer runtime, DIR runtime, pass runtime, index runtime, retrieval runtime, context assembly, update engine, storage engine, consumer runtime |
 | IAG | IAG-001 through IAG-004 | Implementation: module architecture, technology decisions, runtime architecture, implementation sequence |
+| VAS | VAS-001 | Virtual Session: cross-platform architecture specification for investigation memory, Working Memory, topic switching, compression |
 
 ### Understanding Pipeline Modules (IAG-001)
 
@@ -372,12 +384,14 @@ Each phase has objective exit criteria (IAG-004 §3–§8). Verification is bina
 3. ~~**Understanding Pipeline Implementation (Session Mode)**~~ — **Complete.** All 6 phases, all 8 modules, application integration, pipeline-first execution for Explain/Follow-Up/Improve, production hardening, and comprehensive test coverage.
 4. ~~**Workspace Mode**~~ — **Complete.** All 8 milestones (W0–W7). Workspace-first architecture, directory support, indexing, watching, multi-file resolution.
 5. ~~**Product Validation Sprint**~~ — **Complete.** Engineering health cleanup (E1-01, E2-00, E3-01 findings), folder upload UI completion, SessionState architecture (workspace history vs application session separation).
-6. **Project Intelligence** — **In progress.** Phase 1 (Module Intelligence, M1–M7) complete. Phase 2 (Project Intelligence, M8–M12) not started. See `PROJECT_INTELLIGENCE_IMPLEMENTATION_STATUS.md`.
+6. ~~**Virtual Session**~~ — **Complete.** Cross-mode investigation memory with Working Memory, Investigations, topic switching, compression, and Memory Inspector. Architecture specification: `architecture/VAS-001-VirtualSessionArchitecture.md`.
+7. **Project Intelligence** — **In progress.** Phase 1 (Module Intelligence, M1–M7) complete. Phase 2 (Project Intelligence, M8–M12) not started. See `PROJECT_INTELLIGENCE_IMPLEMENTATION_STATUS.md`.
 
 ### Implementation Status Tracking
 
 Session Mode implementation is tracked in `SESSION_MODE_IMPLEMENTATION_STATUS.md` (complete, read-only reference).
 Workspace Mode implementation is tracked in `WORKSPACE_IMPLEMENTATION_STATUS.md` (complete, read-only reference).
+Virtual Session architecture is specified in `architecture/VAS-001-VirtualSessionArchitecture.md` (canonical cross-platform specification).
 
 ---
 
@@ -439,6 +453,14 @@ All 18 specification-defined Session Mode capabilities are implemented. Future S
 
 ### Completed Workspace Mode (Frozen)
 All 8 milestones (W0–W7) are implemented: domain model, GRDB persistence, WorkspaceManager, IndexingCoordinator, DirectoryWatcherService, WorkspaceResolver multi-file resolution, NavigationState, ProjectExplorerView, SessionQuestionCoordinator directory-aware question handling. Future Workspace Mode work limited to bug fixes or explicitly approved changes.
+
+### Completed Virtual Session (Frozen)
+Virtual Session is complete and architecturally specified in `architecture/VAS-001-VirtualSessionArchitecture.md`. Future work limited to bug fixes or explicitly approved changes. Do not modify:
+- Working Memory architecture (unconditional injection, 1000-char budget, topic-aware reset).
+- Knowledge evolution algorithm (sentence-level dedup, information-density replacement, reinforcement, importance-scored eviction).
+- Topic switching (two-layer: structural for Session Mode, semantic keyword overlap for Selection/Screenshot).
+- Investigation boundary detection (structural anchor affinity scoring).
+- Persistence model (JSON file, incremental save after every mutation).
 
 ### Session State Architecture
 13. **Workspace history vs session state separation** — `Workspace` (database) stores persistent history. `SessionState` (JSON file) stores transient runtime state. Do not add `isOpen` or similar state flags to the `Workspace` model. Do not conflate workspace history with application session state.
@@ -518,6 +540,71 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
 Main branch: `main`. Build must pass before committing. Run `xcodegen generate` after adding/removing Swift files.
 
 ### Tests
-41 test files in `DecodeTests/`. Key coverage: `WorkspaceManager`, `WorkspaceResolver`, `WorkspaceResolverMultiFile`, `IndexingCoordinator`, `DirectoryWatcherService`, `NavigationState`, `ProjectExplorerTree`, `SessionState`, `SessionViewModelDirectory`, `SessionResolver`, `ContextBuilderService`, `SnippetHealthClassifier`, `ExplanationTagParser`, `ExplainReasoningEngine`, `ImproveReasoningEngine`, `FollowUpReasoningEngine`, `SelectionModeCoordinator`, `SwiftSyntaxFrontend`, `TreeSitterFrontend`, `ModuleBoundaryPass`, `CrossFileResolutionPass`, `ModuleEmergentProperties`, `ModuleContextStrategy`, `ModuleObservation`, `ModuleIntelligenceValidation`.
+42 test files in `DecodeTests/`. Key coverage: `WorkspaceManager`, `WorkspaceResolver`, `WorkspaceResolverMultiFile`, `IndexingCoordinator`, `DirectoryWatcherService`, `NavigationState`, `ProjectExplorerTree`, `SessionState`, `SessionViewModelDirectory`, `SessionResolver`, `ContextBuilderService`, `SnippetHealthClassifier`, `ExplanationTagParser`, `ExplainReasoningEngine`, `ImproveReasoningEngine`, `FollowUpReasoningEngine`, `SelectionModeCoordinator`, `SwiftSyntaxFrontend`, `TreeSitterFrontend`, `ModuleBoundaryPass`, `CrossFileResolutionPass`, `ModuleEmergentProperties`, `ModuleContextStrategy`, `ModuleObservation`, `ModuleIntelligenceValidation`, `VirtualSessionManager`.
 
 4 pre-existing test failures (see Known Limitations).
+
+---
+
+## Session Handoff (2026-07-31)
+
+### What Was Completed
+
+**Virtual Session** — complete cross-mode investigation memory system:
+1. Core domain models: `VirtualSession`, `Investigation`, `Insight`, `InsightContext`, `InsightMode`, `InvestigationAnchor`, `KnowledgeSentence`, `WorkingMemory`.
+2. `VirtualSessionManager`: session lifecycle, investigation boundary detection, knowledge evolution algorithm, retrieval scoring, prompt augmentation, understanding extraction.
+3. **Working Memory**: bounded (1000 chars), topic-aware reset, sentence-level knowledge evolution, async LLM compression with deterministic fallback, unconditional prompt injection.
+4. **Topic Switching**: two-layer detection — structural anchor comparison (Session Mode), semantic keyword overlap (Selection/Screenshot Mode).
+5. **Coordinator Integration**: `workingMemoryBlock()` injected into system prompts in all three coordinators; `extractUnderstanding()` + `recordInsight()` called in `onComplete` callbacks.
+6. **Memory Inspector**: `VirtualSessionInspectorView` popover showing statistics, Working Memory, investigations.
+7. **Persistence**: JSON file with incremental saves, atomic writes, restoration on launch.
+8. **Comprehensive Tests**: ~120 tests across 15 suites (VS-01 through VS-27) covering lifecycle, investigations, expiration, persistence, restoration, storage limits, boundary detection, data model, retrieval, affinity scoring, prompt augmentation, understanding extraction, Working Memory model, WM lifecycle, WM prompt injection, topic keywords, topic switching, WM evolution, deterministic compression.
+9. **Production readiness audit**: 8-criteria verification completed, one LOW issue found and fixed (compression task cancellation on session end).
+10. **Architecture specification**: `architecture/VAS-001-VirtualSessionArchitecture.md` — 2,358 lines, 15,134 words, 20 sections, canonical cross-platform specification.
+
+### Current Implementation Status
+
+| Component | Status | Location |
+|-----------|--------|----------|
+| Domain models | Complete, frozen | `Decode/Domain/Models/VirtualSession.swift` |
+| Manager | Complete, frozen | `Decode/Application/VirtualSessionManager.swift` |
+| Inspector UI | Complete, frozen | `Decode/Presentation/Settings/VirtualSessionInspectorView.swift` |
+| Toggle UI | Complete, frozen | `ContentView.swift` (lines ~134-163) |
+| AppDependencies wiring | Complete | `Decode/App/AppDependencies.swift` |
+| Tests | Complete | `DecodeTests/Application/VirtualSessionManagerTests.swift` |
+| Architecture spec | Canonical | `architecture/VAS-001-VirtualSessionArchitecture.md` |
+
+### Architecture Status
+
+All specifications frozen:
+- DAS-000 through DAS-012, DDS-000 through DDS-009, IAG-001 through IAG-004 (understanding pipeline).
+- VAS-001 (Virtual Session — new).
+
+### Validation Status
+
+- ~120 Virtual Session tests pass across 15 suites.
+- 855 total tests in the repository; only 4 pre-existing failures (documented in Known Limitations).
+- Production readiness audit: all 8 criteria verified with evidence.
+- No temporary TODOs, debug comments, or unfinished implementation notes in Virtual Session code.
+- All `print()` statements are `#if DEBUG` gated.
+
+### Repository State
+
+- Branch: `main`.
+- Last commit: `410e9ea` — "new feature added: virtual session" (pushed to origin).
+- Working tree: clean (except for this handoff update).
+- No uncommitted changes, no stale branches.
+
+### Known Limitations (Virtual Session Specific)
+
+1. **Pipeline path does not inject Working Memory** — Pipeline reasoning engines are frozen modules. WM injection happens at the coordinator level in the system prompt. The pipeline path in SessionQuestionCoordinator does not inject WM into the pipeline's internal prompts. Both paths record insights that evolve WM.
+2. **Selection/Screenshot topic switching can be aggressive** — Zero keyword overlap triggers a switch even for genuinely related subtopics that happen to use different vocabulary (e.g., "OAuth bearer tokens" → "Keychain encrypted credentials"). Accepted tradeoff: losing a few sentences of WM is lower cost than injecting irrelevant context.
+3. **No LLM compression tests** — LLM compression depends on an external service. Only deterministic compression (the fallback) is tested.
+
+### Outstanding Bugs
+
+None. All known issues are architectural tradeoffs documented above.
+
+### Immediate Next Recommended Task
+
+**Project Intelligence Phase 2 (M8–M12)**: System entity creation, system emergent properties, project-scope context strategy, architecture-aware explanations, and project intelligence validation. See `PROJECT_INTELLIGENCE_IMPLEMENTATION_STATUS.md` for milestone details.

@@ -853,7 +853,7 @@ struct M7GuidanceGenerationTests {
 @Suite("M7-V7 Context Strategy Structure")
 struct M7ContextStrategyTests {
 
-    @Test("Explain strategy v2 has four strata including module")
+    @Test("Explain strategy v3 has four strata including project")
     func explainStrategyHasFourStrata() {
         let explain = ContextStrategies.explain
 
@@ -862,27 +862,27 @@ struct M7ContextStrategyTests {
         let stratumNames = explain.strata.map(\.name)
         #expect(stratumNames.contains("direct"))
         #expect(stratumNames.contains("relational"))
-        #expect(stratumNames.contains("module"))
+        #expect(stratumNames.contains("project"))
         #expect(stratumNames.contains("scope"))
     }
 
-    @Test("Module stratum selects T1 scope evidence")
-    func moduleStratumTierPartition() {
+    @Test("Project stratum selects T1 scope evidence")
+    func projectStratumTierPartition() {
         let explain = ContextStrategies.explain
-        let moduleStratum = explain.strata.first { $0.name == "module" }!
+        let projectStratum = explain.strata.first { $0.name == "project" }!
 
-        #expect(moduleStratum.selectionCriteria.stage == .scope, "Module stratum should pull from scope stage")
-        #expect(moduleStratum.selectionCriteria.minTier == .t1, "Module stratum should require T1 minimum")
-        #expect(moduleStratum.selectionCriteria.maxTier == .t1, "Module stratum should cap at T1")
+        #expect(projectStratum.selectionCriteria.stage == .scope, "Project stratum should pull from scope stage")
+        #expect(projectStratum.selectionCriteria.minTier == .t1, "Project stratum should require T1 minimum")
+        #expect(projectStratum.selectionCriteria.maxTier == .t1, "Project stratum should cap at T1")
     }
 
-    @Test("Scope stratum selects T0 scope evidence (no overlap with module)")
+    @Test("Scope stratum selects T0 scope evidence (no overlap with project)")
     func scopeStratumNoOverlap() {
         let explain = ContextStrategies.explain
         let scopeStratum = explain.strata.first { $0.name == "scope" }!
 
         #expect(scopeStratum.selectionCriteria.stage == .scope)
-        // T0 only — no T1, so no overlap with module stratum
+        // T0 only — no T1, so no overlap with project stratum
         #expect(scopeStratum.selectionCriteria.maxTier == .t0)
     }
 
@@ -893,19 +893,19 @@ struct M7ContextStrategyTests {
         #expect(abs(totalBudget - 1.0) < 0.001, "Budget fractions must sum to 1.0")
     }
 
-    @Test("Improve strategy has no module stratum")
-    func improveNoModule() {
+    @Test("Improve strategy has no project stratum")
+    func improveNoProject() {
         let improve = ContextStrategies.improve
         let stratumNames = improve.strata.map(\.name)
-        #expect(!stratumNames.contains("module"), "Improve strategy should not have module stratum")
+        #expect(!stratumNames.contains("project"), "Improve strategy should not have project stratum")
     }
 
-    @Test("Followup strategy mirrors explain with module stratum")
+    @Test("Followup strategy mirrors explain with project stratum")
     func followupMirrorsExplain() {
         let followup = ContextStrategies.followup
         #expect(followup.strata.count == 4)
         let stratumNames = followup.strata.map(\.name)
-        #expect(stratumNames.contains("module"))
+        #expect(stratumNames.contains("project"))
     }
 }
 

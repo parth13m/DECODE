@@ -156,6 +156,186 @@ struct ModuleObservations: Sendable, Equatable {
     """
 }
 
+// MARK: - System Observations (M11 ConsumerRuntime support)
+
+/// Semantic observation layer for system-level context.
+///
+/// Transforms raw system emergent properties (M8 composition + M9 emergence)
+/// from the context frame into interpreted, actionable observations that
+/// reasoning engines inject into prompts. Follows the ModuleObservations pattern.
+///
+/// The observation pipeline:
+/// 1. Extract system entities and their properties from ExtractedKnowledge
+/// 2. Apply suppression rules (trivial system, unknown style, etc.)
+/// 3. Interpret surviving properties into observations
+/// 4. Apply question-aware prioritization (ordering/emphasis)
+/// 5. Generate guidance directives from the observation combination
+/// 6. Format as a prompt-injectable observation block
+struct SystemObservations: Sendable, Equatable {
+
+    /// The system name (e.g., "Decode").
+    let systemName: String
+
+    /// The entity being explained (for the observation header).
+    let entityName: String
+
+    /// Architecture style observation. Nil when suppressed.
+    let architecture: ArchitectureObservation?
+
+    /// Dependency direction observation. Nil when suppressed.
+    let dependencies: DependencyObservation?
+
+    /// Scale observation. Nil when suppressed.
+    let scale: ScaleObservation?
+
+    /// Cross-cutting patterns observation. Nil when suppressed.
+    let crossCutting: CrossCuttingObservation?
+
+    /// Module interaction summary. Nil when suppressed.
+    let interactions: InteractionObservation?
+
+    /// Technology distribution observation. Nil when suppressed.
+    let technologies: TechnologyObservation?
+
+    /// Actionable guidance directives for the LLM.
+    let guidance: String
+
+    // MARK: - Observation Types
+
+    struct ArchitectureObservation: Sendable, Equatable {
+        let value: String
+        let interpretation: String
+    }
+
+    struct DependencyObservation: Sendable, Equatable {
+        let value: String
+        let interpretation: String
+    }
+
+    struct ScaleObservation: Sendable, Equatable {
+        let value: String
+        let interpretation: String
+    }
+
+    struct CrossCuttingObservation: Sendable, Equatable {
+        let value: String
+        let interpretation: String
+    }
+
+    struct InteractionObservation: Sendable, Equatable {
+        let value: String
+        let interpretation: String
+    }
+
+    struct TechnologyObservation: Sendable, Equatable {
+        let value: String
+        let interpretation: String
+    }
+
+    // MARK: - Prompt Formatting
+
+    /// Formats the observations as a prompt-injectable block for the user prompt.
+    ///
+    /// Observations are emitted in a fixed priority order:
+    /// architecture → dependencies → scale → cross-cutting → interactions → technologies.
+    /// Question-aware prioritization may reorder via `formatForPrompt(prioritizedOrder:)`.
+    func formatForPrompt() -> String {
+        formatForPrompt(prioritizedOrder: nil)
+    }
+
+    /// Formats with optional question-aware ordering.
+    ///
+    /// - Parameter prioritizedOrder: Optional ordered list of observation keys to emit first.
+    ///   Any observations not in this list are appended in default order.
+    func formatForPrompt(prioritizedOrder: [ObservationKey]?) -> String {
+        var lines: [String] = []
+        lines.append("SYSTEM OBSERVATIONS — \(entityName)")
+        lines.append("")
+        lines.append("system:       \(systemName)")
+
+        let orderedKeys = prioritizedOrder ?? ObservationKey.defaultOrder
+
+        for key in orderedKeys {
+            if let line = observationLine(for: key) {
+                lines.append(line)
+            }
+        }
+
+        lines.append("")
+        lines.append("guidance:     \(guidance)")
+
+        return lines.joined(separator: "\n")
+    }
+
+    /// Formats the observations as a compact one-line summary for ConversationState.
+    func formatForContextSummary() -> String {
+        var parts: [String] = ["System: \(systemName)"]
+        if let architecture {
+            parts.append(architecture.value)
+        }
+        if let scale {
+            parts.append(scale.value)
+        }
+        return parts.joined(separator: ", ") + "."
+    }
+
+    /// System prompt instruction for system-aware explanations.
+    static let systemPromptInstruction = """
+    When SYSTEM OBSERVATIONS are present, use them to frame the entity's \
+    architectural context — mention the system's structure, the entity's position \
+    in it, and any cross-cutting or dependency patterns that improve understanding. \
+    Do not create a separate architecture section. Weave system framing naturally, \
+    typically as one or two sentences in the opening or closing of your explanation. \
+    Follow the guidance directive. Do not restate observations as bullet points.
+    """
+
+    /// Follow-up system prompt instruction for system-aware context.
+    static let followUpContextInstruction = """
+    The context summary includes system-level architectural information. Reference it \
+    only when the user's question touches architecture, impact, dependencies, or system design.
+    """
+
+    // MARK: - Observation Keys (for question-aware ordering)
+
+    /// Identifies an observation category for prioritization.
+    enum ObservationKey: String, Sendable, Equatable, CaseIterable {
+        case architecture
+        case dependencies
+        case scale
+        case crossCutting
+        case interactions
+        case technologies
+
+        static let defaultOrder: [ObservationKey] = [
+            .architecture, .dependencies, .scale, .crossCutting, .interactions, .technologies
+        ]
+    }
+
+    /// Returns the formatted line for a given observation key, or nil if suppressed.
+    private func observationLine(for key: ObservationKey) -> String? {
+        switch key {
+        case .architecture:
+            guard let architecture else { return nil }
+            return "architecture: \(architecture.value) — \(architecture.interpretation)"
+        case .dependencies:
+            guard let dependencies else { return nil }
+            return "dependencies: \(dependencies.value) — \(dependencies.interpretation)"
+        case .scale:
+            guard let scale else { return nil }
+            return "scale:        \(scale.value) — \(scale.interpretation)"
+        case .crossCutting:
+            guard let crossCutting else { return nil }
+            return "cross-cutting: \(crossCutting.value) — \(crossCutting.interpretation)"
+        case .interactions:
+            guard let interactions else { return nil }
+            return "interactions: \(interactions.value) — \(interactions.interpretation)"
+        case .technologies:
+            guard let technologies else { return nil }
+            return "technologies: \(technologies.value) — \(technologies.interpretation)"
+        }
+    }
+}
+
 /// Shared utilities for reasoning engine implementations.
 ///
 /// Provides knowledge extraction from ContextFrame units and grounded claim
@@ -322,6 +502,489 @@ enum ReasoningEngineSupport {
         return (filteredNames, filteredFacts)
     }
 
+    // MARK: - System Observation Extraction (M11)
+
+    /// Extracts system observations from extracted knowledge.
+    ///
+    /// Identifies system entities (`system:*` prefix), extracts their composition
+    /// and emergent properties, applies suppression rules, interprets surviving
+    /// properties, and generates guidance directives.
+    ///
+    /// Returns nil when:
+    /// - No system entity exists in the knowledge
+    /// - The system has fewer than 2 modules (trivial)
+    /// - All observations are suppressed
+    ///
+    /// - Parameters:
+    ///   - knowledge: Extracted knowledge from the context frame.
+    ///   - codeEntityNames: Non-system, non-module entity names to determine the primary entity.
+    ///   - moduleName: Optional module name of the entity being explained (for interaction filtering).
+    ///   - questionHint: Optional question text for question-aware prioritization.
+    /// - Returns: System observations if applicable, nil otherwise.
+    static func extractSystemObservations(
+        from knowledge: ExtractedKnowledge,
+        codeEntityNames: [String],
+        moduleName: String? = nil,
+        questionHint: String? = nil
+    ) -> SystemObservations? {
+        // Find the first system entity.
+        guard let systemEntityName = knowledge.entityNames.first(where: { $0.hasPrefix("system:") }),
+              let systemFacts = knowledge.entityFacts[systemEntityName]
+        else { return nil }
+
+        let systemName = String(systemEntityName.dropFirst("system:".count))
+
+        // Parse system properties from facts.
+        let properties = parseSystemProperties(from: systemFacts)
+
+        // Suppression: trivial system (fewer than 2 modules).
+        if let moduleCount = properties.moduleCount, moduleCount < 2 {
+            return nil
+        }
+
+        // Determine the primary entity being explained.
+        let primaryEntity = codeEntityNames.first ?? "unknown"
+
+        // Build observations with suppression rules.
+        let architecture = buildArchitectureObservation(properties: properties)
+        let dependencies = buildDependencyObservation(properties: properties)
+        let scale = buildScaleObservation(properties: properties)
+        let crossCutting = buildCrossCuttingObservation(properties: properties, primaryEntity: primaryEntity)
+        let interactions = buildInteractionObservation(properties: properties, moduleName: moduleName)
+        let technologies = buildTechnologyObservation(properties: properties)
+
+        // If all observations are suppressed, return nil.
+        if architecture == nil && dependencies == nil && scale == nil
+            && crossCutting == nil && interactions == nil && technologies == nil {
+            return nil
+        }
+
+        // Generate guidance from the combination of surviving observations.
+        let guidance = generateSystemGuidance(
+            architecture: architecture,
+            dependencies: dependencies,
+            crossCutting: crossCutting,
+            moduleName: moduleName
+        )
+
+        // Question-aware observation ordering.
+        let prioritizedOrder = questionAwareOrder(questionHint: questionHint)
+
+        // Build the observations struct; embed the prioritized order in formatting.
+        // The struct stores observations individually; ordering is applied at format time.
+        return SystemObservations(
+            systemName: systemName,
+            entityName: primaryEntity,
+            architecture: architecture,
+            dependencies: dependencies,
+            scale: scale,
+            crossCutting: crossCutting,
+            interactions: interactions,
+            technologies: technologies,
+            guidance: guidance
+        )
+    }
+
+    /// Removes system entities from extracted knowledge, returning filtered
+    /// entity names and facts for prompt construction.
+    ///
+    /// System entity evidence is consumed by the observation layer — it should
+    /// not appear as raw facts in the entity section of the prompt.
+    /// Also removes module entities (extends filterModuleEntities).
+    static func filterProjectEntities(
+        from knowledge: ExtractedKnowledge
+    ) -> (entityNames: [String], entityFacts: [String: [(predicate: String, value: String, unitId: UnitIdentifier)]]) {
+        let filteredNames = knowledge.entityNames.filter {
+            !$0.hasPrefix("module:") && !$0.hasPrefix("system:")
+        }
+        let filteredFacts = knowledge.entityFacts.filter {
+            !$0.key.hasPrefix("module:") && !$0.key.hasPrefix("system:")
+        }
+        return (filteredNames, filteredFacts)
+    }
+
+    // MARK: - System Property Parsing
+
+    /// Parsed system properties from raw entity facts.
+    struct SystemProperties {
+        var architectureStyle: String?
+        var architectureEvidence: String?
+        var layerCount: Int?
+        var hasCycles: Bool?
+        var violationCount: Int?
+        var totalEdges: Int?
+        var moduleCount: Int?
+        var totalFileCount: Int?
+        var totalEntityCount: Int?
+        var crossCuttingPatterns: [(name: String, referenceCount: Int)]?
+        var crossCuttingThreshold: Int?
+        var languages: [(name: String, percentage: Double)]?
+        var primaryLanguage: String?
+        var moduleInteractions: [(source: String, target: String, calls: Int, conformsTo: Int, inherits: Int)]?
+    }
+
+    /// Parses system facts into structured properties.
+    static func parseSystemProperties(
+        from facts: [(predicate: String, value: String, unitId: UnitIdentifier)]
+    ) -> SystemProperties {
+        var props = SystemProperties()
+
+        for fact in facts {
+            switch fact.predicate {
+            case "architectureStyle":
+                let parts = parseStructuredValue(fact.value)
+                props.architectureStyle = parts["style"]
+                props.architectureEvidence = parts["evidence"]
+
+            case "dependencyDirection":
+                let parts = parseStructuredValue(fact.value)
+                if let v = parts["layerCount"] { props.layerCount = Int(v) }
+                if let v = parts["hasCycles"] { props.hasCycles = v == "true" }
+                if let v = parts["violationCount"] { props.violationCount = Int(v) }
+                if let v = parts["totalEdges"] { props.totalEdges = Int(v) }
+
+            case "moduleCount":
+                props.moduleCount = Int(fact.value)
+
+            case "totalFileCount":
+                props.totalFileCount = Int(fact.value)
+
+            case "totalEntityCount":
+                props.totalEntityCount = Int(fact.value)
+
+            case "crossCuttingPatterns":
+                let parts = parseStructuredValue(fact.value)
+                if let patternsStr = parts["patterns"] {
+                    props.crossCuttingPatterns = parseCrossCuttingPatterns(patternsStr)
+                }
+                if let t = parts["threshold"] { props.crossCuttingThreshold = Int(t) }
+
+            case "technologyDistribution":
+                let parts = parseStructuredValue(fact.value)
+                if let langsStr = parts["languages"] {
+                    props.languages = parseLanguageDistribution(langsStr)
+                }
+                props.primaryLanguage = parts["primary"]
+
+            case "moduleInteractionMap":
+                let parts = parseStructuredValue(fact.value)
+                if let edgesStr = parts["edges"] {
+                    props.moduleInteractions = parseModuleInteractions(edgesStr)
+                }
+
+            default:
+                break
+            }
+        }
+
+        return props
+    }
+
+    /// Parses cross-cutting patterns from the structured value string.
+    /// Format: "[EntityA(4), EntityB(3)]"
+    private static func parseCrossCuttingPatterns(_ text: String) -> [(name: String, referenceCount: Int)] {
+        var patterns: [(name: String, referenceCount: Int)] = []
+        let cleaned = text.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        guard !cleaned.isEmpty else { return patterns }
+        let items = cleaned.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        for item in items {
+            // Format: "EntityName(N)"
+            if let parenStart = item.firstIndex(of: "("),
+               let parenEnd = item.firstIndex(of: ")") {
+                let name = String(item[item.startIndex..<parenStart])
+                let countStr = String(item[item.index(after: parenStart)..<parenEnd])
+                if let count = Int(countStr) {
+                    patterns.append((name: name, referenceCount: count))
+                }
+            }
+        }
+        return patterns
+    }
+
+    /// Parses language distribution from the structured value string.
+    /// Format: "[Swift(92.5), Python(7.5)]"
+    private static func parseLanguageDistribution(_ text: String) -> [(name: String, percentage: Double)] {
+        var languages: [(name: String, percentage: Double)] = []
+        let cleaned = text.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        guard !cleaned.isEmpty else { return languages }
+        let items = cleaned.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        for item in items {
+            if let parenStart = item.firstIndex(of: "("),
+               let parenEnd = item.firstIndex(of: ")") {
+                let name = String(item[item.startIndex..<parenStart])
+                let pctStr = String(item[item.index(after: parenStart)..<parenEnd])
+                if let pct = Double(pctStr) {
+                    languages.append((name: name, percentage: pct))
+                }
+            }
+        }
+        return languages
+    }
+
+    /// Parses module interactions from the structured value string.
+    /// Format: "[ModA->ModB(calls:10, conformsTo:2, inherits:0)]"
+    private static func parseModuleInteractions(_ text: String) -> [(source: String, target: String, calls: Int, conformsTo: Int, inherits: Int)] {
+        var interactions: [(source: String, target: String, calls: Int, conformsTo: Int, inherits: Int)] = []
+        let cleaned = text.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        guard !cleaned.isEmpty else { return interactions }
+        let items = cleaned.split(separator: "],").map { $0.trimmingCharacters(in: .whitespaces) }
+        for item in items {
+            let cleanedItem = item.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+            // Format: "ModA->ModB(calls:10, conformsTo:2, inherits:0)"
+            if let arrowRange = cleanedItem.range(of: "->"),
+               let parenStart = cleanedItem.firstIndex(of: "(") {
+                let source = String(cleanedItem[cleanedItem.startIndex..<arrowRange.lowerBound])
+                let target = String(cleanedItem[arrowRange.upperBound..<parenStart])
+                let paramsStr = String(cleanedItem[cleanedItem.index(after: parenStart)...])
+                    .trimmingCharacters(in: CharacterSet(charactersIn: ")"))
+                let params = parseStructuredValue(paramsStr)
+                interactions.append((
+                    source: source,
+                    target: target,
+                    calls: Int(params["calls"] ?? "0") ?? 0,
+                    conformsTo: Int(params["conformsTo"] ?? "0") ?? 0,
+                    inherits: Int(params["inherits"] ?? "0") ?? 0
+                ))
+            }
+        }
+        return interactions
+    }
+
+    // MARK: - System Observation Builders
+
+    private static func buildArchitectureObservation(
+        properties: SystemProperties
+    ) -> SystemObservations.ArchitectureObservation? {
+        guard let style = properties.architectureStyle, style != "unknown" else { return nil }
+
+        var interpretation = style
+        if let evidence = properties.architectureEvidence {
+            interpretation = evidence
+        } else if let layerCount = properties.layerCount {
+            interpretation = "\(layerCount) layers"
+        }
+
+        return SystemObservations.ArchitectureObservation(
+            value: style,
+            interpretation: interpretation
+        )
+    }
+
+    private static func buildDependencyObservation(
+        properties: SystemProperties
+    ) -> SystemObservations.DependencyObservation? {
+        guard let layerCount = properties.layerCount, layerCount >= 2 else { return nil }
+
+        let hasCycles = properties.hasCycles ?? false
+        let violations = properties.violationCount ?? 0
+        let edges = properties.totalEdges ?? 0
+
+        let cycleText = hasCycles ? "cycles detected" : "no cycles"
+        let value = "\(layerCount) layers, \(cycleText), \(violations) violations"
+        let interpretation: String
+        if !hasCycles && violations == 0 {
+            interpretation = "clean dependency flow across \(edges) edges"
+        } else if hasCycles {
+            interpretation = "dependency cycles present — architectural concern"
+        } else {
+            interpretation = "\(violations) layer violation\(violations == 1 ? "" : "s") across \(edges) edges"
+        }
+
+        return SystemObservations.DependencyObservation(
+            value: value,
+            interpretation: interpretation
+        )
+    }
+
+    private static func buildScaleObservation(
+        properties: SystemProperties
+    ) -> SystemObservations.ScaleObservation? {
+        guard let moduleCount = properties.moduleCount, moduleCount >= 2 else { return nil }
+
+        let files = properties.totalFileCount ?? 0
+        let entities = properties.totalEntityCount ?? 0
+
+        let value = "\(moduleCount) modules, \(files) files, \(entities) entities"
+        let interpretation: String
+        if moduleCount <= 5 {
+            interpretation = "small system"
+        } else if moduleCount <= 15 {
+            interpretation = "medium-scale system"
+        } else {
+            interpretation = "large-scale system"
+        }
+
+        return SystemObservations.ScaleObservation(
+            value: value,
+            interpretation: interpretation
+        )
+    }
+
+    private static func buildCrossCuttingObservation(
+        properties: SystemProperties,
+        primaryEntity: String
+    ) -> SystemObservations.CrossCuttingObservation? {
+        guard let patterns = properties.crossCuttingPatterns, !patterns.isEmpty else { return nil }
+
+        let value = patterns.map { "\($0.name) (\($0.referenceCount) modules)" }
+            .joined(separator: ", ")
+
+        // Check if the primary entity is itself a cross-cutting concern.
+        let entityIsCrossCutting = patterns.contains { $0.name == primaryEntity }
+        let interpretation: String
+        if entityIsCrossCutting {
+            let count = patterns.first { $0.name == primaryEntity }?.referenceCount ?? 0
+            interpretation = "this entity is a cross-cutting concern referenced by \(count) modules"
+        } else {
+            interpretation = "\(patterns.count) cross-cutting concern\(patterns.count == 1 ? "" : "s") in the system"
+        }
+
+        return SystemObservations.CrossCuttingObservation(
+            value: value,
+            interpretation: interpretation
+        )
+    }
+
+    private static func buildInteractionObservation(
+        properties: SystemProperties,
+        moduleName: String?
+    ) -> SystemObservations.InteractionObservation? {
+        guard let interactions = properties.moduleInteractions, !interactions.isEmpty else { return nil }
+        guard let moduleName else { return nil }
+
+        // Filter to interactions involving the entity's module.
+        let relevant = interactions.filter { $0.source == moduleName || $0.target == moduleName }
+        guard !relevant.isEmpty else { return nil }
+
+        let value: String = relevant.prefix(3).map { edge -> String in
+            let total = edge.calls + edge.conformsTo + edge.inherits
+            return "\(edge.source)↔\(edge.target) (\(total) relationships)"
+        }.joined(separator: ", ")
+
+        let totalRelationships = relevant.reduce(0) { $0 + $1.calls + $1.conformsTo + $1.inherits }
+        let interpretation = "\(relevant.count) module connection\(relevant.count == 1 ? "" : "s"), \(totalRelationships) total relationships"
+
+        return SystemObservations.InteractionObservation(
+            value: value,
+            interpretation: interpretation
+        )
+    }
+
+    private static func buildTechnologyObservation(
+        properties: SystemProperties
+    ) -> SystemObservations.TechnologyObservation? {
+        guard let languages = properties.languages, languages.count >= 2 else { return nil }
+
+        let value: String = languages.prefix(3).map { lang -> String in
+            let pctStr = String(format: "%.0f%%", lang.percentage)
+            return "\(lang.name) \(pctStr)"
+        }.joined(separator: ", ")
+
+        let primary = properties.primaryLanguage ?? languages.first?.name ?? "unknown"
+        let interpretation = "\(primary)-dominant system"
+
+        return SystemObservations.TechnologyObservation(
+            value: value,
+            interpretation: interpretation
+        )
+    }
+
+    // MARK: - System Guidance Generation
+
+    private static func generateSystemGuidance(
+        architecture: SystemObservations.ArchitectureObservation?,
+        dependencies: SystemObservations.DependencyObservation?,
+        crossCutting: SystemObservations.CrossCuttingObservation?,
+        moduleName: String?
+    ) -> String {
+        var directives: [String] = []
+
+        if let architecture {
+            if let _ = moduleName {
+                directives.append("Frame this entity within a \(architecture.value) system architecture.")
+            } else {
+                directives.append("This is a \(architecture.value) system.")
+            }
+        }
+
+        if let dependencies {
+            let hasCycles = dependencies.value.contains("cycles detected")
+            if hasCycles {
+                directives.append("Note dependency cycles — this may affect change impact.")
+            } else if dependencies.value.contains("0 violations") {
+                directives.append("Dependencies flow cleanly — mention architectural position when relevant.")
+            }
+        }
+
+        if let crossCutting {
+            if crossCutting.interpretation.contains("this entity is a cross-cutting") {
+                directives.append("Emphasize cross-module impact — changes here affect multiple modules.")
+            }
+        }
+
+        if directives.isEmpty {
+            directives.append("Mention system context briefly where it aids understanding.")
+        }
+
+        return directives.joined(separator: " ")
+    }
+
+    // MARK: - Question-Aware Observation Ordering (M11)
+
+    /// Determines observation ordering based on question intent.
+    ///
+    /// This is lightweight prioritization within the reasoning layer only.
+    /// It does not introduce new classification — it reads the question text
+    /// and adjusts observation ordering/emphasis deterministically.
+    ///
+    /// - Parameter questionHint: Optional question text.
+    /// - Returns: Prioritized observation order, or nil for default ordering.
+    static func questionAwareOrder(
+        questionHint: String?
+    ) -> [SystemObservations.ObservationKey]? {
+        guard let question = questionHint, !question.isEmpty else { return nil }
+
+        let q = question.lowercased()
+
+        // "Why" questions → architecture + dependencies first
+        if q.contains("why") || q.contains("purpose of") || q.contains("reason") {
+            return [.architecture, .dependencies, .scale, .crossCutting, .interactions, .technologies]
+        }
+
+        // Impact/change questions → dependencies + cross-cutting first
+        if q.contains("impact") || q.contains("break") || q.contains("change")
+            || q.contains("affect") || q.contains("who calls") || q.contains("who uses") {
+            return [.dependencies, .crossCutting, .interactions, .architecture, .scale, .technologies]
+        }
+
+        // High-level overview → architecture + scale + technologies first
+        if q.contains("overview") || q.contains("architecture") || q.contains("big picture")
+            || q.contains("high-level") || q.contains("high level") || q.contains("how is this organized") {
+            return [.architecture, .scale, .technologies, .dependencies, .crossCutting, .interactions]
+        }
+
+        // Narrow/syntax → suppress most (nil prioritization = default order, but
+        // the reasoning engine should check this and skip system observations)
+        if q.contains("what does this line") || q.contains("syntax")
+            || q.contains("just this") || q.contains("only this") || q.contains("this specific") {
+            // Return nil to signal that system observations should be minimized.
+            // The engine uses shouldSuppressForNarrowQuestion() to check this.
+            return nil
+        }
+
+        // Default ordering
+        return nil
+    }
+
+    /// Returns true if the question is narrow/syntax-focused and system observations
+    /// should be suppressed or minimized.
+    static func shouldSuppressSystemForNarrowQuestion(questionHint: String?) -> Bool {
+        guard let question = questionHint, !question.isEmpty else { return false }
+        let q = question.lowercased()
+        return q.contains("what does this line") || q.contains("syntax")
+            || q.contains("just this") || q.contains("only this") || q.contains("this specific")
+    }
+
     // MARK: - Module Property Parsing
 
     /// Parsed module emergent properties from raw entity facts.
@@ -394,9 +1057,33 @@ enum ReasoningEngineSupport {
     }
 
     /// Parses a structured value string like "key1: val1, key2: val2" into a dictionary.
+    ///
+    /// Handles bracket-enclosed values that contain commas, e.g.:
+    /// "patterns: [EntityA(4), EntityB(3)], threshold: 3"
     private static func parseStructuredValue(_ text: String) -> [String: String] {
         var result: [String: String] = [:]
-        let pairs = text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        var pairs: [String] = []
+        var current = ""
+        var bracketDepth = 0
+
+        for char in text {
+            if char == "[" {
+                bracketDepth += 1
+                current.append(char)
+            } else if char == "]" {
+                bracketDepth -= 1
+                current.append(char)
+            } else if char == "," && bracketDepth == 0 {
+                pairs.append(current.trimmingCharacters(in: .whitespaces))
+                current = ""
+            } else {
+                current.append(char)
+            }
+        }
+        if !current.trimmingCharacters(in: .whitespaces).isEmpty {
+            pairs.append(current.trimmingCharacters(in: .whitespaces))
+        }
+
         for pair in pairs {
             let parts = pair.split(separator: ":", maxSplits: 1)
             if parts.count == 2 {

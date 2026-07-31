@@ -18,12 +18,12 @@ enum ContextStrategies {
 
     /// Strategy for "explain" purpose — balanced across all evidence stages.
     ///
-    /// Version 2.0.0 (M5): Adds a module stratum for module-level emergent
-    /// properties. Supersedes 1.0.0 (which is retained for diagnostic replay).
-    /// Budget rebalanced: direct 50%, relational 25%, module 10%, scope 15%.
+    /// Version 3.0.0 (M10): Merges module and system evidence into a single
+    /// "project" stratum. Supersedes 2.0.0. Budget rebalanced: direct 45%,
+    /// relational 25%, project 15%, scope 15%.
     ///
-    /// The module stratum selects scope-stage evidence at T1 (module-level
-    /// properties from ModuleBoundaryPass and ModuleEmergentPropertiesPass).
+    /// The project stratum selects scope-stage evidence at T1 (module-level
+    /// and system-level properties from composition and emergent passes).
     /// The file-scope stratum selects scope-stage evidence at T0 (file-level
     /// properties from frontends). This tier-based partition satisfies SI-2.
     static let explain = ContextStrategy(
@@ -33,7 +33,7 @@ enum ContextStrategies {
                 name: "direct",
                 priority: 0,
                 selectionCriteria: SelectionCriteria(stage: .direct),
-                budgetFraction: 0.5,
+                budgetFraction: 0.45,
                 fillPolicy: .distanceFirst,
                 essential: true
             ),
@@ -45,14 +45,14 @@ enum ContextStrategies {
                 fillPolicy: .distanceFirst
             ),
             StratumDefinition(
-                name: "module",
+                name: "project",
                 priority: 2,
                 selectionCriteria: SelectionCriteria(
                     stage: .scope,
                     minTier: .t1,
                     maxTier: .t1
                 ),
-                budgetFraction: 0.10,
+                budgetFraction: 0.15,
                 fillPolicy: .confidenceFirst
             ),
             StratumDefinition(
@@ -68,7 +68,7 @@ enum ContextStrategies {
         ],
         tierPreference: .ordering([.t0, .t1, .t2]),
         elisionPolicy: .stratumFirst,
-        version: "2.0.0"
+        version: "3.0.0"
     )
 
     /// Strategy for "improve" purpose — prioritizes direct evidence.
@@ -101,7 +101,7 @@ enum ContextStrategies {
 
     /// Strategy for "followup" purpose — mirrors explain for consistent context.
     ///
-    /// Version 2.0.0 (M5): Adds module stratum, matching explain strategy.
+    /// Version 3.0.0 (M10): Mirrors explain v3.0.0 with merged project stratum.
     /// Follow-up questions need the same evidence scope as the original
     /// explanation so the reasoning engine can reference what was discussed.
     static let followup = ContextStrategy(
@@ -111,7 +111,7 @@ enum ContextStrategies {
                 name: "direct",
                 priority: 0,
                 selectionCriteria: SelectionCriteria(stage: .direct),
-                budgetFraction: 0.5,
+                budgetFraction: 0.45,
                 fillPolicy: .distanceFirst,
                 essential: true
             ),
@@ -123,14 +123,14 @@ enum ContextStrategies {
                 fillPolicy: .distanceFirst
             ),
             StratumDefinition(
-                name: "module",
+                name: "project",
                 priority: 2,
                 selectionCriteria: SelectionCriteria(
                     stage: .scope,
                     minTier: .t1,
                     maxTier: .t1
                 ),
-                budgetFraction: 0.10,
+                budgetFraction: 0.15,
                 fillPolicy: .confidenceFirst
             ),
             StratumDefinition(
@@ -146,7 +146,7 @@ enum ContextStrategies {
         ],
         tierPreference: .ordering([.t0, .t1, .t2]),
         elisionPolicy: .stratumFirst,
-        version: "2.0.0"
+        version: "3.0.0"
     )
 
     /// All strategies to register at startup.

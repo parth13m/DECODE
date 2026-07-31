@@ -476,6 +476,53 @@ public struct RetrievalService: EvidenceRetrieval, Sendable {
                     }
                 }
             }
+
+            // M10: Gather system-scope evidence when scope >= .system.
+            // System entity is found by scanning active T1 units for kind:structure = "system".
+            if plan.scope >= .system {
+                let kindPredicate = PredicateIdentifier(name: "kind", domain: "structure")
+                let systemUnits = activeUnits.filter { unit in
+                    guard unit.status == .active,
+                          unit.tier == .t1,
+                          unit.predicate == kindPredicate,
+                          case .string(let value) = unit.value,
+                          value == "system"
+                    else { return false }
+                    return true
+                }
+
+                for systemUnit in systemUnits {
+                    guard case .entity(let systemRef) = systemUnit.subject else { continue }
+
+                    guard accumulator.canGather(stage: .scope, stageBudget: stageBudget) else {
+                        accumulator.markTruncated(.scope)
+                        return
+                    }
+
+                    let systemResult = await indexQuerying.queryEntity(systemRef, predicate: nil, tier: nil, status: .active)
+                    if systemResult.usedFallback {
+                        fallbackFamilies.insert(.entity)
+                    }
+
+                    for entry in systemResult.entries {
+                        guard accumulator.canGather(stage: .scope, stageBudget: stageBudget) else {
+                            accumulator.markTruncated(.scope)
+                            return
+                        }
+                        guard passesTierFilter(entry.tier, plan: plan) else { continue }
+
+                        if let unit = await dirAccess.unit(for: entry.unitId) {
+                            if unit.status == .active && passesConfidenceFilter(unit.confidence, plan: plan) {
+                                let provenance = EvidenceProvenance(stage: .scope, path: ["scope", systemRef.qualifiedName])
+                                let annotated = AnnotatedUnit(unit: unit, provenance: provenance, distance: 3)
+                                accumulator.add(annotated, stage: .scope)
+                            }
+                        } else {
+                            accumulator.excludedUnitCount += 1
+                        }
+                    }
+                }
+            }
         }
         accumulator.markCompleted(.scope)
     }

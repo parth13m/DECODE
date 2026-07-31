@@ -95,10 +95,11 @@ enum QuestionClassifier {
 
     /// Returns baseline (intent, scope) for a given purpose string.
     ///
-    /// These preserve existing behavior when no question text is available:
+    /// M10: explain and followup default to .system scope to include
+    /// project-level intelligence (system composition and emergent properties).
     /// - "improve" → (.explain, .local) — file-local evidence for code improvement
-    /// - "explain" → (.explain, .module) — module-scope for explanations
-    /// - "followup" → (.explain, .module) — default for follow-ups, refined by keywords
+    /// - "explain" → (.explain, .system) — system-scope for explanations
+    /// - "followup" → (.explain, .system) — default for follow-ups, refined by keywords
     private static func purposeDefaults(
         for purpose: String
     ) -> (intent: RetrievalIntent, scope: RetrievalScope) {
@@ -106,11 +107,11 @@ enum QuestionClassifier {
         case "improve":
             return (.explain, .local)
         case "explain":
-            return (.explain, .module)
+            return (.explain, .system)
         case "followup":
-            return (.explain, .module)
+            return (.explain, .system)
         default:
-            return (.explain, .module)
+            return (.explain, .system)
         }
     }
 
@@ -148,11 +149,11 @@ enum QuestionClassifier {
         }
 
         // Rule 3: Overview keywords — "how does this fit", "architecture", "overview"
-        // → .overview intent with balanced shallow traversal
+        // → .overview intent with system-scope traversal (M10)
         if matchesOverviewPattern(q) {
             return QuestionClassification(
                 intent: .overview,
-                scope: max(baseline.scope, .module),
+                scope: max(baseline.scope, .system),
                 matchedRule: .overviewKeywords
             )
         }

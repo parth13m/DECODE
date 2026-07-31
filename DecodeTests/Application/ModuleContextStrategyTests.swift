@@ -1,5 +1,5 @@
 // ModuleContextStrategyTests.swift — DecodeTests
-// M5: Tests for module-scope context strategy integration.
+// M5/M10: Tests for project-scope context strategy integration.
 // Verifies strategy definitions, purpose→scope mapping, budget allocation,
 // stratum partitioning, and backward compatibility.
 
@@ -12,20 +12,20 @@ import DIRCore
 
 // MARK: - Strategy Definition Tests
 
-@Suite("M5 Strategy Definitions")
-struct M5StrategyDefinitionTests {
+@Suite("M10 Strategy Definitions")
+struct M10StrategyDefinitionTests {
 
-    @Test("Explain strategy is version 2.0.0 with four strata")
-    func explainStrategyV2() {
+    @Test("Explain strategy is version 3.0.0 with four strata")
+    func explainStrategyV3() {
         let strategy = ContextStrategies.explain
-        #expect(strategy.version == "2.0.0")
+        #expect(strategy.version == "3.0.0")
         #expect(strategy.strata.count == 4)
     }
 
-    @Test("Followup strategy is version 2.0.0 with four strata")
-    func followupStrategyV2() {
+    @Test("Followup strategy is version 3.0.0 with four strata")
+    func followupStrategyV3() {
         let strategy = ContextStrategies.followup
-        #expect(strategy.version == "2.0.0")
+        #expect(strategy.version == "3.0.0")
         #expect(strategy.strata.count == 4)
     }
 
@@ -36,12 +36,12 @@ struct M5StrategyDefinitionTests {
         #expect(strategy.strata.count == 2)
     }
 
-    @Test("Explain strata names are direct, relational, module, scope")
+    @Test("Explain strata names are direct, relational, project, scope")
     func explainStrataNames() {
         let names = ContextStrategies.explain.strata.map(\.name)
         #expect(names.contains("direct"))
         #expect(names.contains("relational"))
-        #expect(names.contains("module"))
+        #expect(names.contains("project"))
         #expect(names.contains("scope"))
     }
 
@@ -63,28 +63,28 @@ struct M5StrategyDefinitionTests {
         #expect(direct.essential == true)
     }
 
-    @Test("Explain module stratum is not essential")
-    func explainModuleNotEssential() {
-        let module = ContextStrategies.explain.strata.first { $0.name == "module" }!
-        #expect(module.essential == false)
+    @Test("Explain project stratum is not essential")
+    func explainProjectNotEssential() {
+        let project = ContextStrategies.explain.strata.first { $0.name == "project" }!
+        #expect(project.essential == false)
     }
 
-    @Test("Improve has no module stratum")
-    func improveNoModuleStratum() {
+    @Test("Improve has no project stratum")
+    func improveNoProjectStratum() {
         let names = ContextStrategies.improve.strata.map(\.name)
-        #expect(!names.contains("module"))
+        #expect(!names.contains("project"))
     }
 }
 
 // MARK: - Budget Allocation Tests
 
-@Suite("M5 Budget Allocation")
-struct M5BudgetAllocationTests {
+@Suite("M10 Budget Allocation")
+struct M10BudgetAllocationTests {
 
-    @Test("Explain direct gets 50%")
+    @Test("Explain direct gets 45%")
     func explainDirectBudget() {
         let direct = ContextStrategies.explain.strata.first { $0.name == "direct" }!
-        #expect(direct.budgetFraction == 0.5)
+        #expect(direct.budgetFraction == 0.45)
     }
 
     @Test("Explain relational gets 25%")
@@ -93,10 +93,10 @@ struct M5BudgetAllocationTests {
         #expect(relational.budgetFraction == 0.25)
     }
 
-    @Test("Explain module gets 10%")
-    func explainModuleBudget() {
-        let module = ContextStrategies.explain.strata.first { $0.name == "module" }!
-        #expect(module.budgetFraction == 0.10)
+    @Test("Explain project gets 15%")
+    func explainProjectBudget() {
+        let project = ContextStrategies.explain.strata.first { $0.name == "project" }!
+        #expect(project.budgetFraction == 0.15)
     }
 
     @Test("Explain scope gets 15%")
@@ -108,8 +108,8 @@ struct M5BudgetAllocationTests {
 
 // MARK: - Stratum Priority Tests
 
-@Suite("M5 Stratum Priorities")
-struct M5StratumPriorityTests {
+@Suite("M10 Stratum Priorities")
+struct M10StratumPriorityTests {
 
     @Test("Direct has highest priority (0)")
     func directPriority() {
@@ -123,10 +123,10 @@ struct M5StratumPriorityTests {
         #expect(relational.priority == 1)
     }
 
-    @Test("Module is priority 2")
-    func modulePriority() {
-        let module = ContextStrategies.explain.strata.first { $0.name == "module" }!
-        #expect(module.priority == 2)
+    @Test("Project is priority 2")
+    func projectPriority() {
+        let project = ContextStrategies.explain.strata.first { $0.name == "project" }!
+        #expect(project.priority == 2)
     }
 
     @Test("Scope is priority 3 (lowest)")
@@ -144,15 +144,15 @@ struct M5StratumPriorityTests {
 
 // MARK: - Tier Partitioning Tests (SI-2)
 
-@Suite("M5 Tier Partitioning")
-struct M5TierPartitioningTests {
+@Suite("M10 Tier Partitioning")
+struct M10TierPartitioningTests {
 
-    @Test("Module stratum selects T1 scope evidence only")
-    func moduleStratumSelectsT1() {
-        let module = ContextStrategies.explain.strata.first { $0.name == "module" }!
-        #expect(module.selectionCriteria.stage == .scope)
-        #expect(module.selectionCriteria.minTier == .t1)
-        #expect(module.selectionCriteria.maxTier == .t1)
+    @Test("Project stratum selects T1 scope evidence only")
+    func projectStratumSelectsT1() {
+        let project = ContextStrategies.explain.strata.first { $0.name == "project" }!
+        #expect(project.selectionCriteria.stage == .scope)
+        #expect(project.selectionCriteria.minTier == .t1)
+        #expect(project.selectionCriteria.maxTier == .t1)
     }
 
     @Test("Scope stratum selects T0 scope evidence only")
@@ -162,40 +162,40 @@ struct M5TierPartitioningTests {
         #expect(scope.selectionCriteria.maxTier == .t0)
     }
 
-    @Test("Module and scope strata do not overlap (SI-2)")
-    func moduleScopeNoOverlap() {
-        let module = ContextStrategies.explain.strata.first { $0.name == "module" }!
+    @Test("Project and scope strata do not overlap (SI-2)")
+    func projectScopeNoOverlap() {
+        let project = ContextStrategies.explain.strata.first { $0.name == "project" }!
         let scope = ContextStrategies.explain.strata.first { $0.name == "scope" }!
 
-        // Module: minTier=.t1, maxTier=.t1
+        // Project: minTier=.t1, maxTier=.t1
         // Scope: maxTier=.t0
         // T1 > T0 → disjoint
-        let moduleMin = module.selectionCriteria.minTier!
+        let projectMin = project.selectionCriteria.minTier!
         let scopeMax = scope.selectionCriteria.maxTier!
-        #expect(moduleMin > scopeMax)
+        #expect(projectMin > scopeMax)
     }
 
-    @Test("Direct stratum is disjoint from module (different stage)")
-    func directDisjointFromModule() {
+    @Test("Direct stratum is disjoint from project (different stage)")
+    func directDisjointFromProject() {
         let direct = ContextStrategies.explain.strata.first { $0.name == "direct" }!
-        let module = ContextStrategies.explain.strata.first { $0.name == "module" }!
+        let project = ContextStrategies.explain.strata.first { $0.name == "project" }!
         #expect(direct.selectionCriteria.stage == .direct)
-        #expect(module.selectionCriteria.stage == .scope)
+        #expect(project.selectionCriteria.stage == .scope)
     }
 
-    @Test("Relational stratum is disjoint from module (different stage)")
-    func relationalDisjointFromModule() {
+    @Test("Relational stratum is disjoint from project (different stage)")
+    func relationalDisjointFromProject() {
         let relational = ContextStrategies.explain.strata.first { $0.name == "relational" }!
-        let module = ContextStrategies.explain.strata.first { $0.name == "module" }!
+        let project = ContextStrategies.explain.strata.first { $0.name == "project" }!
         #expect(relational.selectionCriteria.stage == .relational)
-        #expect(module.selectionCriteria.stage == .scope)
+        #expect(project.selectionCriteria.stage == .scope)
     }
 }
 
 // MARK: - Strategy Registration Tests
 
-@Suite("M5 Strategy Registration")
-struct M5StrategyRegistrationTests {
+@Suite("M10 Strategy Registration")
+struct M10StrategyRegistrationTests {
 
     @Test("Explain strategy passes SI-1 through SI-7 validation")
     func explainPassesValidation() {
@@ -249,13 +249,13 @@ struct M5StrategyRegistrationTests {
 
 // MARK: - Fill Policy Tests
 
-@Suite("M5 Fill Policies")
-struct M5FillPolicyTests {
+@Suite("M10 Fill Policies")
+struct M10FillPolicyTests {
 
-    @Test("Module stratum uses confidenceFirst fill policy")
-    func moduleUsesConfidenceFirst() {
-        let module = ContextStrategies.explain.strata.first { $0.name == "module" }!
-        #expect(module.fillPolicy == .confidenceFirst)
+    @Test("Project stratum uses confidenceFirst fill policy")
+    func projectUsesConfidenceFirst() {
+        let project = ContextStrategies.explain.strata.first { $0.name == "project" }!
+        #expect(project.fillPolicy == .confidenceFirst)
     }
 
     @Test("Direct stratum uses distanceFirst fill policy")
@@ -273,33 +273,32 @@ struct M5FillPolicyTests {
 
 // MARK: - Purpose → Scope Mapping Tests
 
-@Suite("M5 Purpose Scope Mapping")
-struct M5PurposeScopeMappingTests {
+@Suite("M10 Purpose Scope Mapping")
+struct M10PurposeScopeMappingTests {
 
-    @Test("Explain purpose maps to module scope")
-    func explainMapsToModule() {
-        // PipelineQueryService maps non-improve to .module
-        let scope: RetrievalScope = ("explain" == "improve") ? .local : .module
-        #expect(scope == .module)
+    @Test("Explain purpose defaults to system scope")
+    func explainDefaultsToSystem() {
+        let classification = QuestionClassifier.classify(purpose: "explain")
+        #expect(classification.scope == .system)
     }
 
-    @Test("Followup purpose maps to module scope")
-    func followupMapsToModule() {
-        let scope: RetrievalScope = ("followup" == "improve") ? .local : .module
-        #expect(scope == .module)
+    @Test("Followup purpose defaults to system scope")
+    func followupDefaultsToSystem() {
+        let classification = QuestionClassifier.classify(purpose: "followup")
+        #expect(classification.scope == .system)
     }
 
     @Test("Improve purpose maps to local scope")
     func improveMapsToLocal() {
-        let scope: RetrievalScope = ("improve" == "improve") ? .local : .module
-        #expect(scope == .local)
+        let classification = QuestionClassifier.classify(purpose: "improve")
+        #expect(classification.scope == .local)
     }
 }
 
 // MARK: - Followup Mirrors Explain Tests
 
-@Suite("M5 Followup Mirrors Explain")
-struct M5FollowupMirrorsExplainTests {
+@Suite("M10 Followup Mirrors Explain")
+struct M10FollowupMirrorsExplainTests {
 
     @Test("Followup has same strata names as explain")
     func sameStrataNames() {
@@ -323,8 +322,8 @@ struct M5FollowupMirrorsExplainTests {
 
 // MARK: - Backward Compatibility Tests
 
-@Suite("M5 Backward Compatibility")
-struct M5BackwardCompatibilityTests {
+@Suite("M10 Backward Compatibility")
+struct M10BackwardCompatibilityTests {
 
     @Test("Improve strategy is unchanged from v1")
     func improveUnchanged() {
@@ -337,12 +336,12 @@ struct M5BackwardCompatibilityTests {
         #expect(improve.strata[1].budgetFraction == 0.3)
     }
 
-    @Test("Explain v2 supersedes v1 when both registered")
-    func explainV2SupersedesV1() {
+    @Test("Explain v3 supersedes v2 when both registered")
+    func explainV3SupersedesV2() {
         let assemblyService = ContextAssemblyService()
 
-        // Register v1 first
-        let v1 = ContextStrategy(
+        // Register v2 first
+        let v2 = ContextStrategy(
             purpose: ContextPurpose("explain"),
             strata: [
                 StratumDefinition(
@@ -357,29 +356,43 @@ struct M5BackwardCompatibilityTests {
                     name: "relational",
                     priority: 1,
                     selectionCriteria: SelectionCriteria(stage: .relational),
-                    budgetFraction: 0.3,
+                    budgetFraction: 0.25,
                     fillPolicy: .distanceFirst
                 ),
                 StratumDefinition(
-                    name: "scope",
+                    name: "module",
                     priority: 2,
-                    selectionCriteria: SelectionCriteria(stage: .scope),
-                    budgetFraction: 0.2,
+                    selectionCriteria: SelectionCriteria(
+                        stage: .scope,
+                        minTier: .t1,
+                        maxTier: .t1
+                    ),
+                    budgetFraction: 0.10,
+                    fillPolicy: .confidenceFirst
+                ),
+                StratumDefinition(
+                    name: "scope",
+                    priority: 3,
+                    selectionCriteria: SelectionCriteria(
+                        stage: .scope,
+                        maxTier: .t0
+                    ),
+                    budgetFraction: 0.15,
                     fillPolicy: .distanceFirst
                 ),
             ],
             tierPreference: .ordering([.t0, .t1, .t2]),
             elisionPolicy: .stratumFirst,
-            version: "1.0.0"
+            version: "2.0.0"
         )
-        _ = assemblyService.register(v1)
+        _ = assemblyService.register(v2)
 
-        // Register v2
+        // Register v3
         _ = assemblyService.register(ContextStrategies.explain)
 
         let catalog = assemblyService.strategyCatalog()
         let activeExplain = catalog[ContextPurpose("explain")]!
-        #expect(activeExplain.version == "2.0.0")
+        #expect(activeExplain.version == "3.0.0")
         #expect(activeExplain.strata.count == 4)
     }
 
@@ -388,5 +401,49 @@ struct M5BackwardCompatibilityTests {
         #expect(ContextStrategies.explain.elisionPolicy == .stratumFirst)
         #expect(ContextStrategies.followup.elisionPolicy == .stratumFirst)
         #expect(ContextStrategies.improve.elisionPolicy == .stratumFirst)
+    }
+}
+
+// MARK: - Question Classifier M10 Tests
+
+@Suite("M10 Question Classifier")
+struct M10QuestionClassifierTests {
+
+    @Test("Overview keywords route to system scope")
+    func overviewKeywordsRouteToSystem() {
+        let classification = QuestionClassifier.classify(
+            purpose: "explain",
+            questionHint: "how does this fit into the architecture?"
+        )
+        #expect(classification.scope == .system)
+        #expect(classification.matchedRule == .overviewKeywords)
+    }
+
+    @Test("Impact keywords preserve at least system scope from baseline")
+    func impactKeywordsPreserveSystemScope() {
+        let classification = QuestionClassifier.classify(
+            purpose: "explain",
+            questionHint: "what calls this function?"
+        )
+        #expect(classification.scope >= .system)
+    }
+
+    @Test("Narrow keywords override to local scope")
+    func narrowKeywordsOverrideToLocal() {
+        let classification = QuestionClassifier.classify(
+            purpose: "explain",
+            questionHint: "what does this line do?"
+        )
+        #expect(classification.scope == .local)
+        #expect(classification.matchedRule == .narrowKeywords)
+    }
+
+    @Test("Improve purpose stays local regardless of question")
+    func improvePurposeStaysLocal() {
+        let classification = QuestionClassifier.classify(
+            purpose: "improve",
+            questionHint: "improve this code"
+        )
+        #expect(classification.scope == .local)
     }
 }

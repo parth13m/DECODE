@@ -59,20 +59,35 @@ struct ExplainReasoningEngine: ReasoningEngine, Sendable {
         let knowledge = ReasoningEngineSupport.extractKnowledge(from: allUnits)
 
         // M6: Extract module observations for module-aware framing.
-        let filtered = ReasoningEngineSupport.filterModuleEntities(from: knowledge)
+        // M11: Use filterProjectEntities which removes both module: and system: entities.
+        let filtered = ReasoningEngineSupport.filterProjectEntities(from: knowledge)
         let moduleObservations = ReasoningEngineSupport.extractModuleObservations(
             from: knowledge,
             codeEntityNames: filtered.entityNames
         )
 
+        // M11: Extract system observations for architecture-aware framing.
+        // Question-aware prioritization infrastructure is available via
+        // ReasoningEngineSupport.questionAwareOrder() but question text does not
+        // currently flow to reasoning engines (pipeline is frozen). Default
+        // observation ordering is used. Suppression and ordering can be activated
+        // when question context becomes available at this layer.
+        let systemObservations = ReasoningEngineSupport.extractSystemObservations(
+            from: knowledge,
+            codeEntityNames: filtered.entityNames,
+            moduleName: moduleObservations?.moduleName
+        )
+
         let systemPrompt = buildSystemPrompt(
             knowledge: knowledge,
             outputSpecification: outputSpecification,
-            hasModuleObservations: moduleObservations != nil
+            hasModuleObservations: moduleObservations != nil,
+            hasSystemObservations: systemObservations != nil
         )
         let userPrompt = buildUserPrompt(
             knowledge: knowledge,
             outputSpecification: outputSpecification,
+            systemObservations: systemObservations,
             moduleObservations: moduleObservations
         )
 
@@ -107,7 +122,8 @@ struct ExplainReasoningEngine: ReasoningEngine, Sendable {
     private func buildSystemPrompt(
         knowledge: ExtractedKnowledge,
         outputSpecification: OutputSpecification,
-        hasModuleObservations: Bool = false
+        hasModuleObservations: Bool = false,
+        hasSystemObservations: Bool = false
     ) -> String {
         let framework: ExplanationFramework
         if let lang = knowledge.detectedLanguage {
@@ -135,6 +151,11 @@ struct ExplainReasoningEngine: ReasoningEngine, Sendable {
             prompt += "\n\nProvide a comprehensive, detailed explanation covering all aspects."
         }
 
+        // M11: Add system observation instruction when system context is present.
+        if hasSystemObservations {
+            prompt += "\n\n" + SystemObservations.systemPromptInstruction
+        }
+
         // M6: Add module observation instruction when module context is present.
         if hasModuleObservations {
             prompt += "\n\n" + ModuleObservations.systemPromptInstruction
@@ -146,17 +167,23 @@ struct ExplainReasoningEngine: ReasoningEngine, Sendable {
     private func buildUserPrompt(
         knowledge: ExtractedKnowledge,
         outputSpecification: OutputSpecification,
+        systemObservations: SystemObservations? = nil,
         moduleObservations: ModuleObservations? = nil
     ) -> String {
         var sections: [String] = []
 
-        // M6: Inject module observations before entity facts.
+        // M11: Inject system observations first (broadest framing).
+        if let systemObservations {
+            sections.append(systemObservations.formatForPrompt())
+        }
+
+        // M6: Inject module observations after system observations.
         if let moduleObservations {
             sections.append(moduleObservations.formatForPrompt())
         }
 
-        // M6: Use filtered entity names/facts (module entities removed).
-        let filtered = ReasoningEngineSupport.filterModuleEntities(from: knowledge)
+        // M11: Use filterProjectEntities which removes both module: and system: entities.
+        let filtered = ReasoningEngineSupport.filterProjectEntities(from: knowledge)
 
         if !filtered.entityFacts.isEmpty {
             var entitySection = "## Entities\n"

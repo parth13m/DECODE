@@ -14,11 +14,11 @@ import RetrievalRuntime
 @Suite("QuestionClassifier: Purpose Defaults")
 struct QuestionClassifierPurposeDefaultTests {
 
-    @Test("explain purpose defaults to .explain intent with .module scope")
+    @Test("explain purpose defaults to .explain intent with .system scope")
     func testExplainDefault() {
         let result = QuestionClassifier.classify(purpose: "explain")
         #expect(result.intent == .explain)
-        #expect(result.scope == .module)
+        #expect(result.scope == .system)
         #expect(result.matchedRule == .purposeDefault)
     }
 
@@ -30,19 +30,19 @@ struct QuestionClassifierPurposeDefaultTests {
         #expect(result.matchedRule == .purposeDefault)
     }
 
-    @Test("followup purpose defaults to .explain intent with .module scope")
+    @Test("followup purpose defaults to .explain intent with .system scope")
     func testFollowupDefault() {
         let result = QuestionClassifier.classify(purpose: "followup")
         #expect(result.intent == .explain)
-        #expect(result.scope == .module)
+        #expect(result.scope == .system)
         #expect(result.matchedRule == .purposeDefault)
     }
 
-    @Test("unknown purpose defaults to .explain intent with .module scope")
+    @Test("unknown purpose defaults to .explain intent with .system scope")
     func testUnknownPurpose() {
         let result = QuestionClassifier.classify(purpose: "analyze")
         #expect(result.intent == .explain)
-        #expect(result.scope == .module)
+        #expect(result.scope == .system)
         #expect(result.matchedRule == .purposeDefault)
     }
 
@@ -71,7 +71,7 @@ struct QuestionClassifierImpactTests {
             questionHint: "who calls this method?"
         )
         #expect(result.intent == .impact)
-        #expect(result.scope == .module)
+        #expect(result.scope == .system)
         #expect(result.matchedRule == .impactKeywords)
     }
 
@@ -160,7 +160,7 @@ struct QuestionClassifierDependencyTests {
             questionHint: "what does this depend on?"
         )
         #expect(result.intent == .dependencies)
-        #expect(result.scope == .module)
+        #expect(result.scope == .system)
         #expect(result.matchedRule == .dependencyKeywords)
     }
 
@@ -217,7 +217,7 @@ struct QuestionClassifierOverviewTests {
             questionHint: "what is the architecture here?"
         )
         #expect(result.intent == .overview)
-        #expect(result.scope == .module)
+        #expect(result.scope == .system)
         #expect(result.matchedRule == .overviewKeywords)
     }
 
@@ -377,7 +377,7 @@ struct QuestionClassifierPriorityTests {
             questionHint: "can you explain the error handling?"
         )
         #expect(result.intent == .explain)
-        #expect(result.scope == .module)
+        #expect(result.scope == .system)
         #expect(result.matchedRule == .fallback)
     }
 }
@@ -409,7 +409,7 @@ struct QuestionClassifierDeterminismTests {
         )
         let result = QuestionClassifier.classify(purpose: "explain")
         #expect(result.intent == .explain)
-        #expect(result.scope == .module)
+        #expect(result.scope == .system)
         #expect(result.matchedRule == .purposeDefault)
     }
 }
@@ -578,7 +578,7 @@ struct QuestionClassifierBenchmarkTests {
                 questionHint: benchCase.questionHint
             )
             #expect(classification.intent == .explain)
-            #expect(classification.scope == .module)
+            #expect(classification.scope == .system)
             #expect(classification.matchedRule == .purposeDefault)
         }
     }

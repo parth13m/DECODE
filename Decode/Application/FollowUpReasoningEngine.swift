@@ -81,6 +81,8 @@ struct FollowUpReasoningEngine: ReasoningEngine, Sendable {
         - Do NOT use markdown headings (## or ###).
 
         \(ModuleObservations.followUpContextInstruction)
+
+        \(SystemObservations.followUpContextInstruction)
         """
 
     // MARK: - Conversation State Schema
@@ -143,16 +145,22 @@ struct FollowUpReasoningEngine: ReasoningEngine, Sendable {
         allUnits: [ContextUnit],
         outputSpecification: OutputSpecification
     ) async throws -> ReasoningEngineOutput {
-        // M6: Extract module observations for module-aware framing.
-        let filtered = ReasoningEngineSupport.filterModuleEntities(from: knowledge)
+        // M6/M11: Extract module and system observations.
+        let filtered = ReasoningEngineSupport.filterProjectEntities(from: knowledge)
         let moduleObservations = ReasoningEngineSupport.extractModuleObservations(
             from: knowledge,
             codeEntityNames: filtered.entityNames
         )
+        let systemObservations = ReasoningEngineSupport.extractSystemObservations(
+            from: knowledge,
+            codeEntityNames: filtered.entityNames,
+            moduleName: moduleObservations?.moduleName
+        )
 
         let contextSummary = buildContextSummary(
             knowledge: knowledge,
-            moduleObservations: moduleObservations
+            moduleObservations: moduleObservations,
+            systemObservations: systemObservations
         )
 
         guard let provider = await aiProvider() else {
@@ -166,10 +174,12 @@ struct FollowUpReasoningEngine: ReasoningEngine, Sendable {
         let systemPrompt = buildInitialSystemPrompt(
             knowledge: knowledge,
             outputSpecification: outputSpecification,
-            hasModuleObservations: moduleObservations != nil
+            hasModuleObservations: moduleObservations != nil,
+            hasSystemObservations: systemObservations != nil
         )
         let userPrompt = buildInitialUserPrompt(
             knowledge: knowledge,
+            systemObservations: systemObservations,
             moduleObservations: moduleObservations
         )
 
@@ -275,7 +285,8 @@ struct FollowUpReasoningEngine: ReasoningEngine, Sendable {
     private func buildInitialSystemPrompt(
         knowledge: ExtractedKnowledge,
         outputSpecification: OutputSpecification,
-        hasModuleObservations: Bool = false
+        hasModuleObservations: Bool = false,
+        hasSystemObservations: Bool = false
     ) -> String {
         let framework: ExplanationFramework
         if let lang = knowledge.detectedLanguage {
@@ -303,6 +314,11 @@ struct FollowUpReasoningEngine: ReasoningEngine, Sendable {
             prompt += "\n\nProvide a comprehensive, detailed explanation covering all aspects."
         }
 
+        // M11: Add system observation instruction when system context is present.
+        if hasSystemObservations {
+            prompt += "\n\n" + SystemObservations.systemPromptInstruction
+        }
+
         // M6: Add module observation instruction when module context is present.
         if hasModuleObservations {
             prompt += "\n\n" + ModuleObservations.systemPromptInstruction
@@ -313,17 +329,23 @@ struct FollowUpReasoningEngine: ReasoningEngine, Sendable {
 
     private func buildInitialUserPrompt(
         knowledge: ExtractedKnowledge,
+        systemObservations: SystemObservations? = nil,
         moduleObservations: ModuleObservations? = nil
     ) -> String {
         var sections: [String] = []
 
-        // M6: Inject module observations before entity facts.
+        // M11: Inject system observations first (broadest framing).
+        if let systemObservations {
+            sections.append(systemObservations.formatForPrompt())
+        }
+
+        // M6: Inject module observations after system observations.
         if let moduleObservations {
             sections.append(moduleObservations.formatForPrompt())
         }
 
-        // M6: Use filtered entity names/facts (module entities removed).
-        let filtered = ReasoningEngineSupport.filterModuleEntities(from: knowledge)
+        // M11: Use filterProjectEntities which removes both module: and system: entities.
+        let filtered = ReasoningEngineSupport.filterProjectEntities(from: knowledge)
 
         if !filtered.entityFacts.isEmpty {
             var entitySection = "## Entities\n"
@@ -357,13 +379,15 @@ struct FollowUpReasoningEngine: ReasoningEngine, Sendable {
     /// Builds a text summary of the context frame for conversation state.
     ///
     /// M6: Includes a compact module summary line when module observations are present.
-    /// This makes module context available for follow-up turns without re-synthesis.
+    /// M11: Includes a compact system summary line when system observations are present.
+    /// This makes project context available for follow-up turns without re-synthesis.
     private func buildContextSummary(
         knowledge: ExtractedKnowledge,
-        moduleObservations: ModuleObservations? = nil
+        moduleObservations: ModuleObservations? = nil,
+        systemObservations: SystemObservations? = nil
     ) -> String {
-        // M6: Use filtered entities (module entities excluded from summary).
-        let filtered = ReasoningEngineSupport.filterModuleEntities(from: knowledge)
+        // M11: Use filterProjectEntities (removes both module: and system: entities).
+        let filtered = ReasoningEngineSupport.filterProjectEntities(from: knowledge)
 
         var lines: [String] = []
 
@@ -376,6 +400,11 @@ struct FollowUpReasoningEngine: ReasoningEngine, Sendable {
 
         for rel in knowledge.relationships {
             lines.append("\(rel.source) —[\(rel.predicate)]→ \(rel.target)")
+        }
+
+        // M11: Append compact system summary for follow-up context.
+        if let systemObservations {
+            lines.append(systemObservations.formatForContextSummary())
         }
 
         // M6: Append compact module summary for follow-up context.

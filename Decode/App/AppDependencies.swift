@@ -435,6 +435,30 @@ final class AppDependencies {
                 #endif
             }
 
+            // Register system composition pass (M8: System entity creation).
+            do {
+                _ = try await understandingSystem.registerPassHandler(
+                    SystemCompositionPass.contract,
+                    handler: SystemCompositionPass.handler
+                )
+            } catch {
+                #if DEBUG
+                print("[DEBUG Startup] System composition pass registration failed: \(error)")
+                #endif
+            }
+
+            // Register system emergent properties pass (M9: System-level emergence).
+            do {
+                _ = try await understandingSystem.registerPassHandler(
+                    SystemEmergentPropertiesPass.contract,
+                    handler: SystemEmergentPropertiesPass.handler
+                )
+            } catch {
+                #if DEBUG
+                print("[DEBUG Startup] System emergent properties pass registration failed: \(error)")
+                #endif
+            }
+
             // Register context assembly strategies (DDS-006 CS-R1).
             for strategy in ContextStrategies.all {
                 let result = understandingSystem.strategyManagement.register(strategy)

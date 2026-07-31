@@ -212,15 +212,34 @@ File → Entity containment (`contains` predicate) migrated from CrossFileResolu
 
 #### Milestone 8: System Entity Creation via Composition Pass
 
-- **Status:** Not Started
+- **Status:** Complete (2026-07-31)
 - **Dependencies:** M7 (Module Intelligence complete)
-- **Notes:** System entity represents the entire codebase (DAS-004). Created by module → system composition pass (DAS-006). Carries properties that no individual module possesses.
+- **Implementation:** `SystemCompositionPass` at `Decode/App/SystemCompositionPass.swift`
+- **Tests:** 35 tests across 8 suites in `DecodeTests/Application/SystemCompositionPassTests.swift`
+- **Registration:** `AppDependencies.performDeferredStartup()` — registered after ModuleEmergentPropertiesPass, before context strategy registration.
+- **Notes:** T1 deterministic composition pass with `perSystem` scope. Creates a single `system:<name>` entity from all T1 module entities produced by ModuleBoundaryPass. Follows the exact `enum` + static `contract`/`handler`/`identity` pattern established by ModuleBoundaryPass and ModuleEmergentPropertiesPass.
+- **Contract:** Identity `"system-composition-pass"` v1.0. Input: T1 predicates (`kind:structure`, `name:structure`, `path:structure`, `fileCount:composition`, `entityCount:composition`, `languageDistribution:composition`). Output: T1 predicates (`kind:structure`, `name:structure`, `path:structure`, `moduleCount:composition`, `totalFileCount:composition`, `totalEntityCount:composition`, `languageDistribution:composition`, `contains:containment`). Scope: `.perSystem`. `isComposition: true`. Dependencies: `["module-boundary-pass"]`.
+- **Handler phases:** Phase 1 — discover modules from T1 `kind:structure = "module"`. Phase 2 — collect metadata (paths, fileCounts, entityCounts, languageDistribution). Phase 3 — derive system name from common root path. Phase 4 — emit outputs (kind, name, path, moduleCount, totalFileCount, totalEntityCount, languageDistribution, contains).
+- **System naming:** `deriveSystemName(from:)` computes the longest common directory prefix across all module paths, takes its last path component. Falls back to `"system"` for empty paths or filesystem root. `commonRootPath(from:)` handles single-module (parent directory), multi-module (LCP), absolute/relative paths.
+- **Test suites:** SCPContractTests (9), SCPMinimalTests (3), SCPMultiModuleTests (6), SCPMetadataTests (5), SCPNamingTests (5), SCPOutputQualityTests (4), SCPIdempotencyTests (2), SCPUnitStatusTests (1).
 
 #### Milestone 9: System Emergent Properties
 
-- **Status:** Not Started
-- **Dependencies:** M8 (System entity exists in DIR)
-- **Notes:** Architecture style, dependency direction, cross-cutting patterns, module interaction map, technology distribution. Emergent from module-level properties.
+- **Status:** Complete (2026-07-31)
+- **Dependencies:** M8 (System entity exists in DIR), M4 (module emergent properties)
+- **Implementation:** `SystemEmergentPropertiesPass` at `Decode/App/SystemEmergentPropertiesPass.swift`
+- **Tests:** 48 tests across 12 suites in `DecodeTests/Application/SystemEmergentPropertiesPassTests.swift`
+- **Registration:** `AppDependencies.performDeferredStartup()` — registered after SystemCompositionPass, before context strategy registration.
+- **Notes:** T1 enrichment pass with `perSystem` scope. Enriches the existing `system:*` entity (created by M8) with 5 emergent properties. `isComposition: false` (DAS-006 CP-2). Dependencies: `system-composition-pass`, `module-emergent-properties-pass`. Follows the `enum` + static `contract`/`handler`/`identity` pattern.
+- **Contract:** Identity `"system-emergent-properties-pass"` v1.0. Input: T0/T1 (`kind:structure`, `contains:containment`, `languageDistribution:composition`, `calls/conformsTo/inherits:relationship`, `cohesion/publicInterface/interactionProfile/boundaryProfile/moduleRole:emergence`). Output: T1 (`architectureStyle:emergence`, `dependencyDirection:emergence`, `crossCuttingPatterns:emergence`, `moduleInteractionMap:emergence`, `technologyDistribution:emergence`). Scope: `.perSystem`. `isComposition: false`. `isIdempotent: true`.
+- **Handler phases:** Phase 1 — identify system entity, modules, build entity→module mapping. Phase 2 — build module interaction map from T1 cross-module relationships, track cross-cutting entity references. Phase 3 — collect module emergent properties and language distributions. Phase 4 — compute all 5 emergent properties. Phase 5 — emit outputs.
+- **Emergent properties:**
+  1. **moduleInteractionMap** (`emergence`): Typed interaction matrix between modules. Keys are `"srcModule→tgtModule"`, values are per-type counts (`calls`, `conformsTo`, `inherits`). Plus `edgeCount`. Deterministic, `.high` confidence.
+  2. **dependencyDirection** (`emergence`): Directed module dependency graph. Topological sort via Kahn's algorithm assigns depth per module. Detects cycles (`hasCycles`), counts violations (`violationCount`), reports `layerCount` and `layers` string. Deterministic, `.high` confidence.
+  3. **crossCuttingPatterns** (`emergence`): Entities referenced by ≥3 distinct source modules. Classified as `protocol_boundary` (conformsTo only), `shared_service` (calls only), `shared_base` (inherits only), or `shared_dependency` (mixed). Includes `threshold` field for transparency. Heuristic, `.moderate` confidence.
+  4. **technologyDistribution** (`emergence`): System-wide language profile aggregated from module distributions. Includes `primaryLanguage` (lexicographic tiebreaker), `languageCount`, and per-language file counts. Deterministic, `.high` confidence.
+  5. **architectureStyle** (`emergence`): Structural classification with supporting `evidence` string. Styles: `layered` (≥3 layers, 0 violations), `layered_with_violations` (≥3 layers, ≤20% violation edges), `hub_and_spoke` (one module receives ≥50% inbound), `modular` (peer modules, <3 layers), `entangled` (cycles), `isolated` (no cross-module deps or single module), `mixed` (fallback). Heuristic, `.moderate` confidence.
+- **Test suites:** SEP Contract Tests (9), SEP Module Interaction Map (6), SEP Technology Distribution (4), SEP Dependency Direction (8), SEP Cross-Cutting Patterns (5), SEP Architecture Style (5), SEP Single Module (2), SEP Empty Input (2), SEP Output Quality (4), SEP Idempotency (2), SEP Inactive Units (1), SEP Layered Architecture Integration (1).
 
 #### Milestone 10: Project-Scope Context Strategy
 
@@ -289,17 +308,20 @@ File → Entity containment (`contains` predicate) migrated from CrossFileResolu
                   │ M8: System    │
                   │ Entity        │
                   │ Creation      │
+                  │ (COMPLETE)    │
                   └───────┬───────┘
                           │
                   ┌───────┴───────┐
                   │ M9: System    │
                   │ Emergent      │
                   │ Properties    │
+                  │ (COMPLETE)    │
                   └───────┬───────┘
                           │
                   ┌───────┴───────┐
                   │ M10: Project- │
                   │ Scope Context │
+                  │ (COMPLETE)    │
                   └───────┬───────┘
                           │
                   ┌───────┴───────┐
@@ -324,13 +346,80 @@ File → Entity containment (`contains` predicate) migrated from CrossFileResolu
 
 ## Current Immediate Task
 
-### Milestone 8: System Entity Creation via Composition Pass
+### Milestone 12: Project Intelligence Validation
 
-**Purpose:** Create a system-level entity that represents the entire codebase, aggregating module-level entities (DAS-004). This is the first milestone of Phase 2.
+**Purpose:** End-to-end validation of the complete Project Intelligence stack (M8–M11). Verify that system composition, emergent properties, project-scope retrieval, and architecture-aware explanation work together correctly in production scenarios.
 
-**Dependencies:** M7 (Module Intelligence Validation — COMPLETE). The complete Module Intelligence stack is validated and operational.
+**Dependencies:** M11 (Architecture-Aware Explanation — COMPLETE).
 
-**Not started.** See Phase 2 milestones above for specification.
+**Not started.**
+
+---
+
+## Completed Milestone: M11 — Architecture-Aware Explanation
+
+**Completed:** 2026-07-31
+
+**What was implemented:**
+
+1. **SystemObservations infrastructure** — `SystemObservations` struct in `ReasoningEngineSupport.swift` (~180 lines) with 6 observation types (ArchitectureObservation, DependencyObservation, ScaleObservation, CrossCuttingObservation, InteractionObservation, TechnologyObservation), `formatForPrompt()` with prioritized ordering support, `formatForContextSummary()`, `systemPromptInstruction`, `followUpContextInstruction`, and `ObservationKey` enum.
+
+2. **System observation extraction pipeline** — `extractSystemObservations(from:codeEntityNames:moduleName:questionHint:)` in `ReasoningEngineSupport`. Full extraction: system entity discovery → property parsing → suppression rules (trivial system, unknown architecture, single language, insufficient layers) → observation building → guidance generation → question-aware ordering.
+
+3. **System property parsing** — `SystemProperties` struct and `parseSystemProperties(from:)` parsing 8 predicate types: `architectureStyle`, `dependencyDirection`, `moduleCount`, `totalFileCount`, `totalEntityCount`, `crossCuttingPatterns`, `technologyDistribution`, `moduleInteractionMap`. Bracket-aware `parseStructuredValue()` fix (was splitting commas inside `[...]`).
+
+4. **filterProjectEntities** — `filterProjectEntities(from:)` replaces `filterModuleEntities(from:)` in ExplainReasoningEngine and FollowUpReasoningEngine. Removes both `module:*` AND `system:*` entities from raw entity facts. Module-only filter retained for backward compatibility.
+
+5. **ExplainReasoningEngine updates** — System observation extraction in `reason()`, `hasSystemObservations` parameter in `buildSystemPrompt()`, `systemObservations` parameter in `buildUserPrompt()`. System observations injected before module observations. Uses `filterProjectEntities`.
+
+6. **FollowUpReasoningEngine updates** — System observation extraction in `handleInitialInvocation()`, system-aware `buildInitialSystemPrompt()`, `buildInitialUserPrompt()`, `buildContextSummary()`. Follow-up system prompt includes `SystemObservations.followUpContextInstruction`. Context summary encodes system info for follow-up turns.
+
+7. **Question-aware observation prioritization** — `questionAwareOrder(questionHint:)` and `shouldSuppressSystemForNarrowQuestion(questionHint:)` infrastructure. Implemented and tested as standalone static methods. Activated at default ordering since question text doesn't flow to frozen reasoning engines (noted in code comment).
+
+8. **6 observation builders** — `buildArchitectureObservation`, `buildDependencyObservation`, `buildScaleObservation`, `buildCrossCuttingObservation` (entity-aware: detects if the explained entity is itself cross-cutting), `buildInteractionObservation` (module-filtered), `buildTechnologyObservation`.
+
+9. **System guidance generation** — `generateSystemGuidance(architecture:dependencies:crossCutting:moduleName:)` with architecture framing, cycle detection concern, cross-cutting impact emphasis, and generic fallback.
+
+10. **Comprehensive test coverage** — 50 tests across 8 suites in `SystemObservationTests.swift`: system property parsing (7), observation extraction (7), observation builders (8), guidance generation (4), prompt formatting (5), filterProjectEntities (3), question-aware ordering (8), engine integration (8). All pass.
+
+**Files modified:**
+- `Decode/Application/ReasoningEngineSupport.swift` — SystemObservations struct, extractSystemObservations, filterProjectEntities, parseSystemProperties, 6 observation builders, guidance generation, question-aware ordering, bracket-aware parseStructuredValue
+- `Decode/Application/ExplainReasoningEngine.swift` — reason(), buildSystemPrompt(), buildUserPrompt() updated for system observations
+- `Decode/Application/FollowUpReasoningEngine.swift` — handleInitialInvocation(), buildInitialSystemPrompt(), buildInitialUserPrompt(), buildContextSummary(), followUpSystemPrompt updated for system observations
+
+**Files created:**
+- `DecodeTests/Application/SystemObservationTests.swift` — 50 tests across 8 suites
+
+**ImproveReasoningEngine intentionally NOT modified** — decision 24 extended to system level. Improve strategy has no project stratum and maps to `.local` scope, so no system evidence reaches improve context frames.
+
+**Bug fixed:** `parseStructuredValue()` was splitting on commas naively, breaking values containing bracket-enclosed lists like `[Swift(92.5), Python(7.5)]`. Fixed with bracket-depth tracking.
+
+---
+
+## Completed Milestone: M10 — Project-Scope Context Strategy
+
+**Completed:** 2026-07-31
+
+**What was implemented:**
+
+1. **RetrievalRuntime system-scope evidence gathering** — Added `if plan.scope >= .system` block to `gatherScopeEvidence()` that scans active T1 units for `kind:structure = "system"`, queries the Entity Index for all system entity properties, and annotates at distance 3 with provenance `["scope", "system:<name>"]`. This is an additive extension following the M5 precedent (decision 9).
+
+2. **Context strategies v3.0.0** — Superseded explain and followup strategies from v2.0.0 to v3.0.0. The "module" stratum is renamed to "project" and its budget increased from 10% to 15%. Direct stratum reduced from 50% to 45%. The project stratum continues to select T1 scope-stage evidence (SI-2 compliant via tier partition). Improve strategy unchanged at v1.0.0.
+
+3. **QuestionClassifier system-scope routing** — Explain and followup purpose defaults changed from `.module` to `.system`. Overview keywords route to `max(baseline.scope, .system)`. Improve remains at `.local`.
+
+4. **Comprehensive test coverage** — 4 new system scope evidence tests (RetrievalRuntimeTests), 4 new M10 question classifier tests, updated 10 strategy definition suites from M5→M10 naming, updated all QuestionClassifier tests for `.system` defaults, updated M7-V7 validation tests for v3.0.0 strategy.
+
+**Files modified:**
+- `Decode/Understanding/RetrievalRuntime/RetrievalRuntime.swift` — system-scope evidence block
+- `Decode/App/ContextStrategies.swift` — v3.0.0 explain + followup strategies
+- `Decode/App/QuestionClassifier.swift` — `.system` defaults, overview → `.system`
+- `DecodeTests/Application/ModuleContextStrategyTests.swift` — full rewrite for M10
+- `DecodeTests/Application/QuestionClassifierTests.swift` — `.system` scope expectations
+- `DecodeTests/Application/ModuleIntelligenceValidationTests.swift` — v3.0.0 validation
+- `UnderstandingTests/RetrievalRuntimeTests/RetrievalRuntimeTests.swift` — system scope tests
+
+**No files created. No files deleted.**
 
 ---
 
@@ -354,7 +443,7 @@ These decisions are load-bearing. Future work must preserve them.
 
 8. **No downstream compensation for upstream defects.** Fix defects at the earliest phase that introduced them (IAG-004 §20).
 
-9. **Project Intelligence code primarily lives in the application layer.** `Decode/Application/` or `Decode/App/`. No new framework targets. M5 is the sole exception: `RetrievalRuntime.gatherScopeEvidence()` received an additive extension to gather module-scope evidence when `plan.scope >= .module`. This was necessary because evidence gathering is a retrieval-layer responsibility (DDS-005). The extension is additive — existing `.local` behavior is unchanged.
+9. **Project Intelligence code primarily lives in the application layer.** `Decode/Application/` or `Decode/App/`. No new framework targets. Two exceptions: `RetrievalRuntime.gatherScopeEvidence()` received additive extensions — M5 added module-scope evidence when `plan.scope >= .module`, M10 added system-scope evidence when `plan.scope >= .system`. These are necessary because evidence gathering is a retrieval-layer responsibility (DDS-005). Both extensions are additive — existing `.local` and `.module` behavior is unchanged.
 
 10. **Frontend relationship targets are symbolic names.** `FrontendOutputConversion` produces `EntityReference(qualifiedName: rel.targetName)` where `targetName` is the unqualified symbolic name from the parser (e.g., `"resolve"`, `"Sendable"`). M1 must resolve these to qualified cross-file references.
 
@@ -386,6 +475,44 @@ These decisions are load-bearing. Future work must preserve them.
 
 24. **ImproveReasoningEngine is unmodified.** Improve's v1.0.0 strategy has no module stratum, PipelineQueryService maps improve to `.local` scope, so no module evidence ever reaches improve context frames. No observation logic needed.
 
+25. **SystemCompositionPass depends only on ModuleBoundaryPass.** Unlike ModuleEmergentPropertiesPass (which depends on both ModuleBoundaryPass and CrossFileResolutionPass), the system composition pass needs only module entities and their structural metadata. Cross-file relationships are not consumed at the system composition level — they will be consumed by M9 (System Emergent Properties).
+
+26. **System entity naming is deterministic from module paths.** `deriveSystemName(from:)` computes the longest common directory prefix of all module paths, then takes the last path component. Falls back to `"system"` when the common root is `/` (filesystem root) or empty. Single-module systems use the parent directory name. This is consistent with `module:<dirName>` naming convention.
+
+27. **SystemEmergentPropertiesPass is an enrichment pass, not a composition pass.** `isComposition: false` because the system entity already exists (created by M8). This follows DAS-006 CP-2: "Composition passes enrich scope-level entities when they already exist." Same pattern as M4's ModuleEmergentPropertiesPass enriching module entities created by M2/M3.
+
+28. **Deterministic vs heuristic confidence split for system properties.** Three properties are deterministic (`.high` confidence): `moduleInteractionMap`, `dependencyDirection`, `technologyDistribution` — directly derived from factual graph data. Two are heuristic (`.moderate` confidence): `architectureStyle`, `crossCuttingPatterns` — require threshold-based detection or classification from graph shape. This follows the M4 precedent where `moduleRole` gets `.moderate` confidence.
+
+29. **Heuristic properties include structured supporting evidence.** `architectureStyle` includes an `evidence` string explaining why the classification was produced. `crossCuttingPatterns` includes the `threshold` value used for detection. This makes heuristic outputs transparent to downstream consumers without requiring re-computation.
+
+30. **Cross-cutting threshold is 3 modules.** An entity referenced by ≥3 distinct source modules is considered cross-cutting. Threshold of 3 excludes normal 2-module coupling while catching genuine cross-cutting concerns. This is an implementation constant (like M1's ambiguity threshold), not a configuration parameter.
+
+31. **Dependency direction uses topological sort for layer assignment.** Kahn's algorithm assigns depth: modules with zero outbound cross-module dependencies are depth 0 (leaf layer). Cycles are detected when no modules can be assigned in a round — remaining modules get depth -1. Violations are edges where the target has a higher depth than the source (lower layer depending on higher layer).
+
+32. **Entity→module mapping reuses M4's path computation algorithm.** Same approach as ModuleEmergentPropertiesPass Phase 1: T0 `kind:structure` entities provide `filePath` via `.direct` grounding → `deletingLastPathComponent` → `lastPathComponent` = module name. Implementation debt (decision 20) but consistent and correct.
+
+33. **Merged "project" stratum replaces separate "module" and "system" strata.** SI-2 mutual exclusivity (`criteriaCouldOverlap()`) checks stage, predicateDomains, and tier ranges — but NOT maxDistance. Two strata sharing `stage: .scope, minTier: .t1, maxTier: .t1` would be rejected regardless of distance differences. The merged "project" stratum selects all T1 scope evidence (module at distance 2, system at distance 3) in a single budget pool.
+
+34. **System evidence distance is 3.** Following the containment hierarchy: Entity→File=1, File→Module=2, Module→System=3. This is consistent with decision 19 (module distance = 2) and enables distance-based ordering within the project stratum.
+
+35. **System entity discovery uses active unit scan, not path computation.** Unlike module entities (decision 20), system entities are found by scanning active T1 units for `kind:structure = "system"`. This is correct because there is typically one system entity, and the system entity's qualified name (`system:<name>`) cannot be derived from the anchor's file path.
+
+36. **Purpose defaults upgraded from `.module` to `.system`.** Explain and followup now default to `.system` scope, enabling system-level evidence retrieval without requiring architectural keywords. Improve remains `.local`. This is a behavioral change — all non-improve pipeline queries now gather file, module, AND system evidence.
+
+37. **Budget rebalanced: direct 50%→45%, project (was module) 10%→15%.** The project stratum now serves both module and system evidence, justifying the increased budget. Direct stratum donates 5% — acceptable because module/system context provides architectural perspective that reduces the need for raw entity evidence.
+
+38. **System observations follow the M6 ModuleObservations pattern.** Same pipeline: extract → suppress → interpret → generate guidance → format for prompt. Same integration points: system prompt instruction, user prompt observation block, context summary for follow-up state. This is a deliberate architectural extension, not a new pattern.
+
+39. **System observations injected BEFORE module observations in prompts.** Order: SYSTEM OBSERVATIONS → MODULE OBSERVATIONS → Entities → Relationships. System provides the broadest framing (architecture, scale), module narrows to the entity's immediate context, entities provide the detail. This mirrors the containment hierarchy: system > module > entity.
+
+40. **filterProjectEntities replaces filterModuleEntities in explain and followup engines.** Both `module:*` and `system:*` entities are consumed by their respective observation layers. Neither should appear as raw facts in the prompt's `## Entities` section. The module-only filter is retained for backward compatibility.
+
+41. **Question-aware ordering is infrastructure-ready but not active.** `questionAwareOrder()` and `shouldSuppressSystemForNarrowQuestion()` are implemented and tested as standalone static methods. They cannot be activated because question text doesn't flow to reasoning engines (pipeline is frozen). The infrastructure is ready for activation when question context becomes available at this layer.
+
+42. **FollowUp context summary includes system info for multi-turn conversations.** `buildContextSummary()` appends `systemObservations.formatForContextSummary()` (compact one-line: "System: name, architecture, scale.") so follow-up turns can reference system context without re-synthesis.
+
+43. **Bracket-aware parseStructuredValue is load-bearing.** The structured value format from `textRepresentation(of: .structured(...))` can contain commas within bracket-enclosed lists (e.g., cross-cutting patterns, technology distributions, module interactions). Naive comma-splitting truncates these values. The bracket-depth tracking fix is essential for correct parsing.
+
 ---
 
 ## Known Blockers
@@ -409,9 +536,14 @@ No Project Intelligence-specific blockers exist.
 | ModuleBoundaryPass tests | 43 passing |
 | CrossFileResolutionPass tests | 30 passing |
 | ModuleEmergentPropertiesPass tests | 46 passing |
-| ModuleContextStrategy tests | 39 passing |
+| ModuleContextStrategy tests | 43 passing |
 | ModuleObservation tests | 37 passing |
+| SystemObservation tests | 50 passing |
 | Module Scope Evidence tests | 4 passing |
+| System Scope Evidence tests | 4 passing |
+| QuestionClassifier tests | 34 passing |
+| SystemCompositionPass tests | 35 passing |
+| SystemEmergentPropertiesPass tests | 48 passing |
 | Reasoning engine tests | 22 passing (7+7+8) |
 | Frontend tests | 23 passing (10+13) |
 | SessionState tests | 23 passing (2+5+16) |
@@ -450,7 +582,11 @@ M4 (Module Emergent Properties)        ← COMPLETE (depends on M1 + M2+M3)
 M5 (Module-Scope Context Strategy)     ← COMPLETE (depends on M4)
 M6 (Module-Aware Explanation)          ← COMPLETE (depends on M5)
 M7 (Module Intelligence Validation)    ← COMPLETE
-M8–M12 (Project Intelligence Phase 2)  ← NEXT (depends on M7)
+M8 (System Entity Creation)            ← COMPLETE
+M9 (System Emergent Properties)        ← COMPLETE
+M10 (Project-Scope Context Strategy)   ← COMPLETE (depends on M9)
+M11 (Architecture-Aware Explanation)   ← COMPLETE (depends on M10)
+M12 (Project Intelligence Validation)  ← NEXT (depends on M11)
 ```
 
 M2 and M3 are already complete. Phase 1 (Module Intelligence) is fully complete.
