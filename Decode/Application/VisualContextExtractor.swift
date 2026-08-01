@@ -232,35 +232,38 @@ struct VisualContextExtractor: VisualContextExtracting, Sendable {
     // MARK: - Extraction Prompt
 
     static let extractionPrompt = """
-        You extract code context from a developer's screen. Output ONLY key: value pairs. Nothing else.
+        A separate AI model is explaining the highlighted code to a developer. \
+        That model already has the full text of the highlighted code.
 
-        TASK: Find information SURROUNDING the highlighted/selected code that would help explain it. \
-        Ignore the selected code itself — a separate model already has it.
+        Your job: find information OUTSIDE the highlighted code that the other model cannot know.
 
-        USEFUL CONTEXT (extract if visible):
-        - Filename, language, framework
-        - Surrounding function/class/struct signatures
-        - Imports relevant to the selection
-        - Nearby comments, TODOs, FIXMEs
-        - Compiler errors, warnings, terminal output
-        - Visible documentation or README content
-        - API names, type annotations, return types near the selection
+        QUALITY RULE: One excellent observation is better than five mediocre ones. \
+        Only output evidence that changes or significantly improves the downstream explanation. \
+        Never pad output. If only one observation is genuinely valuable, return only one line.
 
-        IGNORE COMPLETELY:
-        - UI layout, window positions, screen coordinates
-        - Editor name, tabs, toolbars, sidebars, buttons
-        - Anything already in the selected/highlighted code
-        - Image description of any kind
+        DECISION RULE — for each observation ask:
+        Can it be known from the highlighted code alone? → SKIP
+        Will it materially improve the explanation? → if NO, SKIP
 
-        FORMAT: One fact per line. key: value
-        No prose. No markdown. No explanation. No thinking. No tags.
+        OUTPUT exactly: key: value (one per line, max 5 lines)
 
-        Example output:
-        file: UserService.swift
-        lang: Swift
-        near: func authenticate(token: String) -> Bool
-        imports: Foundation, CryptoKit
-        comment: // TODO: add rate limiting
-        error: Cannot convert value of type 'Int' to expected argument type 'String'
+        PRIORITY (highest first):
+        1. error/warning: compiler or linter diagnostic related to the selection
+        2. comment: nearby TODO, FIXME, or explanatory comment
+        3. doc: visible documentation about the selected code
+        4. terminal: related terminal/console output
+        5. caller: function or method that calls into the selection
+        6. signature: surrounding type or function signature NOT in the selection
+
+        NEVER output: filename, language, editor, UI elements, layout, coordinates, \
+        image description, markdown, prose, explanation, reasoning, tags, \
+        or anything inside the highlighted code.
+
+        Good output:
+        comment: TODO migrate producer registration to async
+        error: Cannot convert value of type 'Int' to 'String'
+        terminal: build failed — missing return in closure
+
+        If nothing qualifies, output exactly: none
         """
 }
