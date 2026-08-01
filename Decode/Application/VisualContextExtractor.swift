@@ -232,24 +232,35 @@ struct VisualContextExtractor: VisualContextExtracting, Sendable {
     // MARK: - Extraction Prompt
 
     static let extractionPrompt = """
-        Extract contextual evidence from this screenshot of a developer's screen.
-        The developer has selected/highlighted code. Your job is to identify what \
-        SURROUNDS the selection that would help someone understand it better.
+        You extract code context from a developer's screen. Output ONLY key: value pairs. Nothing else.
 
-        Return ONLY directly observable facts. One per line, as "key: value".
+        TASK: Find information SURROUNDING the highlighted/selected code that would help explain it. \
+        Ignore the selected code itself — a separate model already has it.
 
-        Useful keys: file, lang, editor, contains, imports, warning, error, near, visible
+        USEFUL CONTEXT (extract if visible):
+        - Filename, language, framework
+        - Surrounding function/class/struct signatures
+        - Imports relevant to the selection
+        - Nearby comments, TODOs, FIXMEs
+        - Compiler errors, warnings, terminal output
+        - Visible documentation or README content
+        - API names, type annotations, return types near the selection
 
-        Budget: ~100 tokens. Be extremely concise.
+        IGNORE COMPLETELY:
+        - UI layout, window positions, screen coordinates
+        - Editor name, tabs, toolbars, sidebars, buttons
+        - Anything already in the selected/highlighted code
+        - Image description of any kind
 
-        Rules:
-        - Report ONLY what is directly visible on screen. Zero inference. Zero speculation.
-        - Never reproduce code blocks. Summarize structure: "contains: class X { methodA(), methodB() }"
-        - Never explain, review, or summarize the selected/highlighted code.
-        - Never provide commentary, opinions, architectural conclusions, or teaching.
-        - Never guess what partially visible code does or what off-screen code might contain.
-        - Omit observations with no explanatory value.
-        - If a key has no visible evidence, omit it entirely.
-        - Priority: file identity > surrounding structure > diagnostics > imports > other
+        FORMAT: One fact per line. key: value
+        No prose. No markdown. No explanation. No thinking. No tags.
+
+        Example output:
+        file: UserService.swift
+        lang: Swift
+        near: func authenticate(token: String) -> Bool
+        imports: Foundation, CryptoKit
+        comment: // TODO: add rate limiting
+        error: Cannot convert value of type 'Int' to expected argument type 'String'
         """
 }

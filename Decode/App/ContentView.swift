@@ -467,87 +467,192 @@ private struct EnhancedExplanationDebugView: View {
 
     var debug = EnhancedExplanationDebug.shared
 
+    private let mono = Font.system(size: 12, design: .monospaced)
+    private let monoSmall = Font.system(size: 11, design: .monospaced)
+    private let monoBold = Font.system(size: 12, weight: .semibold, design: .monospaced)
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            // Header row with timestamp and latency.
+        VStack(alignment: .leading, spacing: 0) {
+            // Title bar.
             HStack(spacing: 6) {
                 Image(systemName: "ladybug.fill")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.purple)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.white)
                 Text("Enhanced Explanation Debug")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.purple)
+                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.white)
                 Spacer()
-                if let ms = debug.lastLatencyMs {
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color.purple.opacity(0.8))
+
+            // Error banner — prominent, at the top.
+            if let error = debug.lastError {
+                HStack(spacing: 6) {
+                    Image(systemName: "xmark.octagon.fill")
+                        .foregroundStyle(.white)
+                    Text(error)
+                        .font(mono)
+                        .foregroundStyle(.white)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.red.opacity(0.85))
+            }
+
+            // Status row.
+            VStack(alignment: .leading, spacing: 6) {
+                debugStatusRow
+                Divider().background(Color.white.opacity(0.2))
+                debugParsedSection
+                Divider().background(Color.white.opacity(0.2))
+                debugRawSection
+            }
+            .padding(12)
+        }
+        .background(Color.black.opacity(0.88))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Color.purple.opacity(0.5), lineWidth: 1)
+        )
+    }
+
+    // MARK: - Status Row
+
+    @ViewBuilder
+    private var debugStatusRow: some View {
+        let hasVC = debug.lastVisualContext != nil
+        let hasError = debug.lastError != nil
+
+        HStack(spacing: 12) {
+            // Status badge.
+            if hasVC {
+                Text("SUCCESS")
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Color.green)
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+            } else if hasError {
+                Text("FAILURE")
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Color.red)
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+            } else {
+                Text("WAITING")
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Color.yellow)
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+            }
+
+            // Latency.
+            if let ms = debug.lastLatencyMs {
+                HStack(spacing: 4) {
+                    Text("Latency:")
+                        .font(monoSmall)
+                        .foregroundStyle(.gray)
                     Text("\(String(format: "%.0f", ms))ms")
-                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .font(monoBold)
                         .foregroundStyle(.orange)
                 }
-                if let ts = debug.lastTimestamp {
-                    Text(ts, style: .relative)
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
-                    Text("ago")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
-                }
             }
 
-            // Status: success or failure.
-            if let error = debug.lastError {
-                Text("FAILED: \(error)")
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.red)
-                    .lineLimit(3)
-            }
-
-            // Parsed Visual Context items.
+            // Evidence count.
             if let vc = debug.lastVisualContext {
-                Text("Parsed Visual Context (\(vc.items.count) items):")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.primary)
-                ForEach(Array(vc.items.enumerated()), id: \.offset) { _, item in
-                    HStack(alignment: .top, spacing: 4) {
-                        Text(item.type + ":")
-                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(.primary)
-                        Text(item.content)
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                    }
+                HStack(spacing: 4) {
+                    Text("Items:")
+                        .font(monoSmall)
+                        .foregroundStyle(.gray)
+                    Text("\(vc.items.count)")
+                        .font(monoBold)
+                        .foregroundStyle(.cyan)
                 }
             }
 
-            // Raw Vision Response (before parsing).
-            if let raw = debug.lastRawResponse {
-                Divider()
-                Text("Raw Vision Response:")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.primary)
-                Text(raw)
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(10)
-                    .textSelection(.enabled)
-            }
+            Spacer()
 
-            // Empty state.
-            if debug.lastVisualContext == nil && debug.lastError == nil {
-                Text("No Visual Context captured yet. Use Selection or Screenshot mode with Enhanced Explanation ON.")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
+            // Timestamp.
+            if let ts = debug.lastTimestamp {
+                HStack(spacing: 4) {
+                    Text(ts, style: .relative)
+                        .font(monoSmall)
+                        .foregroundStyle(.gray)
+                    Text("ago")
+                        .font(monoSmall)
+                        .foregroundStyle(.gray)
+                }
             }
         }
-        .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color.purple.opacity(0.06))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(Color.purple.opacity(0.2), lineWidth: 1)
-                )
-        )
+    }
+
+    // MARK: - Parsed Visual Context Section
+
+    @ViewBuilder
+    private var debugParsedSection: some View {
+        Text("──── Parsed Visual Context ────")
+            .font(monoBold)
+            .foregroundStyle(.purple)
+
+        if let vc = debug.lastVisualContext, !vc.items.isEmpty {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(Array(vc.items.enumerated()), id: \.offset) { _, item in
+                        HStack(alignment: .top, spacing: 6) {
+                            Text(item.type + ":")
+                                .font(monoBold)
+                                .foregroundStyle(.cyan)
+                            Text(item.content)
+                                .font(mono)
+                                .foregroundStyle(.white)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+            }
+            .frame(maxHeight: 150)
+        } else {
+            Text("(none)")
+                .font(mono)
+                .foregroundStyle(.gray)
+        }
+    }
+
+    // MARK: - Raw Vision Response Section
+
+    @ViewBuilder
+    private var debugRawSection: some View {
+        Text("──── Raw Vision Response ────")
+            .font(monoBold)
+            .foregroundStyle(.purple)
+
+        if let raw = debug.lastRawResponse, !raw.isEmpty {
+            ScrollView {
+                Text(raw)
+                    .font(mono)
+                    .foregroundStyle(.green)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+            .frame(maxHeight: 200)
+        } else {
+            Text("(none)")
+                .font(mono)
+                .foregroundStyle(.gray)
+        }
     }
 }
 #endif
