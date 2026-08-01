@@ -1026,3 +1026,1300 @@ struct KGRIntegrationTests {
         #expect(counter.count == 2)
     }
 }
+
+// ============================================================
+// MARK: - Phase 2: FileUnderstandingJob Tests
+// ============================================================
+
+@Suite("FileUnderstandingJob")
+struct FileUnderstandingJobTests {
+
+    @Test func identifierAndDisplayName() {
+        #expect(FileUnderstandingJob.identifier == "file-understanding")
+        #expect(FileUnderstandingJob.displayName == "File Understanding")
+    }
+
+    @Test func jobProperties() {
+        let job = FileUnderstandingJob()
+        #expect(job.requiredCapability == .fileSummarization)
+        #expect(job.scope == .file)
+        #expect(job.invalidationTrigger == .fileChange)
+        #expect(job.persistencePolicy == .disk)
+        #expect(job.priority == 100)
+        #expect(job.maxConcurrency == 2)
+    }
+
+    @Test @MainActor func needsExecutionWhenNoArtifact() {
+        let store = KnowledgeArtifactStore(
+            persistenceURL: makeTempArtifactURL()
+        )
+        let job = FileUnderstandingJob()
+        let input = makeInput(filePath: "/test.swift", fileHash: "hash1")
+        #expect(job.needsExecution(input: input, store: store))
+    }
+
+    @Test @MainActor func doesNotNeedExecutionWhenArtifactExists() {
+        let url = makeTempArtifactURL()
+        defer { cleanupArtifactURL(url) }
+        let store = KnowledgeArtifactStore(persistenceURL: url)
+        let job = FileUnderstandingJob()
+
+        let key = KnowledgeCacheKey(
+            jobIdentifier: FileUnderstandingJob.identifier,
+            filePath: "/test.swift",
+            contentHash: "hash1"
+        )
+        let entry = KnowledgeArtifactEntry(
+            key: key,
+            data: Data("cached".utf8),
+            computedAt: Date(),
+            tier: .summarization,
+            workspaceId: UUID()
+        )
+        store.store(entry: entry)
+
+        let input = makeInput(filePath: "/test.swift", fileHash: "hash1")
+        #expect(!job.needsExecution(input: input, store: store))
+    }
+
+    @Test @MainActor func needsExecutionAfterHashChange() {
+        let url = makeTempArtifactURL()
+        defer { cleanupArtifactURL(url) }
+        let store = KnowledgeArtifactStore(persistenceURL: url)
+        let job = FileUnderstandingJob()
+
+        // Store artifact with hash1.
+        let key = KnowledgeCacheKey(
+            jobIdentifier: FileUnderstandingJob.identifier,
+            filePath: "/test.swift",
+            contentHash: "hash1"
+        )
+        store.store(entry: KnowledgeArtifactEntry(
+            key: key,
+            data: Data("cached".utf8),
+            computedAt: Date(),
+            tier: .summarization,
+            workspaceId: UUID()
+        ))
+
+        // Input with different hash.
+        let input = makeInput(filePath: "/test.swift", fileHash: "hash2")
+        #expect(job.needsExecution(input: input, store: store))
+    }
+
+    @Test func executeFailsWithoutIntelligence() async throws {
+        let job = FileUnderstandingJob()
+        let input = makeInput(filePath: "/test.swift", fileHash: "hash1")
+        // fileIntelligence is nil in makeInput.
+
+        do {
+            _ = try await job.execute(input: input, capabilityExecutor: nil)
+            #expect(Bool(false), "Should have thrown")
+        } catch is KnowledgeGenerationError {
+            // Expected.
+        }
+    }
+
+    @Test func executeFailsWithoutExecutor() async throws {
+        let job = FileUnderstandingJob()
+        let input = KnowledgeJobInput(
+            filePath: "/test.swift",
+            fileHash: "hash1",
+            fileIntelligence: makeMinimalFileIntelligence(),
+            workspaceId: UUID()
+        )
+
+        do {
+            _ = try await job.execute(input: input, capabilityExecutor: nil)
+            #expect(Bool(false), "Should have thrown")
+        } catch let error as KnowledgeGenerationError {
+            if case .noProvider = error {
+                // Expected.
+            } else {
+                #expect(Bool(false), "Wrong error: \(error)")
+            }
+        }
+    }
+
+    @Test func executeProducesValidArtifact() async throws {
+        let job = FileUnderstandingJob()
+        let intelligence = makeMinimalFileIntelligence()
+        let input = KnowledgeJobInput(
+            filePath: "/test.swift",
+            fileHash: "hash1",
+            fileIntelligence: intelligence,
+            workspaceId: UUID()
+        )
+
+        let mockExecutor: CapabilityExecutor = { _, _, _, _ in
+            """
+            <purpose>
+            This file manages test data.
+            </purpose>
+
+            <behavior>
+            It processes inputs sequentially.
+            </behavior>
+
+            <safety>
+            No concurrency concerns.
+            </safety>
+
+            <design>
+            Simple single-responsibility design.
+            </design>
+            """
+        }
+
+        let output = try await job.execute(
+            input: input,
+            capabilityExecutor: mockExecutor
+        )
+
+        #expect(output.jobIdentifier == "file-understanding")
+        #expect(output.key.filePath == "/test.swift")
+        #expect(output.key.contentHash == "hash1")
+        #expect(output.actualTier == .summarization)
+
+        // Decode the artifact to verify structure.
+        let enrichment = FileUnderstandingJob.decodeEnrichment(from: output.data)
+        #expect(enrichment != nil)
+        #expect(enrichment?.purpose.contains("test data") == true)
+        #expect(enrichment?.behavior != nil)
+        #expect(enrichment?.safety != nil)
+        #expect(enrichment?.design != nil)
+        #expect(enrichment?.fileHash == "hash1")
+    }
+
+    @Test func decodeEnrichmentFromValidData() {
+        let enrichment = SemanticEnrichment(
+            purpose: "Test purpose",
+            behavior: "Test behavior",
+            safety: "Test safety",
+            design: "Test design",
+            fileHash: "abc",
+            computedAt: Date()
+        )
+        let data = try! JSONEncoder().encode(enrichment)
+
+        let decoded = FileUnderstandingJob.decodeEnrichment(from: data)
+        #expect(decoded?.purpose == "Test purpose")
+        #expect(decoded?.behavior == "Test behavior")
+        #expect(decoded?.safety == "Test safety")
+        #expect(decoded?.design == "Test design")
+        #expect(decoded?.fileHash == "abc")
+    }
+
+    @Test func decodeEnrichmentFromInvalidData() {
+        let data = Data("not-json".utf8)
+        let decoded = FileUnderstandingJob.decodeEnrichment(from: data)
+        #expect(decoded == nil)
+    }
+}
+
+// ============================================================
+// MARK: - Phase 2: Artifact Store Consumption Tests
+// ============================================================
+
+@Suite("ArtifactStoreConsumption")
+struct ArtifactStoreConsumptionTests {
+
+    @Test @MainActor func lookupReturnsNilForMissingArtifact() {
+        let url = makeTempArtifactURL()
+        defer { cleanupArtifactURL(url) }
+        let store = KnowledgeArtifactStore(persistenceURL: url)
+
+        let result = store.lookup(
+            jobIdentifier: FileUnderstandingJob.identifier,
+            filePath: "/missing.swift",
+            contentHash: "hash1"
+        )
+        #expect(result == nil)
+    }
+
+    @Test @MainActor func lookupReturnsArtifactWhenHashMatches() {
+        let url = makeTempArtifactURL()
+        defer { cleanupArtifactURL(url) }
+        let store = KnowledgeArtifactStore(persistenceURL: url)
+
+        let enrichment = SemanticEnrichment(
+            purpose: "Test purpose",
+            behavior: nil,
+            safety: nil,
+            design: nil,
+            fileHash: "hash1",
+            computedAt: Date()
+        )
+        let data = try! JSONEncoder().encode(enrichment)
+
+        let output = KnowledgeJobOutput(
+            jobIdentifier: FileUnderstandingJob.identifier,
+            key: KnowledgeCacheKey(
+                jobIdentifier: FileUnderstandingJob.identifier,
+                filePath: "/test.swift",
+                contentHash: "hash1"
+            ),
+            data: data,
+            computedAt: Date(),
+            actualTier: .summarization
+        )
+        store.store(output, workspaceId: UUID())
+
+        let result = store.lookup(
+            jobIdentifier: FileUnderstandingJob.identifier,
+            filePath: "/test.swift",
+            contentHash: "hash1"
+        )
+        #expect(result != nil)
+
+        let decoded = FileUnderstandingJob.decodeEnrichment(from: result!.data)
+        #expect(decoded?.purpose == "Test purpose")
+    }
+
+    @Test @MainActor func lookupReturnsNilForStaleHash() {
+        let url = makeTempArtifactURL()
+        defer { cleanupArtifactURL(url) }
+        let store = KnowledgeArtifactStore(persistenceURL: url)
+
+        let output = KnowledgeJobOutput(
+            jobIdentifier: FileUnderstandingJob.identifier,
+            key: KnowledgeCacheKey(
+                jobIdentifier: FileUnderstandingJob.identifier,
+                filePath: "/test.swift",
+                contentHash: "hash1"
+            ),
+            data: Data("test".utf8),
+            computedAt: Date(),
+            actualTier: .summarization
+        )
+        store.store(output, workspaceId: UUID())
+
+        // Different hash — should not match.
+        let result = store.lookup(
+            jobIdentifier: FileUnderstandingJob.identifier,
+            filePath: "/test.swift",
+            contentHash: "hash2"
+        )
+        #expect(result == nil)
+    }
+
+    @Test @MainActor func invalidationRemovesArtifact() {
+        let url = makeTempArtifactURL()
+        defer { cleanupArtifactURL(url) }
+        let store = KnowledgeArtifactStore(persistenceURL: url)
+
+        let output = KnowledgeJobOutput(
+            jobIdentifier: FileUnderstandingJob.identifier,
+            key: KnowledgeCacheKey(
+                jobIdentifier: FileUnderstandingJob.identifier,
+                filePath: "/test.swift",
+                contentHash: "hash1"
+            ),
+            data: Data("test".utf8),
+            computedAt: Date(),
+            actualTier: .summarization
+        )
+        store.store(output, workspaceId: UUID())
+        #expect(store.count == 1)
+
+        store.invalidate(filePath: "/test.swift")
+        #expect(store.count == 0)
+
+        let result = store.lookup(
+            jobIdentifier: FileUnderstandingJob.identifier,
+            filePath: "/test.swift",
+            contentHash: "hash1"
+        )
+        #expect(result == nil)
+    }
+
+    @Test @MainActor func regenerationAfterInvalidation() async throws {
+        let url = makeTempArtifactURL()
+        defer { cleanupArtifactURL(url) }
+
+        let store = KnowledgeArtifactStore(persistenceURL: url)
+        let resolver = KnowledgeCapabilityResolver.uniform { _, _, _, _ in
+            """
+            <purpose>Regenerated purpose</purpose>
+            <behavior>New behavior</behavior>
+            <safety>New safety</safety>
+            <design>New design</design>
+            """
+        }
+        let planner = KnowledgePlanner(resolver: resolver)
+        let runtime = KnowledgeGenerationRuntime(
+            resolver: resolver,
+            store: store
+        )
+
+        let job = FileUnderstandingJob()
+        planner.register(job)
+        runtime.registerJob(job)
+
+        // Store initial artifact.
+        let initialOutput = KnowledgeJobOutput(
+            jobIdentifier: FileUnderstandingJob.identifier,
+            key: KnowledgeCacheKey(
+                jobIdentifier: FileUnderstandingJob.identifier,
+                filePath: "/a.swift",
+                contentHash: "h1"
+            ),
+            data: Data("old".utf8),
+            computedAt: Date(),
+            actualTier: .summarization
+        )
+        store.store(initialOutput, workspaceId: UUID())
+
+        // Plan — should find no work (cache hit).
+        let items1 = planner.planForFiles(
+            ["/a.swift"],
+            fileHashes: ["/a.swift": "h1"],
+            fileIntelligences: ["/a.swift": makeMinimalFileIntelligence(filePath: "/a.swift")],
+            workspaceId: UUID(),
+            store: store,
+            policy: .allAllowed
+        )
+        #expect(items1.isEmpty)
+
+        // Invalidate.
+        store.invalidate(filePath: "/a.swift")
+
+        // Plan with new hash — should find work.
+        let items2 = planner.planForFiles(
+            ["/a.swift"],
+            fileHashes: ["/a.swift": "h2"],
+            fileIntelligences: ["/a.swift": makeMinimalFileIntelligence(filePath: "/a.swift", fileHash: "h2")],
+            workspaceId: UUID(),
+            store: store,
+            policy: .allAllowed
+        )
+        #expect(items2.count == 1)
+
+        runtime.enqueue(items2)
+        try await Task.sleep(for: .milliseconds(500))
+
+        // Verify artifact was regenerated.
+        let result = store.lookup(
+            jobIdentifier: FileUnderstandingJob.identifier,
+            filePath: "/a.swift",
+            contentHash: "h2"
+        )
+        #expect(result != nil)
+
+        let enrichment = FileUnderstandingJob.decodeEnrichment(from: result!.data)
+        #expect(enrichment?.purpose.contains("Regenerated") == true)
+    }
+}
+
+// ============================================================
+// MARK: - Phase 2: Background Execution Tests
+// ============================================================
+
+@Suite("BackgroundExecution")
+struct BackgroundExecutionTests {
+
+    @Test @MainActor func plannerProducesWorkForFileUnderstandingJob() {
+        let resolver = KnowledgeCapabilityResolver.uniform { _, _, _, _ in "" }
+        let planner = KnowledgePlanner(resolver: resolver)
+        let store = KnowledgeArtifactStore(persistenceURL: makeTempArtifactURL())
+
+        planner.register(FileUnderstandingJob())
+
+        let intelligence = makeMinimalFileIntelligence()
+        let items = planner.planForFiles(
+            ["/test.swift"],
+            fileHashes: ["/test.swift": "hash1"],
+            fileIntelligences: ["/test.swift": intelligence],
+            workspaceId: UUID(),
+            store: store,
+            policy: .allAllowed
+        )
+
+        #expect(items.count == 1)
+        #expect(items[0].jobIdentifier == FileUnderstandingJob.identifier)
+        #expect(items[0].state == .pending)
+    }
+
+    @Test @MainActor func runtimeExecutesFileUnderstandingJob() async throws {
+        let url = makeTempArtifactURL()
+        defer { cleanupArtifactURL(url) }
+
+        let resolver = KnowledgeCapabilityResolver.uniform { _, _, _, _ in
+            """
+            <purpose>Background generated purpose</purpose>
+            <behavior>Background behavior</behavior>
+            <safety>Background safety</safety>
+            <design>Background design</design>
+            """
+        }
+        let store = KnowledgeArtifactStore(persistenceURL: url)
+        let planner = KnowledgePlanner(resolver: resolver)
+        let runtime = KnowledgeGenerationRuntime(resolver: resolver, store: store)
+
+        let job = FileUnderstandingJob()
+        planner.register(job)
+        runtime.registerJob(job)
+
+        let intelligence = makeMinimalFileIntelligence()
+        let items = planner.planForFiles(
+            ["/bg.swift"],
+            fileHashes: ["/bg.swift": "bghash"],
+            fileIntelligences: ["/bg.swift": intelligence],
+            workspaceId: UUID(),
+            store: store,
+            policy: .allAllowed
+        )
+
+        #expect(items.count == 1)
+
+        runtime.enqueue(items)
+        try await Task.sleep(for: .milliseconds(500))
+
+        // Verify artifact is in the store.
+        let result = store.lookup(
+            jobIdentifier: FileUnderstandingJob.identifier,
+            filePath: "/bg.swift",
+            contentHash: "bghash"
+        )
+        #expect(result != nil)
+
+        let enrichment = FileUnderstandingJob.decodeEnrichment(from: result!.data)
+        #expect(enrichment?.purpose.contains("Background generated") == true)
+        #expect(enrichment?.behavior != nil)
+        #expect(enrichment?.fileHash == "bghash")
+    }
+
+    @Test @MainActor func identicalHashSkipsReexecution() async throws {
+        let url = makeTempArtifactURL()
+        defer { cleanupArtifactURL(url) }
+
+        let callCount = ExecutionCounter()
+        let resolver = KnowledgeCapabilityResolver.uniform { _, _, _, _ in
+            callCount.increment()
+            return "<purpose>purpose</purpose>"
+        }
+        let store = KnowledgeArtifactStore(persistenceURL: url)
+        let planner = KnowledgePlanner(resolver: resolver)
+        let runtime = KnowledgeGenerationRuntime(resolver: resolver, store: store)
+
+        let job = FileUnderstandingJob()
+        planner.register(job)
+        runtime.registerJob(job)
+
+        let intelligence = makeMinimalFileIntelligence()
+
+        // First run.
+        let items1 = planner.planForFiles(
+            ["/test.swift"],
+            fileHashes: ["/test.swift": "same-hash"],
+            fileIntelligences: ["/test.swift": intelligence],
+            workspaceId: UUID(),
+            store: store,
+            policy: .allAllowed
+        )
+        #expect(items1.count == 1)
+
+        runtime.enqueue(items1)
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(callCount.count == 1)
+
+        // Second run with same hash — planner should produce no work.
+        runtime.resetProgress()
+        let items2 = planner.planForFiles(
+            ["/test.swift"],
+            fileHashes: ["/test.swift": "same-hash"],
+            fileIntelligences: ["/test.swift": intelligence],
+            workspaceId: UUID(),
+            store: store,
+            policy: .allAllowed
+        )
+        #expect(items2.isEmpty)
+    }
+
+    @Test @MainActor func changedHashTriggersRegeneration() async throws {
+        let url = makeTempArtifactURL()
+        defer { cleanupArtifactURL(url) }
+
+        let resolver = KnowledgeCapabilityResolver.uniform { _, _, _, _ in
+            "<purpose>regenerated</purpose>"
+        }
+        let store = KnowledgeArtifactStore(persistenceURL: url)
+        let planner = KnowledgePlanner(resolver: resolver)
+        let runtime = KnowledgeGenerationRuntime(resolver: resolver, store: store)
+
+        let job = FileUnderstandingJob()
+        planner.register(job)
+        runtime.registerJob(job)
+
+        // First run with hash1.
+        let items1 = planner.planForFiles(
+            ["/test.swift"],
+            fileHashes: ["/test.swift": "hash1"],
+            fileIntelligences: ["/test.swift": makeMinimalFileIntelligence(fileHash: "hash1")],
+            workspaceId: UUID(),
+            store: store,
+            policy: .allAllowed
+        )
+        runtime.enqueue(items1)
+        try await Task.sleep(for: .milliseconds(500))
+
+        // Second run with hash2 — should need re-execution.
+        runtime.resetProgress()
+        let items2 = planner.planForFiles(
+            ["/test.swift"],
+            fileHashes: ["/test.swift": "hash2"],
+            fileIntelligences: ["/test.swift": makeMinimalFileIntelligence(fileHash: "hash2")],
+            workspaceId: UUID(),
+            store: store,
+            policy: .allAllowed
+        )
+        #expect(items2.count == 1)
+
+        runtime.enqueue(items2)
+        try await Task.sleep(for: .milliseconds(500))
+
+        let result = store.lookup(
+            jobIdentifier: FileUnderstandingJob.identifier,
+            filePath: "/test.swift",
+            contentHash: "hash2"
+        )
+        #expect(result != nil)
+    }
+}
+
+// ============================================================
+// MARK: - Phase 2: SemanticEnrichment Codable Tests
+// ============================================================
+
+@Suite("SemanticEnrichmentCodable")
+struct SemanticEnrichmentCodableTests {
+
+    @Test func roundTripFullEnrichment() throws {
+        let original = SemanticEnrichment(
+            purpose: "Manages user authentication",
+            behavior: "Validates credentials and issues tokens",
+            safety: "Thread-safe via actor isolation",
+            design: "Strategy pattern for auth providers",
+            fileHash: "abc123",
+            computedAt: Date(timeIntervalSinceReferenceDate: 1000)
+        )
+
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(SemanticEnrichment.self, from: data)
+
+        #expect(decoded.purpose == original.purpose)
+        #expect(decoded.behavior == original.behavior)
+        #expect(decoded.safety == original.safety)
+        #expect(decoded.design == original.design)
+        #expect(decoded.fileHash == original.fileHash)
+    }
+
+    @Test func roundTripPartialEnrichment() throws {
+        let original = SemanticEnrichment(
+            purpose: "Simple helper",
+            fileHash: "xyz789",
+            computedAt: Date()
+        )
+
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(SemanticEnrichment.self, from: data)
+
+        #expect(decoded.purpose == "Simple helper")
+        #expect(decoded.behavior == nil)
+        #expect(decoded.safety == nil)
+        #expect(decoded.design == nil)
+    }
+}
+
+// ============================================================
+// MARK: - Phase 2: Enrichment Response Parsing Tests
+// ============================================================
+
+@Suite("EnrichmentResponseParsing")
+struct EnrichmentResponseParsingTests {
+
+    @Test func parseFullXMLResponse() {
+        let response = """
+        <purpose>
+        Auth service purpose.
+        </purpose>
+
+        <behavior>
+        Auth behavior details.
+        </behavior>
+
+        <safety>
+        Safety assessment.
+        </safety>
+
+        <design>
+        Design rationale.
+        </design>
+        """
+
+        let enrichment = SemanticEnrichmentService.parseEnrichmentResponse(
+            response, fileHash: "h1"
+        )
+        #expect(enrichment.purpose.contains("Auth service purpose"))
+        #expect(enrichment.behavior?.contains("Auth behavior") == true)
+        #expect(enrichment.safety?.contains("Safety assessment") == true)
+        #expect(enrichment.design?.contains("Design rationale") == true)
+        #expect(enrichment.fileHash == "h1")
+    }
+
+    @Test func parsePlainTextFallback() {
+        let response = "This file handles user login and session management."
+
+        let enrichment = SemanticEnrichmentService.parseEnrichmentResponse(
+            response, fileHash: "h2"
+        )
+        // Without tags, entire response becomes purpose.
+        #expect(enrichment.purpose == response)
+        #expect(enrichment.behavior == nil)
+        #expect(enrichment.safety == nil)
+        #expect(enrichment.design == nil)
+    }
+
+    @Test func parsePartialResponse() {
+        let response = """
+        <purpose>
+        Purpose only.
+        </purpose>
+        """
+
+        let enrichment = SemanticEnrichmentService.parseEnrichmentResponse(
+            response, fileHash: "h3"
+        )
+        #expect(enrichment.purpose.contains("Purpose only"))
+        #expect(enrichment.behavior == nil)
+        #expect(enrichment.safety == nil)
+        #expect(enrichment.design == nil)
+    }
+}
+
+// ============================================================
+// MARK: - Phase 2: Test Helpers
+// ============================================================
+
+/// Creates a minimal FileIntelligence suitable for test input.
+/// Contains just enough structure for FileUnderstandingJob to execute.
+private func makeMinimalFileIntelligence(
+    filePath: String = "/test.swift",
+    fileHash: String = "testhash"
+) -> FileIntelligence {
+    FileIntelligence(
+        sessionId: UUID(),
+        fileName: (filePath as NSString).lastPathComponent,
+        language: "swift",
+        lineCount: 50,
+        entities: [],
+        structureOutline: "",
+        imports: [],
+        relationships: [],
+        identity: FileIdentity(
+            role: .unknown,
+            layer: .unknown,
+            patterns: [],
+            summary: "Test file"
+        ),
+        purpose: "Test purpose",
+        fileHash: fileHash,
+        buildDate: Date()
+    )
+}
+
+// MARK: - Multi-Provider Routing Tests
+
+/// Thread-safe tracker for capability routing in tests.
+final class CapabilityTracker: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _calls: [String] = []
+    private var _lastCapability: KnowledgeCapability?
+
+    var calls: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return _calls
+    }
+
+    var callCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return _calls.count
+    }
+
+    var lastCapability: KnowledgeCapability? {
+        lock.lock()
+        defer { lock.unlock() }
+        return _lastCapability
+    }
+
+    func record(_ label: String, capability: KnowledgeCapability? = nil) {
+        lock.lock()
+        defer { lock.unlock() }
+        _calls.append(label)
+        if let capability { _lastCapability = capability }
+    }
+
+    func contains(_ label: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return _calls.contains(label)
+    }
+
+    func uniqueLabels() -> Set<String> {
+        lock.lock()
+        defer { lock.unlock() }
+        return Set(_calls)
+    }
+}
+
+@Suite("Capability Routing")
+struct CapabilityRoutingTests {
+
+    @Test("Routed resolver directs fileSummarization to dedicated executor")
+    @MainActor func routedFileSummarizationUsesDedicatedExecutor() async throws {
+        let tracker = CapabilityTracker()
+
+        let primaryExecutor: CapabilityExecutor = { _, _, _, _ in
+            tracker.record("primary")
+            return "primary"
+        }
+        let knowledgeExecutor: CapabilityExecutor = { _, _, _, _ in
+            tracker.record("knowledge")
+            return "knowledge"
+        }
+
+        let resolver = KnowledgeCapabilityResolver.routed(
+            routes: [.fileSummarization: knowledgeExecutor],
+            fallback: primaryExecutor
+        )
+
+        let resolution = resolver.resolution(for: .fileSummarization)
+        #expect(resolution.tier == .summarization)
+
+        let result = try await resolution.executor!("test", "prompt", .fileSummarization, "mode")
+        #expect(result == "knowledge")
+        #expect(tracker.contains("knowledge"))
+        #expect(!tracker.contains("primary"))
+    }
+
+    @Test("Routed resolver directs unrouted capabilities to fallback")
+    @MainActor func routedFallbackForUnroutedCapability() async throws {
+        let tracker = CapabilityTracker()
+
+        let primaryExecutor: CapabilityExecutor = { _, _, _, _ in
+            tracker.record("primary")
+            return "primary"
+        }
+        let knowledgeExecutor: CapabilityExecutor = { _, _, _, _ in
+            tracker.record("knowledge")
+            return "knowledge"
+        }
+
+        let resolver = KnowledgeCapabilityResolver.routed(
+            routes: [.fileSummarization: knowledgeExecutor],
+            fallback: primaryExecutor
+        )
+
+        let resolution = resolver.resolution(for: .behaviorAnalysis)
+        let result = try await resolution.executor!("test", "prompt", .behaviorAnalysis, "mode")
+        #expect(result == "primary")
+        #expect(tracker.contains("primary"))
+    }
+
+    @Test("Routed resolver routes moduleSummarization to knowledge executor")
+    @MainActor func routedModuleSummarization() async throws {
+        let tracker = CapabilityTracker()
+
+        let primaryExecutor: CapabilityExecutor = { _, _, _, _ in "primary" }
+        let knowledgeExecutor: CapabilityExecutor = { _, _, _, _ in
+            tracker.record("knowledge")
+            return "knowledge"
+        }
+
+        let resolver = KnowledgeCapabilityResolver.routed(
+            routes: [
+                .fileSummarization: knowledgeExecutor,
+                .moduleSummarization: knowledgeExecutor,
+            ],
+            fallback: primaryExecutor
+        )
+
+        let resolution = resolver.resolution(for: .moduleSummarization)
+        #expect(resolution.tier == .summarization)
+        let result = try await resolution.executor!("test", "prompt", .moduleSummarization, "mode")
+        #expect(result == "knowledge")
+        #expect(tracker.contains("knowledge"))
+    }
+
+    @Test("Routed resolver routes architectureSummarization to knowledge executor")
+    @MainActor func routedArchitectureSummarization() async throws {
+        let tracker = CapabilityTracker()
+
+        let primaryExecutor: CapabilityExecutor = { _, _, _, _ in "primary" }
+        let knowledgeExecutor: CapabilityExecutor = { _, _, _, _ in
+            tracker.record("knowledge")
+            return "knowledge"
+        }
+
+        let resolver = KnowledgeCapabilityResolver.routed(
+            routes: [.architectureSummarization: knowledgeExecutor],
+            fallback: primaryExecutor
+        )
+
+        let resolution = resolver.resolution(for: .architectureSummarization)
+        let result = try await resolution.executor!("test", "prompt", .architectureSummarization, "mode")
+        #expect(result == "knowledge")
+        #expect(tracker.contains("knowledge"))
+    }
+
+    @Test("Uniform resolver routes all capabilities to same executor")
+    @MainActor func uniformResolverSingleExecutor() async throws {
+        let tracker = CapabilityTracker()
+
+        let executor: CapabilityExecutor = { _, _, _, _ in
+            tracker.record("uniform")
+            return "uniform"
+        }
+
+        let resolver = KnowledgeCapabilityResolver.uniform(executor: executor)
+
+        for capability in [KnowledgeCapability.fileSummarization, .behaviorAnalysis, .safetyAssessment, .designInterpretation, .textCompression] {
+            let resolution = resolver.resolution(for: capability)
+            _ = try await resolution.executor!("test", "prompt", capability, "mode")
+        }
+        #expect(tracker.callCount == 5)
+    }
+
+    @Test("Uniform resolver maps module/architecture to deterministic tier")
+    @MainActor func uniformDeterministicModuleArchitecture() {
+        let executor: CapabilityExecutor = { _, _, _, _ in "test" }
+        let resolver = KnowledgeCapabilityResolver.uniform(executor: executor)
+
+        let moduleResolution = resolver.resolution(for: .moduleSummarization)
+        #expect(moduleResolution.tier == .deterministic)
+        #expect(moduleResolution.executor == nil)
+
+        let archResolution = resolver.resolution(for: .architectureSummarization)
+        #expect(archResolution.tier == .deterministic)
+        #expect(archResolution.executor == nil)
+    }
+
+    @Test("All-deterministic resolver returns nil executors")
+    @MainActor func allDeterministicNilExecutors() {
+        let resolver = KnowledgeCapabilityResolver.allDeterministic
+
+        for capability in KnowledgeCapability.allCases {
+            let resolution = resolver.resolution(for: capability)
+            #expect(resolution.tier == .deterministic)
+            #expect(resolution.executor == nil)
+        }
+    }
+}
+
+@Suite("Groq Provider")
+struct GroqProviderTests {
+
+    @Test("GroqProvider reports unavailable when no API key")
+    func groqUnavailableWithoutKey() {
+        let provider = GroqProvider(apiKey: { nil })
+        #expect(!provider.isAvailable)
+    }
+
+    @Test("GroqProvider reports unavailable for empty API key")
+    func groqUnavailableWithEmptyKey() {
+        let provider = GroqProvider(apiKey: { "" })
+        #expect(!provider.isAvailable)
+    }
+
+    @Test("GroqProvider reports available with API key")
+    func groqAvailableWithKey() {
+        let provider = GroqProvider(apiKey: { "test-key-123" })
+        #expect(provider.isAvailable)
+    }
+
+    @Test("GroqProvider uses custom model when specified")
+    func groqCustomModel() {
+        let provider = GroqProvider(
+            apiKey: { "test-key" },
+            model: "llama-3.1-8b-instant"
+        )
+        #expect(provider.isAvailable)
+    }
+}
+
+@Suite("Provider Fallback Behavior")
+struct ProviderFallbackTests {
+
+    @Test("Groq unavailable falls back to uniform resolver")
+    @MainActor func fallbackToUniformWhenNoGroq() async throws {
+        let groq = GroqProvider(apiKey: { nil })
+        #expect(!groq.isAvailable)
+
+        let tracker = CapabilityTracker()
+        let primaryExecutor: CapabilityExecutor = { _, _, _, _ in
+            tracker.record("claude")
+            return "claude"
+        }
+
+        let resolver = KnowledgeCapabilityResolver.uniform(executor: primaryExecutor)
+
+        let resolution = resolver.resolution(for: .fileSummarization)
+        let result = try await resolution.executor!("test", "prompt", .fileSummarization, "mode")
+        #expect(result == "claude")
+        #expect(tracker.callCount == 1)
+    }
+
+    @Test("Groq available routes knowledge capabilities to Groq")
+    @MainActor func groqAvailableRoutesKnowledge() async throws {
+        let groq = GroqProvider(apiKey: { "test-key" })
+        #expect(groq.isAvailable)
+
+        let tracker = CapabilityTracker()
+
+        let knowledgeExecutor: CapabilityExecutor = { _, _, _, _ in
+            tracker.record("groq")
+            return "groq"
+        }
+        let primaryExecutor: CapabilityExecutor = { _, _, _, _ in
+            tracker.record("claude")
+            return "claude"
+        }
+
+        let resolver = KnowledgeCapabilityResolver.routed(
+            routes: [
+                .fileSummarization: knowledgeExecutor,
+                .moduleSummarization: knowledgeExecutor,
+                .architectureSummarization: knowledgeExecutor,
+            ],
+            fallback: primaryExecutor
+        )
+
+        // Knowledge capabilities → Groq.
+        _ = try await resolver.resolution(for: .fileSummarization).executor!("", "", .fileSummarization, "")
+        _ = try await resolver.resolution(for: .moduleSummarization).executor!("", "", .moduleSummarization, "")
+        _ = try await resolver.resolution(for: .architectureSummarization).executor!("", "", .architectureSummarization, "")
+
+        // Reasoning capabilities → Claude.
+        _ = try await resolver.resolution(for: .behaviorAnalysis).executor!("", "", .behaviorAnalysis, "")
+        _ = try await resolver.resolution(for: .safetyAssessment).executor!("", "", .safetyAssessment, "")
+        _ = try await resolver.resolution(for: .textCompression).executor!("", "", .textCompression, "")
+
+        let calls = tracker.calls
+        #expect(calls.filter { $0 == "groq" }.count == 3)
+        #expect(calls.filter { $0 == "claude" }.count == 3)
+    }
+
+    @Test("FileUnderstandingJob uses routed executor")
+    @MainActor func fileUnderstandingJobUsesRoutedExecutor() async throws {
+        let tracker = CapabilityTracker()
+
+        let knowledgeExecutor: CapabilityExecutor = { _, _, _, _ in
+            tracker.record("groq")
+            return """
+            <purpose>Test purpose via Groq</purpose>
+            <behavior>Test behavior</behavior>
+            <safety>Test safety</safety>
+            <design>Test design</design>
+            """
+        }
+        let primaryExecutor: CapabilityExecutor = { _, _, _, _ in "primary" }
+
+        let resolver = KnowledgeCapabilityResolver.routed(
+            routes: [.fileSummarization: knowledgeExecutor],
+            fallback: primaryExecutor
+        )
+
+        let resolution = resolver.resolution(for: .fileSummarization)
+        #expect(resolution.executor != nil)
+
+        let job = FileUnderstandingJob()
+        let intelligence = makeMinimalFileIntelligence(filePath: "/test.swift", fileHash: "abc123")
+        let input = KnowledgeJobInput(
+            filePath: "/test.swift",
+            fileHash: "abc123",
+            fileIntelligence: intelligence,
+            workspaceId: UUID()
+        )
+
+        let output = try await job.execute(input: input, capabilityExecutor: resolution.executor)
+        #expect(tracker.contains("groq"))
+
+        let enrichment = FileUnderstandingJob.decodeEnrichment(from: output.data)
+        #expect(enrichment != nil)
+        #expect(enrichment?.purpose == "Test purpose via Groq")
+    }
+
+    @Test("Explain capabilities continue using Claude executor")
+    @MainActor func explainCapabilitiesUseClaude() async throws {
+        let tracker = CapabilityTracker()
+
+        let knowledgeExecutor: CapabilityExecutor = { _, _, _, _ in
+            tracker.record("groq")
+            return "groq"
+        }
+        let primaryExecutor: CapabilityExecutor = { _, _, _, _ in
+            tracker.record("claude")
+            return "claude"
+        }
+
+        let resolver = KnowledgeCapabilityResolver.routed(
+            routes: [.fileSummarization: knowledgeExecutor],
+            fallback: primaryExecutor
+        )
+
+        _ = try await resolver.resolution(for: .designInterpretation).executor!("", "", .designInterpretation, "")
+        #expect(tracker.contains("claude"))
+        #expect(!tracker.contains("groq"))
+    }
+}
+
+@Suite("Capability Routing Table")
+struct CapabilityRoutingTableTests {
+
+    @Test("Complete routing table verification")
+    @MainActor func completeRoutingTable() async throws {
+        let tracker = CapabilityTracker()
+
+        let knowledgeExecutor: CapabilityExecutor = { _, _, capability, _ in
+            tracker.record("knowledge:\(capability.rawValue)", capability: capability)
+            return "knowledge"
+        }
+        let primaryExecutor: CapabilityExecutor = { _, _, capability, _ in
+            tracker.record("primary:\(capability.rawValue)", capability: capability)
+            return "primary"
+        }
+
+        let resolver = KnowledgeCapabilityResolver.routed(
+            routes: [
+                .fileSummarization: knowledgeExecutor,
+                .moduleSummarization: knowledgeExecutor,
+                .architectureSummarization: knowledgeExecutor,
+            ],
+            fallback: primaryExecutor
+        )
+
+        for capability in KnowledgeCapability.allCases {
+            let resolution = resolver.resolution(for: capability)
+            if let executor = resolution.executor {
+                _ = try await executor("", "", capability, "")
+            }
+        }
+
+        let labels = tracker.uniqueLabels()
+
+        // Knowledge production capabilities → routed.
+        #expect(labels.contains("knowledge:fileSummarization"))
+        #expect(labels.contains("knowledge:moduleSummarization"))
+        #expect(labels.contains("knowledge:architectureSummarization"))
+
+        // Reasoning capabilities → fallback.
+        #expect(labels.contains("primary:behaviorAnalysis"))
+        #expect(labels.contains("primary:safetyAssessment"))
+        #expect(labels.contains("primary:designInterpretation"))
+        #expect(labels.contains("primary:textCompression"))
+    }
+
+    @Test("Routing preserves capability parameter in executor")
+    @MainActor func routingPreservesCapability() async throws {
+        let tracker = CapabilityTracker()
+
+        let executor: CapabilityExecutor = { _, _, capability, _ in
+            tracker.record("test", capability: capability)
+            return "test"
+        }
+
+        let resolver = KnowledgeCapabilityResolver.routed(
+            routes: [.fileSummarization: executor],
+            fallback: { _, _, _, _ in "fallback" }
+        )
+
+        let resolution = resolver.resolution(for: .fileSummarization)
+        _ = try await resolution.executor!("content", "prompt", .fileSummarization, "enrichment")
+        #expect(tracker.lastCapability == .fileSummarization)
+    }
+}
+
+// MARK: - AIConfiguration Tests
+
+@Suite("AIConfiguration")
+struct AIConfigurationTests {
+
+    @Test("Test configuration with both providers")
+    func testConfigBothProviders() {
+        let config = AIConfiguration.test(
+            anthropicKey: "sk-ant-test",
+            groqKey: "gsk-test"
+        )
+        #expect(config.anthropic.isAvailable)
+        #expect(config.groq.isAvailable)
+        #expect(config.anthropic.identifier == "anthropic")
+        #expect(config.groq.identifier == "groq")
+        #expect(config.validationIssues.isEmpty)
+    }
+
+    @Test("Test configuration with no providers")
+    func testConfigNoProviders() {
+        let config = AIConfiguration.test()
+        #expect(!config.anthropic.isAvailable)
+        #expect(!config.groq.isAvailable)
+    }
+
+    @Test("Test configuration with only Groq")
+    func testConfigGroqOnly() {
+        let config = AIConfiguration.test(groqKey: "gsk-test")
+        #expect(!config.anthropic.isAvailable)
+        #expect(config.groq.isAvailable)
+    }
+
+    @Test("Test configuration uses default models")
+    func testDefaultModels() {
+        let config = AIConfiguration.test()
+        #expect(config.anthropic.model == AIConfiguration.defaultAnthropicModel)
+        #expect(config.groq.model == AIConfiguration.defaultGroqModel)
+    }
+
+    @Test("Test configuration uses custom models")
+    func testCustomModels() {
+        let config = AIConfiguration.test(
+            anthropicModel: "claude-sonnet-4-6",
+            groqModel: "llama-3.1-8b-instant"
+        )
+        #expect(config.anthropic.model == "claude-sonnet-4-6")
+        #expect(config.groq.model == "llama-3.1-8b-instant")
+    }
+
+    @Test("ProviderConfig availability checks")
+    func providerConfigAvailability() {
+        let available = ProviderConfig(
+            identifier: "test",
+            apiKey: "key123",
+            model: "model",
+            baseURL: URL(string: "https://example.com")!
+        )
+        #expect(available.isAvailable)
+
+        let nilKey = ProviderConfig(
+            identifier: "test",
+            apiKey: nil,
+            model: "model",
+            baseURL: URL(string: "https://example.com")!
+        )
+        #expect(!nilKey.isAvailable)
+
+        let emptyKey = ProviderConfig(
+            identifier: "test",
+            apiKey: "",
+            model: "model",
+            baseURL: URL(string: "https://example.com")!
+        )
+        #expect(!emptyKey.isAvailable)
+    }
+}
+
+// MARK: - AIProviderRegistry Tests
+
+@Suite("AIProviderRegistry")
+struct AIProviderRegistryTests {
+
+    @Test("Registry starts empty")
+    @MainActor func registryStartsEmpty() {
+        let registry = AIProviderRegistry()
+        #expect(registry.count == 0)
+        #expect(registry.availableCount == 0)
+        #expect(registry.registeredIdentifiers.isEmpty)
+    }
+
+    @Test("Register and lookup provider")
+    @MainActor func registerAndLookup() {
+        let registry = AIProviderRegistry()
+        let provider = GroqProvider(apiKey: { "test-key" })
+        registry.register(provider, identifier: "groq", isAvailable: true)
+
+        #expect(registry.count == 1)
+        #expect(registry.availableCount == 1)
+        #expect(registry.isAvailable("groq"))
+        #expect(registry.provider(for: "groq") != nil)
+    }
+
+    @Test("Lookup returns nil for unregistered provider")
+    @MainActor func lookupMissing() {
+        let registry = AIProviderRegistry()
+        #expect(registry.provider(for: "nonexistent") == nil)
+        #expect(!registry.isAvailable("nonexistent"))
+    }
+
+    @Test("Register unavailable provider")
+    @MainActor func registerUnavailable() {
+        let registry = AIProviderRegistry()
+        let provider = GroqProvider(apiKey: { nil })
+        registry.register(provider, identifier: "groq", isAvailable: false)
+
+        #expect(registry.count == 1)
+        #expect(registry.availableCount == 0)
+        #expect(!registry.isAvailable("groq"))
+        #expect(registry.provider(for: "groq") != nil)
+    }
+
+    @Test("Multiple providers registered")
+    @MainActor func multipleProviders() {
+        let registry = AIProviderRegistry()
+        let groq = GroqProvider(apiKey: { "key1" })
+        let groq2 = GroqProvider(apiKey: { "key2" })
+
+        registry.register(groq, identifier: "groq", isAvailable: true)
+        registry.register(groq2, identifier: "anthropic", isAvailable: true)
+
+        #expect(registry.count == 2)
+        #expect(registry.availableCount == 2)
+        #expect(registry.registeredIdentifiers.contains("groq"))
+        #expect(registry.registeredIdentifiers.contains("anthropic"))
+    }
+}
+
+// MARK: - GroqProvider DI Tests
+
+@Suite("GroqProvider DI")
+struct GroqProviderDITests {
+
+    @Test("GroqProvider from ProviderConfig with key")
+    func groqFromConfigWithKey() {
+        let config = ProviderConfig(
+            identifier: "groq",
+            apiKey: "gsk-test-key",
+            model: "llama-3.3-70b-versatile",
+            baseURL: AIConfiguration.groqBaseURL
+        )
+        let provider = GroqProvider(config: config)
+        #expect(provider.isAvailable)
+    }
+
+    @Test("GroqProvider from ProviderConfig without key")
+    func groqFromConfigWithoutKey() {
+        let config = ProviderConfig(
+            identifier: "groq",
+            apiKey: nil,
+            model: "llama-3.3-70b-versatile",
+            baseURL: AIConfiguration.groqBaseURL
+        )
+        let provider = GroqProvider(config: config)
+        #expect(!provider.isAvailable)
+    }
+
+    @Test("GroqProvider from AIConfiguration")
+    func groqFromAIConfiguration() {
+        let aiConfig = AIConfiguration.test(groqKey: "gsk-test")
+        let provider = GroqProvider(config: aiConfig.groq)
+        #expect(provider.isAvailable)
+    }
+
+    @Test("GroqProvider convenience init still works")
+    func groqConvenienceInit() {
+        let provider = GroqProvider(apiKey: { "test-key" })
+        #expect(provider.isAvailable)
+
+        let unavailable = GroqProvider(apiKey: { nil })
+        #expect(!unavailable.isAvailable)
+    }
+}

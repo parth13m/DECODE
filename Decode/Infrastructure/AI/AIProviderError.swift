@@ -48,6 +48,9 @@ enum AIProviderError: Error, LocalizedError, Sendable {
     /// Legacy: Provider-specific error.
     case providerError(statusCode: Int, message: String)
 
+    /// The provider does not support the requested capability (e.g., vision).
+    case unsupportedCapability(String)
+
     var errorDescription: String? {
         switch self {
         case .notAuthenticated:
@@ -82,6 +85,8 @@ enum AIProviderError: Error, LocalizedError, Sendable {
             "Your Decode session is no longer valid. Please restart Decode."
         case .providerError(_, let message):
             message
+        case .unsupportedCapability(let capability):
+            "\(capability) is not supported by this provider."
         }
     }
 }

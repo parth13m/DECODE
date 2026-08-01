@@ -1,32 +1,28 @@
 import Foundation
 
-/// Orchestrates lazy, cached LLM-derived semantic understanding of source files.
+/// Produces LLM-derived semantic understanding of source files.
 ///
 /// The Semantic Enrichment Pipeline converts objective deterministic facts
 /// (entities, relationships, imports) into interpreted understanding
-/// (purpose and behavior, with future safety and design layers) via a single
-/// LLM call per file version.
+/// (purpose, behavior, safety, design) via a single LLM call per file version.
 ///
-/// ## Lifecycle
-/// 1. **Trigger**: The first time a user requests an explanation for a file.
-/// 2. **Cache check**: If enrichment exists for the current `fileHash`, return it.
-/// 3. **LLM call**: Send structured deterministic facts (NOT raw source) to the LLM.
-/// 4. **Cache store**: Store the result keyed by `fileHash`.
-/// 5. **Return**: The enrichment is used by the coordinator to augment the prompt.
+/// ## Ownership Model (Post-KGR Migration)
+/// This service is a **pure producer** — it executes the LLM call and parses the
+/// response. It does NOT own caching, persistence, or lifecycle. Those
+/// responsibilities belong to the Knowledge Generation Runtime:
+/// - **KnowledgeArtifactStore**: persistent cache (disk-backed)
+/// - **KnowledgePlanner**: decides when to run
+/// - **KnowledgeGenerationRuntime**: schedules and executes
 ///
-/// ## Failure
-/// If the LLM call fails (network, auth, timeout), returns `nil`.
-/// The coordinator falls back to deterministic purpose — the user never
-/// sees an error from enrichment failure.
+/// The `enrich()` method remains as a **fallback path** for cases where the
+/// KGR has not yet populated the artifact store (e.g., first launch, race
+/// between indexing and user question).
 ///
-/// ## Cache Invalidation
-/// Automatic via `fileHash`. When the file changes, `reparseSession()` updates
-/// the hash. The next enrichment request sees a cache miss and recomputes.
+/// ## Shared Logic
+/// Prompt construction and response parsing are exposed as `static` methods
+/// so that `FileUnderstandingJob` can reuse them without duplication.
 @MainActor
 final class SemanticEnrichmentService {
-
-    /// In-memory cache: fileHash → enrichment.
-    private var cache: [String: SemanticEnrichment] = [:]
 
     /// Closure that returns the current AI provider, or nil if unavailable.
     private let aiProvider: @MainActor () -> (any AIProviderProtocol)?
@@ -37,30 +33,13 @@ final class SemanticEnrichmentService {
 
     // MARK: - Public API
 
-    /// Check whether enrichment is cached for a given file hash.
+    /// Compute semantic enrichment for a file via LLM.
     ///
-    /// Pure cache lookup — no LLM call, no computation. Returns `nil` if
-    /// the file has not been enriched yet or the hash doesn't match.
-    func cachedEnrichment(forHash fileHash: String) -> SemanticEnrichment? {
-        cache[fileHash]
-    }
-
-    /// Retrieve or compute semantic enrichment for a file.
+    /// Always calls the LLM — no caching. The caller (coordinator) is
+    /// responsible for checking the KnowledgeArtifactStore first.
     ///
-    /// Returns cached enrichment if available for the given file hash.
-    /// Otherwise, makes a single LLM call using structured deterministic
-    /// facts from FileIntelligence. Returns `nil` on failure.
-    ///
-    /// This method is designed to be called in the coordinator's hot path.
-    /// Cache hits are instantaneous. Cache misses add one LLM round-trip.
+    /// Returns `nil` on failure (network, auth, timeout, empty response).
     func enrich(intelligence: FileIntelligence) async -> SemanticEnrichment? {
-        let hash = intelligence.fileHash
-
-        // Cache hit — return immediately.
-        if let cached = cache[hash] {
-            return cached
-        }
-
         // No AI provider — cannot enrich.
         guard let provider = aiProvider() else {
             return nil
@@ -80,57 +59,10 @@ final class SemanticEnrichmentService {
             let trimmed = response.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return nil }
 
-            // Parse structured response. If XML tags are present, extract
-            // each field independently. If tags are absent (e.g., model
-            // returned plain text), treat the entire response as purpose
-            // with no other layers — never fail due to formatting.
-            let purpose: String
-            let behavior: String?
-            let safety: String?
-            let design: String?
-
-            if let taggedPurpose = Self.extractTagContent(from: trimmed, tag: "purpose") {
-                let cleaned = taggedPurpose.trimmingCharacters(in: .whitespacesAndNewlines)
-                purpose = cleaned.isEmpty ? trimmed : cleaned
-            } else {
-                // No tags — entire response is purpose (backward-compatible fallback).
-                purpose = trimmed
-            }
-
-            if let taggedBehavior = Self.extractTagContent(from: trimmed, tag: "behavior") {
-                let cleaned = taggedBehavior.trimmingCharacters(in: .whitespacesAndNewlines)
-                behavior = cleaned.isEmpty ? nil : cleaned
-            } else {
-                behavior = nil
-            }
-
-            if let taggedSafety = Self.extractTagContent(from: trimmed, tag: "safety") {
-                let cleaned = taggedSafety.trimmingCharacters(in: .whitespacesAndNewlines)
-                safety = cleaned.isEmpty ? nil : cleaned
-            } else {
-                safety = nil
-            }
-
-            if let taggedDesign = Self.extractTagContent(from: trimmed, tag: "design") {
-                let cleaned = taggedDesign.trimmingCharacters(in: .whitespacesAndNewlines)
-                design = cleaned.isEmpty ? nil : cleaned
-            } else {
-                design = nil
-            }
-
-            let enrichment = SemanticEnrichment(
-                purpose: purpose,
-                behavior: behavior,
-                safety: safety,
-                design: design,
-                fileHash: hash,
-                computedAt: Date()
-            )
-
-            cache[hash] = enrichment
+            let enrichment = Self.parseEnrichmentResponse(trimmed, fileHash: intelligence.fileHash)
 
             #if DEBUG
-            print("[SemanticEnrichment] Computed for \(intelligence.fileName): purpose=\(purpose.count) chars, behavior=\(behavior?.count ?? 0) chars, safety=\(safety?.count ?? 0) chars, design=\(design?.count ?? 0) chars")
+            print("[SemanticEnrichment] Computed for \(intelligence.fileName): purpose=\(enrichment.purpose.count) chars, behavior=\(enrichment.behavior?.count ?? 0) chars, safety=\(enrichment.safety?.count ?? 0) chars, design=\(enrichment.design?.count ?? 0) chars")
             #endif
 
             return enrichment
@@ -142,14 +74,14 @@ final class SemanticEnrichmentService {
         }
     }
 
-    // MARK: - Prompt Construction
+    // MARK: - Prompt Construction (Shared with FileUnderstandingJob)
 
     /// System prompt for semantic enrichment.
     ///
     /// Instructs the LLM to produce purpose, behavioral, safety, and
     /// design summaries from structured facts. The prompt is deliberately
     /// minimal — the deterministic facts do the heavy lifting.
-    private static func buildEnrichmentPrompt() -> String {
+    nonisolated static func buildEnrichmentPrompt() -> String {
         """
         You are a senior software engineer analyzing a source file's structure.
 
@@ -213,7 +145,7 @@ final class SemanticEnrichmentService {
     /// - Low token usage (~200-500 tokens vs ~2000-10000 for full source)
     /// - Consistent input format across all languages
     /// - Focus on structural understanding, not syntax
-    private static func buildFactsSummary(intelligence: FileIntelligence) -> String {
+    nonisolated static func buildFactsSummary(intelligence: FileIntelligence) -> String {
         var parts: [String] = []
 
         // File identity.
@@ -357,22 +289,72 @@ final class SemanticEnrichmentService {
         return parts.joined(separator: "\n")
     }
 
+    // MARK: - Response Parsing (Shared with FileUnderstandingJob)
+
+    /// Parse an LLM enrichment response into a SemanticEnrichment.
+    ///
+    /// Extracts purpose, behavior, safety, and design from XML-like tags.
+    /// If tags are absent, the entire response is treated as purpose
+    /// (backward-compatible fallback). Each tag is parsed independently —
+    /// partial responses degrade gracefully.
+    nonisolated static func parseEnrichmentResponse(_ response: String, fileHash: String) -> SemanticEnrichment {
+        let purpose: String
+        let behavior: String?
+        let safety: String?
+        let design: String?
+
+        if let taggedPurpose = extractTagContent(from: response, tag: "purpose") {
+            let cleaned = taggedPurpose.trimmingCharacters(in: .whitespacesAndNewlines)
+            purpose = cleaned.isEmpty ? response : cleaned
+        } else {
+            // No tags — entire response is purpose (backward-compatible fallback).
+            purpose = response
+        }
+
+        if let taggedBehavior = extractTagContent(from: response, tag: "behavior") {
+            let cleaned = taggedBehavior.trimmingCharacters(in: .whitespacesAndNewlines)
+            behavior = cleaned.isEmpty ? nil : cleaned
+        } else {
+            behavior = nil
+        }
+
+        if let taggedSafety = extractTagContent(from: response, tag: "safety") {
+            let cleaned = taggedSafety.trimmingCharacters(in: .whitespacesAndNewlines)
+            safety = cleaned.isEmpty ? nil : cleaned
+        } else {
+            safety = nil
+        }
+
+        if let taggedDesign = extractTagContent(from: response, tag: "design") {
+            let cleaned = taggedDesign.trimmingCharacters(in: .whitespacesAndNewlines)
+            design = cleaned.isEmpty ? nil : cleaned
+        } else {
+            design = nil
+        }
+
+        return SemanticEnrichment(
+            purpose: purpose,
+            behavior: behavior,
+            safety: safety,
+            design: design,
+            fileHash: fileHash,
+            computedAt: Date()
+        )
+    }
+
     /// Resolve an entity name from a stableId.
-    private static func entityName(
+    private nonisolated static func entityName(
         forStableId stableId: String,
         in entities: [ParsedEntity]
     ) -> String? {
         entities.first { $0.entity.stableId == stableId }?.entity.name
     }
 
-    // MARK: - Response Parsing
-
     /// Extract text content between opening and closing XML-like tags.
     ///
     /// Returns `nil` if the tag is not found. Handles whitespace around
-    /// and within tags. Follows the same pattern used by
-    /// ``ImprovementService/extractTagContent(from:tag:)``.
-    private static func extractTagContent(from text: String, tag: String) -> String? {
+    /// and within tags.
+    nonisolated static func extractTagContent(from text: String, tag: String) -> String? {
         let openTag = "<\(tag)>"
         let closeTag = "</\(tag)>"
 

@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+@preconcurrency import ScreenCaptureKit
 
 /// Orchestrates the Selection Mode flow: hotkey → capture → AI → HUD.
 ///
@@ -25,6 +26,7 @@ final class SelectionModeCoordinator {
     private let toastManager: DecodeToastManager
     private let usageTracker: AIUsageTracker
     private let virtualSessionManager: VirtualSessionManager
+    private let visualContextExtractor: (any VisualContextExtracting)?
 
     // MARK: - State
 
@@ -56,7 +58,8 @@ final class SelectionModeCoordinator {
         hud: FloatingExplanationHUD,
         toastManager: DecodeToastManager,
         usageTracker: AIUsageTracker,
-        virtualSessionManager: VirtualSessionManager
+        virtualSessionManager: VirtualSessionManager,
+        visualContextExtractor: (any VisualContextExtracting)? = nil
     ) {
         self.selectionCapture = selectionCapture
         self.aiProvider = aiProvider
@@ -64,6 +67,7 @@ final class SelectionModeCoordinator {
         self.toastManager = toastManager
         self.usageTracker = usageTracker
         self.virtualSessionManager = virtualSessionManager
+        self.visualContextExtractor = visualContextExtractor
     }
 
     // MARK: - Lifecycle
@@ -204,7 +208,53 @@ final class SelectionModeCoordinator {
             return
         }
 
-        // 6. Build prompt and stream response.
+        // 6. Enhanced Explanation: extract visual context if enabled.
+        let enhancedEnabled = UserDefaults.standard.bool(forKey: "enhancedExplanationEnabled")
+        var visualContext: VisualContext?
+        #if DEBUG
+        print("[EnhancedExplanation] enabled=\(enhancedEnabled), extractor=\(visualContextExtractor != nil ? "present" : "NIL")")
+        #endif
+        if enhancedEnabled, let extractor = visualContextExtractor {
+            #if DEBUG
+            let vcStartTime = CFAbsoluteTimeGetCurrent()
+            print("[EnhancedExplanation] capturing screenshot for PID \(sourceAppPID)...")
+            #endif
+            if let screenImage = await Self.captureScreenImage(forPID: sourceAppPID) {
+                #if DEBUG
+                let captureMs = (CFAbsoluteTimeGetCurrent() - vcStartTime) * 1000
+                print("[EnhancedExplanation] screenshot captured: \(screenImage.width)x\(screenImage.height) in \(String(format: "%.0f", captureMs))ms")
+                print("[EnhancedExplanation] vision request starting...")
+                let visionStartTime = CFAbsoluteTimeGetCurrent()
+                #endif
+                visualContext = await extractor.extract(from: screenImage)
+                #if DEBUG
+                let visionMs = (CFAbsoluteTimeGetCurrent() - visionStartTime) * 1000
+                let totalMs = (CFAbsoluteTimeGetCurrent() - vcStartTime) * 1000
+                if let vc = visualContext {
+                    print("[EnhancedExplanation] vision request finished in \(String(format: "%.0f", visionMs))ms")
+                    print("[EnhancedExplanation] parsed \(vc.items.count) evidence items:")
+                    for item in vc.items {
+                        print("[EnhancedExplanation]   \(item.type): \(item.content)")
+                    }
+                    print("[EnhancedExplanation] total Enhanced Explanation overhead: \(String(format: "%.0f", totalMs))ms")
+                } else {
+                    print("[EnhancedExplanation] vision request returned nil after \(String(format: "%.0f", visionMs))ms — proceeding without")
+                }
+                #endif
+            } else {
+                #if DEBUG
+                print("[EnhancedExplanation] screenshot capture FAILED for PID \(sourceAppPID) — proceeding without visual context")
+                #endif
+            }
+            // Staleness check after vision extraction await.
+            guard generation == requestGeneration else { return }
+        } else if enhancedEnabled {
+            #if DEBUG
+            print("[EnhancedExplanation] toggle ON but extractor is NIL — is GROQ_API_KEY set?")
+            #endif
+        }
+
+        // 7. Build prompt and stream response.
         let dsaMode = UserDefaults.standard.bool(forKey: "dsaModeEnabled")
         let explanationProfile = dsaMode ? "dsa" : "general"
         var systemPrompt = buildSystemPrompt(sourceApp: sourceAppName, codeContent: text, dsaMode: dsaMode)
@@ -221,7 +271,25 @@ final class SelectionModeCoordinator {
             systemPrompt += "\n\n\(wmBlock)"
         }
 
-        let messages = [AIMessage(role: .user, content: text)]
+        // Assemble user message with visual context evidence.
+        let userMessage: String
+        if let vc = visualContext, !vc.isEmpty {
+            userMessage = "[Context]\n\(vc.formatted())\n[/Context]\n\n\(text)"
+            #if DEBUG
+            print("[EnhancedExplanation] final prompt contains Visual Context: YES (\(vc.items.count) items, \(vc.formatted().count) chars)")
+            #endif
+            #if DEBUG
+            // Update shared debug state for UI inspection.
+            EnhancedExplanationDebug.shared.lastVisualContext = vc
+            EnhancedExplanationDebug.shared.lastTimestamp = Date()
+            #endif
+        } else {
+            userMessage = text
+            #if DEBUG
+            print("[EnhancedExplanation] final prompt contains Visual Context: NO")
+            #endif
+        }
+        let messages = [AIMessage(role: .user, content: userMessage)]
 
         // Show HUD immediately so the user sees loading state while
         // the AI request is in flight.
@@ -300,6 +368,47 @@ final class SelectionModeCoordinator {
 
     // MARK: - Prompt
 
+    // MARK: - Screen Capture (Enhanced Explanation)
+
+    /// Capture the focused window for the given PID using ScreenCaptureKit.
+    /// Returns nil if Screen Recording permission is denied or capture fails.
+    @MainActor
+    static func captureScreenImage(forPID pid: pid_t) async -> CGImage? {
+        do {
+            let content = try await SCShareableContent.excludingDesktopWindows(
+                false, onScreenWindowsOnly: true
+            )
+
+            // Find the first on-screen window matching the PID.
+            guard let window = content.windows.first(where: {
+                $0.owningApplication?.processID == pid
+            }) else {
+                #if DEBUG
+                print("[VisualContext] no window found for PID \(pid)")
+                #endif
+                return nil
+            }
+
+            let filter = SCContentFilter(desktopIndependentWindow: window)
+            let config = SCStreamConfiguration()
+            config.width = window.frame.width > 0 ? Int(window.frame.width) * 2 : 1920
+            config.height = window.frame.height > 0 ? Int(window.frame.height) * 2 : 1080
+            config.showsCursor = false
+
+            return try await SCScreenshotManager.captureImage(
+                contentFilter: filter,
+                configuration: config
+            )
+        } catch {
+            #if DEBUG
+            print("[VisualContext] screen capture failed: \(error.localizedDescription)")
+            #endif
+            return nil
+        }
+    }
+
+    // MARK: - Prompt
+
     private func buildSystemPrompt(sourceApp: String?, codeContent: String, dsaMode: Bool = false) -> String {
         let framework = ExplanationFramework.detect(fromContent: codeContent)
 
@@ -314,7 +423,19 @@ final class SelectionModeCoordinator {
             prompt += "\n\nThe text was selected in \(app)."
         }
 
+        prompt += Self.visualContextGuidance
+
         return prompt
     }
+
+    /// System prompt guidance for using visual context evidence.
+    /// Appended unconditionally — a no-op when the user message has no [Context] block.
+    private static let visualContextGuidance = """
+
+        If a [Context]...[/Context] block is present in the user's message, it contains \
+        trusted contextual evidence extracted from the user's visible working environment. \
+        Use this evidence only when it is relevant to improve the explanation. \
+        Do not assume it is complete, and do not repeat it verbatim unless necessary.
+        """
 }
 

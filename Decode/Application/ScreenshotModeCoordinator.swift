@@ -25,6 +25,7 @@ final class ScreenshotModeCoordinator {
     private let toastManager: DecodeToastManager
     private let usageTracker: AIUsageTracker
     private let virtualSessionManager: VirtualSessionManager
+    private let visualContextExtractor: (any VisualContextExtracting)?
 
     // MARK: - State
 
@@ -41,7 +42,8 @@ final class ScreenshotModeCoordinator {
         hud: FloatingExplanationHUD,
         toastManager: DecodeToastManager,
         usageTracker: AIUsageTracker,
-        virtualSessionManager: VirtualSessionManager
+        virtualSessionManager: VirtualSessionManager,
+        visualContextExtractor: (any VisualContextExtracting)? = nil
     ) {
         self.screenCapture = screenCapture
         self.ocrService = ocrService
@@ -50,6 +52,7 @@ final class ScreenshotModeCoordinator {
         self.toastManager = toastManager
         self.usageTracker = usageTracker
         self.virtualSessionManager = virtualSessionManager
+        self.visualContextExtractor = visualContextExtractor
     }
 
     // MARK: - Lifecycle
@@ -135,23 +138,78 @@ final class ScreenshotModeCoordinator {
             return
         }
 
-        // 4. Run OCR on the captured image.
+        // 4. Run OCR and visual context extraction in parallel.
         #if DEBUG
         print("[DEBUG ScreenshotCoordinator] running OCR on \(captureResult.image.width)x\(captureResult.image.height) image...")
         #endif
+
+        let enhancedEnabled = UserDefaults.standard.bool(forKey: "enhancedExplanationEnabled")
         let recognizedText: String
-        do {
-            recognizedText = try await ocrService.recognizeText(in: captureResult.image)
-        } catch {
-            guard generation == requestGeneration else { return }
+        var visualContext: VisualContext?
+
+        #if DEBUG
+        print("[EnhancedExplanation] Screenshot Mode: enabled=\(enhancedEnabled), extractor=\(visualContextExtractor != nil ? "present" : "NIL")")
+        #endif
+
+        if enhancedEnabled, let extractor = visualContextExtractor {
+            // Run OCR and vision extraction in parallel.
             #if DEBUG
-            print("[DEBUG ScreenshotCoordinator] OCR failed: \(error.localizedDescription)")
+            let parallelStart = CFAbsoluteTimeGetCurrent()
+            print("[EnhancedExplanation] running OCR + vision extraction in parallel...")
             #endif
-            toastManager.show("OCR failed: \(error.localizedDescription)", icon: "exclamationmark.triangle")
-            return
+            async let ocrResult = ocrService.recognizeText(in: captureResult.image)
+            async let vcResult = extractor.extract(from: captureResult.image)
+
+            do {
+                recognizedText = try await ocrResult
+            } catch {
+                guard generation == requestGeneration else { return }
+                #if DEBUG
+                print("[DEBUG ScreenshotCoordinator] OCR failed: \(error.localizedDescription)")
+                #endif
+                toastManager.show("OCR failed: \(error.localizedDescription)", icon: "exclamationmark.triangle")
+                return
+            }
+            visualContext = await vcResult
+            #if DEBUG
+            let parallelMs = (CFAbsoluteTimeGetCurrent() - parallelStart) * 1000
+            if let vc = visualContext {
+                print("[EnhancedExplanation] parallel complete in \(String(format: "%.0f", parallelMs))ms — \(vc.items.count) evidence items:")
+                for item in vc.items {
+                    print("[EnhancedExplanation]   \(item.type): \(item.content)")
+                }
+            } else {
+                print("[EnhancedExplanation] parallel complete in \(String(format: "%.0f", parallelMs))ms — vision returned nil")
+            }
+            #endif
+        } else if enhancedEnabled {
+            #if DEBUG
+            print("[EnhancedExplanation] toggle ON but extractor is NIL — is GROQ_API_KEY set?")
+            #endif
+            do {
+                recognizedText = try await ocrService.recognizeText(in: captureResult.image)
+            } catch {
+                guard generation == requestGeneration else { return }
+                #if DEBUG
+                print("[DEBUG ScreenshotCoordinator] OCR failed: \(error.localizedDescription)")
+                #endif
+                toastManager.show("OCR failed: \(error.localizedDescription)", icon: "exclamationmark.triangle")
+                return
+            }
+        } else {
+            do {
+                recognizedText = try await ocrService.recognizeText(in: captureResult.image)
+            } catch {
+                guard generation == requestGeneration else { return }
+                #if DEBUG
+                print("[DEBUG ScreenshotCoordinator] OCR failed: \(error.localizedDescription)")
+                #endif
+                toastManager.show("OCR failed: \(error.localizedDescription)", icon: "exclamationmark.triangle")
+                return
+            }
         }
 
-        // Staleness check after OCR await.
+        // Staleness check after OCR/vision await.
         guard generation == requestGeneration else {
             #if DEBUG
             print("[DEBUG ScreenshotCoordinator] request superseded after OCR (gen=\(generation), current=\(requestGeneration))")
@@ -197,7 +255,25 @@ final class ScreenshotModeCoordinator {
         }
 
         let detectedFramework = ExplanationFramework.detect(fromContent: ocrText)
-        let messages = [AIMessage(role: .user, content: ocrText)]
+
+        // Assemble user message with visual context evidence.
+        let userMessage: String
+        if let vc = visualContext, !vc.isEmpty {
+            userMessage = "[Context]\n\(vc.formatted())\n[/Context]\n\n\(ocrText)"
+            #if DEBUG
+            print("[EnhancedExplanation] final prompt contains Visual Context: YES (\(vc.items.count) items, \(vc.formatted().count) chars)")
+            #endif
+            #if DEBUG
+            EnhancedExplanationDebug.shared.lastVisualContext = vc
+            EnhancedExplanationDebug.shared.lastTimestamp = Date()
+            #endif
+        } else {
+            userMessage = ocrText
+            #if DEBUG
+            print("[EnhancedExplanation] final prompt contains Visual Context: NO")
+            #endif
+        }
+        let messages = [AIMessage(role: .user, content: userMessage)]
 
         // Show HUD immediately so the user sees loading state while
         // the AI request is in flight.
@@ -281,6 +357,18 @@ final class ScreenshotModeCoordinator {
             prompt += "\n\nThe screenshot was taken from \(app)."
         }
 
+        prompt += Self.visualContextGuidance
+
         return prompt
     }
+
+    /// System prompt guidance for using visual context evidence.
+    /// Appended unconditionally — a no-op when the user message has no [Context] block.
+    private static let visualContextGuidance = """
+
+        If a [Context]...[/Context] block is present in the user's message, it contains \
+        trusted contextual evidence extracted from the user's visible working environment. \
+        Use this evidence only when it is relevant to improve the explanation. \
+        Do not assume it is complete, and do not repeat it verbatim unless necessary.
+        """
 }

@@ -243,15 +243,15 @@ File → Entity containment (`contains` predicate) migrated from CrossFileResolu
 
 #### Milestone 10: Project-Scope Context Strategy
 
-- **Status:** Not Started
+- **Status:** Complete (2026-07-31)
 - **Dependencies:** M9 (system emergent properties available)
-- **Notes:** Architectural framing for explanations. Selective — not every question needs project scope.
+- **Notes:** See detailed completion section below.
 
 #### Milestone 11: Architecture-Aware Explanation Enhancement
 
-- **Status:** Not Started
+- **Status:** Complete (2026-07-31)
 - **Dependencies:** M10 (project-scope context available)
-- **Notes:** Reasoning engine prompts enriched with architectural context.
+- **Notes:** See detailed completion section below.
 
 #### Milestone 12: Project Intelligence Validation
 
@@ -327,6 +327,7 @@ File → Entity containment (`contains` predicate) migrated from CrossFileResolu
                   ┌───────┴───────┐
                   │ M11: Arch-    │
                   │ Aware Explain │
+                  │ (COMPLETE)    │
                   └───────┬───────┘
                           │
                   ┌───────┴───────┐
@@ -513,6 +514,16 @@ These decisions are load-bearing. Future work must preserve them.
 
 43. **Bracket-aware parseStructuredValue is load-bearing.** The structured value format from `textRepresentation(of: .structured(...))` can contain commas within bracket-enclosed lists (e.g., cross-cutting patterns, technology distributions, module interactions). Naive comma-splitting truncates these values. The bracket-depth tracking fix is essential for correct parsing.
 
+44. **KGR Phase 2 makes enrichment proactive, not reactive.** FileUnderstandingJob triggers immediately after indexing completes. SessionQuestionCoordinator checks the artifact store first, falls back to reactive enrichment on cache miss. SemanticEnrichmentService is now a pure producer — no caching, no lifecycle ownership.
+
+45. **SemanticEnrichmentService static methods are `nonisolated`.** The class is `@MainActor` but `buildEnrichmentPrompt()`, `buildFactsSummary()`, `parseEnrichmentResponse()`, `extractTagContent()`, and `entityName()` are pure functions with no mutable state. Marked `nonisolated static` so FileUnderstandingJob can call them off the main actor.
+
+46. **AIConfiguration is the single source of truth for AI provider env vars.** All provider configuration flows through `AIConfiguration.fromEnvironment()` → `ProviderConfig`. No component reads `ProcessInfo.processInfo.environment` for AI keys directly. This centralizes validation, logging, and test overrides.
+
+47. **Providers receive configuration via dependency injection.** `GroqProvider(config: ProviderConfig)` — the provider never reads environment variables. `ProviderConfig` is an immutable struct created by `AIConfiguration`. This enables test isolation and prevents hidden dependencies on global state.
+
+48. **AIProviderRegistry is intentionally minimal.** Register/lookup/availability only. No protocol, no generics, no automatic discovery. Providers are `AIProviderProtocol` instances registered by identifier string. The registry tracks what's available; the `KnowledgeCapabilityResolver` decides what to use.
+
 ---
 
 ## Known Blockers
@@ -544,12 +555,111 @@ No Project Intelligence-specific blockers exist.
 | QuestionClassifier tests | 34 passing |
 | SystemCompositionPass tests | 35 passing |
 | SystemEmergentPropertiesPass tests | 48 passing |
+| KGR Phase 1 tests | 43 passing (7 suites) |
+| KGR Phase 2 tests | 23 passing (5 suites) |
+| Multi-Provider AI tests | 35 passing (7 suites) |
 | Reasoning engine tests | 22 passing (7+7+8) |
 | Frontend tests | 23 passing (10+13) |
 | SessionState tests | 23 passing (2+5+16) |
 | SessionViewModelDirectory tests | 8 passing |
 | WorkspaceManager tests | 32 passing (16+4+5+7) |
 | Strict concurrency | Clean (zero warnings in pipeline modules) |
+
+---
+
+## Completed Cross-Cutting: KGR Phase 2 — Proactive File Understanding
+
+**Completed:** 2026-07-31
+
+**Purpose:** Migrate semantic enrichment from reactive (computed on first user question) to proactive (computed immediately after indexing). After this milestone, Decode proactively generates File Understanding before the user's first Explain request.
+
+**What was implemented:**
+
+1. **FileUnderstandingJob** — first production `KnowledgeJobDescriptor`. Wraps the existing Semantic Enrichment Pipeline (same prompt, same parsing, same output) but executes proactively via the KGR instead of reactively on first question. `requiredCapability = .fileSummarization`, `scope = .file`, `priority = 100`, `maxConcurrency = 2`, `retryPolicy = .retry(maxAttempts: 2, backoff: 5.0)`. Uses `SemanticEnrichmentService.buildEnrichmentPrompt()`, `buildFactsSummary()`, and `parseEnrichmentResponse()` — no reasoning logic duplicated.
+
+2. **Job Registration** — `FileUnderstandingJob` registered with both `KnowledgePlanner` and `KnowledgeGenerationRuntime` during `AppDependencies.performDeferredStartup()`.
+
+3. **Background Planning Triggers** — KGR triggers wired at 4 points via `WorkspaceManager.onKnowledgeGenerationNeeded`:
+   - New file workspace creation
+   - Persisted file workspace reopen
+   - File workspace reparse (file change)
+   - Directory workspace indexing completion (via `IndexingCoordinator.onComplete`)
+
+4. **Per-File FileIntelligence for Directory Workspaces** — `ManagedWorkspace.fileIntelligenceByFile` stores parsed intelligence per file. `buildPerFileIntelligenceAndTriggerKGR()` reads, parses, and builds `FileIntelligence` for each discovered file, then triggers KGR planning.
+
+5. **KnowledgeArtifactStore Integration** — Persistent JSON cache for job outputs. Loaded from disk at startup. Artifacts keyed by (jobIdentifier, filePath, contentHash). Cache hit skips re-execution. Hash change triggers regeneration.
+
+6. **Session Mode Migration** — `SessionQuestionCoordinator` checks `KnowledgeArtifactStore` first via `FileUnderstandingJob.decodeEnrichment(from:)`. Falls back to reactive `SemanticEnrichmentService.enrich()` only on cache miss. Transparent to the user.
+
+7. **SemanticEnrichmentService Migration** — Removed in-memory cache. Removed `cachedEnrichment(forHash:)`. `enrich()` is now a pure LLM call (no caching, no lifecycle). All static methods marked `nonisolated static` for off-main-actor access by `FileUnderstandingJob`. Service is now a pure producer per its doc comment.
+
+8. **SemanticEnrichment: Codable** — Added `Codable` conformance for JSON serialization in artifact store.
+
+**Files created:**
+- `Decode/Application/KnowledgeGeneration/FileUnderstandingJob.swift`
+
+**Files modified:**
+- `Decode/Domain/Models/SemanticEnrichment.swift` — Codable conformance
+- `Decode/Application/SemanticEnrichmentService.swift` — removed cache, nonisolated static methods
+- `Decode/Application/IndexingCoordinator.swift` — `onComplete` callback
+- `Decode/Application/WorkspaceManager.swift` — `fileIntelligenceByFile`, `onKnowledgeGenerationNeeded`, `buildPerFileIntelligenceAndTriggerKGR()`
+- `Decode/Application/SessionQuestionCoordinator.swift` — artifact store primary path, reactive fallback
+- `Decode/App/AppDependencies.swift` — KGR properties, deferred startup wiring, job registration, trigger callback
+- `DecodeTests/Application/KnowledgeGenerationRuntimeTests.swift` — 23 new tests across 5 suites
+
+**Tests added (23):**
+- FileUnderstandingJob (9): identifier, properties, needsExecution, cache hit, hash change, missing intelligence, missing executor, valid artifact, decode round-trip
+- ArtifactStoreConsumption (5): missing lookup, hash match, stale hash, invalidation, regeneration
+- BackgroundExecution (4): planner produces work, runtime executes, identical hash skip, changed hash regeneration
+- SemanticEnrichmentCodable (2): full and partial round-trip
+- EnrichmentResponseParsing (3): full XML, plain text fallback, partial response
+
+**Build:** SUCCEEDED. Zero regressions. All pre-existing test failures unchanged.
+
+---
+
+## Completed Cross-Cutting: Multi-Provider AI Platform
+
+**Completed:** 2026-08-01
+
+**Purpose:** Transition from single-provider to capability-based multi-provider architecture. Claude for premium reasoning, Groq for background knowledge production. Provider-agnostic infrastructure via dependency injection.
+
+**What was implemented:**
+
+1. **AIConfiguration** — Single source of truth for all AI provider env vars. `ProviderConfig` struct per provider (identifier, apiKey, model, baseURL, isAvailable). `fromEnvironment()` reads ProcessInfo once. `test()` factory for unit tests. `logStatus()` for startup diagnostics.
+
+2. **AIProviderRegistry** — `@MainActor` registry for runtime provider tracking. Register/lookup by identifier, track availability.
+
+3. **GroqProvider** — Wraps `OpenAICompatibleProvider` for Groq's OpenAI-compatible API. Receives `ProviderConfig` via DI.
+
+4. **KnowledgeCapabilityResolver.routed(routes:fallback:)** — Capability-based routing. Routes map `[KnowledgeCapability: CapabilityExecutor]` with fallback for unrouted capabilities.
+
+5. **AppDependencies wiring** — Creates `AIConfiguration.fromEnvironment()`, `GroqProvider(config:)`, registers in `AIProviderRegistry`. Builds routed resolver (Groq available) or uniform resolver (Groq unavailable).
+
+6. **Backend config migration** — Explicit `ANTHROPIC_API_KEY`/`ANTHROPIC_MODEL`/`GROQ_API_KEY`/`GROQ_MODEL` with `resolve_*()` fallback to legacy vars. `gateway_service.py` updated with `_resolve_model()`.
+
+**Files created:**
+- `Decode/Infrastructure/AI/AIConfiguration.swift`
+- `Decode/Infrastructure/AI/AIProviderRegistry.swift`
+- `Decode/Infrastructure/AI/GroqProvider.swift`
+
+**Files modified:**
+- `Decode/Application/KnowledgeGeneration/KnowledgeCapability.swift` — routed factory
+- `Decode/App/AppDependencies.swift` — multi-provider wiring
+- `backend/app/config.py` — explicit provider vars
+- `backend/app/gateway_service.py` — resolve functions
+- `DecodeTests/Application/KnowledgeGenerationRuntimeTests.swift` — 35 new tests (7 suites)
+
+**Tests added (35):**
+- Capability Routing (7): routed/fallback/uniform/deterministic behavior
+- Groq Provider (4): availability with nil/empty/valid key, custom model
+- Provider Fallback Behavior (4): uniform vs routed based on Groq availability
+- Capability Routing Table (2): complete routing verification
+- AIConfiguration (6): both/no/partial providers, default/custom models
+- AIProviderRegistry (5): register, lookup, missing, unavailable, multiple
+- GroqProvider DI (4): from ProviderConfig with/without key, from AIConfiguration
+
+**Build:** SUCCEEDED. Zero regressions. All pre-existing test failures unchanged.
 
 ---
 

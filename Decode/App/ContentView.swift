@@ -12,6 +12,7 @@ struct ContentView: View {
     @State private var showingMemoryInspector = false
     @AppStorage("dsaModeEnabled") private var dsaModeEnabled = false
     @AppStorage("virtualSessionEnabled") private var virtualSessionEnabled = false
+    @AppStorage("enhancedExplanationEnabled") private var enhancedExplanationEnabled = false
 
     // MARK: - WhisperFlow-inspired palette
 
@@ -161,6 +162,28 @@ struct ContentView: View {
             .onChange(of: virtualSessionEnabled) { _, newValue in
                 dependencies.virtualSessionManager.handleToggleChanged(enabled: newValue)
             }
+
+            // Enhanced Explanation toggle
+            HStack(spacing: 10) {
+                Toggle("Enhanced Explanation", isOn: $enhancedExplanationEnabled)
+                    .toggleStyle(.switch)
+                    .tint(accentOrange)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(textPrimary)
+                Text("Screen context for richer explanations")
+                    .font(.system(size: 11))
+                    .foregroundStyle(textSecondary)
+                Spacer()
+            }
+            .padding(.horizontal, 60)
+
+            #if DEBUG
+            // Temporary debug UI: show most recent Visual Context
+            if enhancedExplanationEnabled {
+                EnhancedExplanationDebugView()
+                    .padding(.horizontal, 60)
+            }
+            #endif
 
             Spacer().frame(height: 12)
 
@@ -431,6 +454,72 @@ private struct PermissionStatusView: View {
         }
     }
 }
+
+#if DEBUG
+// MARK: - Enhanced Explanation Debug View (temporary)
+
+/// Displays the most recent Visual Context for debugging.
+/// **Remove once Enhanced Explanation is verified working.**
+private struct EnhancedExplanationDebugView: View {
+
+    @State private var debugState = EnhancedExplanationDebug.shared
+
+    /// Polls for updates since EnhancedExplanationDebug is not @Observable.
+    private let refreshTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "ladybug.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.purple)
+                Text("Enhanced Explanation Debug")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.purple)
+                Spacer()
+                if let ts = debugState.lastTimestamp {
+                    Text(ts, style: .relative)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                    Text("ago")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if let vc = debugState.lastVisualContext {
+                ForEach(Array(vc.items.enumerated()), id: \.offset) { _, item in
+                    HStack(alignment: .top, spacing: 4) {
+                        Text(item.type + ":")
+                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.primary)
+                        Text(item.content)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                }
+            } else {
+                Text("No Visual Context captured yet. Use Selection or Screenshot mode with Enhanced Explanation ON.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.purple.opacity(0.06))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.purple.opacity(0.2), lineWidth: 1)
+                )
+        )
+        .onReceive(refreshTimer) { _ in
+            debugState = EnhancedExplanationDebug.shared
+        }
+    }
+}
+#endif
 
 #Preview {
     ContentView()

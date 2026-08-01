@@ -10,7 +10,7 @@ Stage: Pre-beta alpha, invite-only, 5–50 users.
 
 ---
 
-## Current Project State (July 2026)
+## Current Project State (August 2026)
 
 The **Software Intelligence Platform**, **Session Mode**, and **Workspace Mode** epics are all **complete** and production-ready. All are frozen except for bug fixes, reliability improvements, security fixes, or RFC-driven changes.
 
@@ -69,8 +69,16 @@ All four File Intelligence understanding layers (Identity, Purpose, Behavior, Sa
 
 **Backend**: FastAPI + PostgreSQL on Railway. Full analytics pipeline, admin dashboard, invite management.
 
+**Multi-Provider AI Platform** — capability-based provider routing:
+- **AIConfiguration**: single source of truth for all AI provider env vars. `fromEnvironment()` reads `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `GROQ_API_KEY`, `GROQ_MODEL` once at startup. `ProviderConfig` struct per provider.
+- **AIProviderRegistry**: lightweight `@MainActor` registry. Register/lookup providers by identifier, track availability.
+- **GroqProvider**: wraps `OpenAICompatibleProvider` for Groq's OpenAI-compatible API. Used by KGR for background knowledge generation. Receives config via DI.
+- **KnowledgeCapabilityResolver**: capability-based routing — jobs declare `requiredCapability`, resolver maps to executor, executor maps to provider. No job references any provider directly.
+- **Routing**: File Understanding → Groq (direct, client-side). Explain/Follow-up/Improve → Claude (via Decode Gateway). If `GROQ_API_KEY` missing, everything falls back to Claude.
+- **Backend config**: explicit `ANTHROPIC_API_KEY`/`ANTHROPIC_MODEL`/`GROQ_API_KEY`/`GROQ_MODEL` with `resolve_*()` fallback to legacy `AI_API_KEY`/`AI_MODEL`/`AI_ADAPTER`.
+
 **Client**: Swift 6, macOS 15+, SwiftUI, Apple Development signed (Team `P5Y864DV5S`).
-**Production AI**: `AI_ADAPTER=anthropic`, `AI_MODEL=claude-haiku-4-5-20251001`.
+**Production AI**: Claude via Decode Gateway (premium reasoning), Groq direct (background knowledge generation). Legacy: `AI_ADAPTER=anthropic`, `AI_MODEL=claude-haiku-4-5-20251001`.
 **Auth**: Invite-code activation → access token in Keychain → Bearer auth.
 
 ---
@@ -90,7 +98,7 @@ Protocols for cross-layer communication (dependency inversion). No layer imports
 **App**: `AppDependencies` — root DI container, deferred startup, hotkey fan-out.
 **Application**: `SelectionModeCoordinator`, `ScreenshotModeCoordinator`, `SessionQuestionCoordinator`, `WorkspaceManager`, `WorkspaceResolver`, `IndexingCoordinator`, `NavigationState`, `SessionState`, `SessionStatePersistence`, `SessionManager`, `SessionResolver`, `ContextBuilderService`, `ExplanationFramework`, `RepresentationGuidance`, `SnippetHealthClassifier`, `ImprovementService`, `SemanticEnrichmentService`, `FilePurposeDeriver`, `FileIdentityClassifier`, `VirtualSessionManager`.
 **Domain**: Models (`Workspace`, `WorkspaceKind`, `Session`, `CodeEntity`, `SessionContext`, `AILimits`, `FileIntelligence`, `Relationship`, `SemanticEnrichment`, `ImportDeclaration`, `VirtualSession`, `Investigation`, `Insight`, `InsightContext`, `WorkingMemory`, `InvestigationAnchor`), Protocols (`AIProviderProtocol`, `DatabaseProtocol`, `DirectoryWatcherProtocol`).
-**Infrastructure**: `DecodeGatewayProvider`, `AccessibilityCapture`, `HotkeyService`, `SwiftSyntaxParser`, `TreeSitterParser`, `DatabaseService`, `KeychainService`, `FileWatcherService`, `DirectoryWatcherService`, `ScreenCaptureService`, `VisionOCRService`, `TextReplacementService`, `AnalyticsEventService`.
+**Infrastructure**: `DecodeGatewayProvider`, `GroqProvider`, `AIConfiguration`, `AIProviderRegistry`, `AccessibilityCapture`, `HotkeyService`, `SwiftSyntaxParser`, `TreeSitterParser`, `DatabaseService`, `KeychainService`, `FileWatcherService`, `DirectoryWatcherService`, `ScreenCaptureService`, `VisionOCRService`, `TextReplacementService`, `AnalyticsEventService`.
 **Presentation**: `FloatingExplanationHUD`, `ExplanationHUDViewModel`, `ExplanationTagParser`, `ImprovementSectionView`, `FloatingSessionDock`, `SessionView`, `ProjectExplorerView`, `VirtualSessionInspectorView`.
 
 ### Dependency Injection
@@ -385,7 +393,7 @@ Each phase has objective exit criteria (IAG-004 §3–§8). Verification is bina
 4. ~~**Workspace Mode**~~ — **Complete.** All 8 milestones (W0–W7). Workspace-first architecture, directory support, indexing, watching, multi-file resolution.
 5. ~~**Product Validation Sprint**~~ — **Complete.** Engineering health cleanup (E1-01, E2-00, E3-01 findings), folder upload UI completion, SessionState architecture (workspace history vs application session separation).
 6. ~~**Virtual Session**~~ — **Complete.** Cross-mode investigation memory with Working Memory, Investigations, topic switching, compression, and Memory Inspector. Architecture specification: `architecture/VAS-001-VirtualSessionArchitecture.md`.
-7. **Project Intelligence** — **In progress.** Phase 1 (Module Intelligence, M1–M7) complete. Phase 2 (Project Intelligence, M8–M12) not started. See `PROJECT_INTELLIGENCE_IMPLEMENTATION_STATUS.md`.
+7. **Project Intelligence** — **In progress.** Phase 1 (Module Intelligence, M1–M7) complete. Phase 2 (Project Intelligence, M8–M11) complete. M12 (Validation) not started. Cross-cutting: KGR Phase 2 (proactive File Understanding) and Multi-Provider AI Platform complete. See `PROJECT_INTELLIGENCE_IMPLEMENTATION_STATUS.md`.
 
 ### Implementation Status Tracking
 
@@ -461,6 +469,15 @@ Virtual Session is complete and architecturally specified in `architecture/VAS-0
 - Topic switching (two-layer: structural for Session Mode, semantic keyword overlap for Selection/Screenshot).
 - Investigation boundary detection (structural anchor affinity scoring).
 - Persistence model (JSON file, incremental save after every mutation).
+
+### Multi-Provider AI Platform (Frozen)
+Capability-based provider routing is complete and production-ready. Do not modify:
+- AIConfiguration as single source of truth for provider env vars.
+- ProviderConfig dependency injection (providers never read env vars directly).
+- KnowledgeCapabilityResolver capability-based routing (jobs never reference providers).
+- Routing table: File Understanding → Groq, premium reasoning → Claude via gateway.
+- Graceful fallback: missing GROQ_API_KEY → uniform resolver routes everything to Claude.
+- Backend `resolve_*()` methods with legacy `AI_API_KEY`/`AI_MODEL`/`AI_ADAPTER` fallback.
 
 ### Session State Architecture
 13. **Workspace history vs session state separation** — `Workspace` (database) stores persistent history. `SessionState` (JSON file) stores transient runtime state. Do not add `isOpen` or similar state flags to the `Workspace` model. Do not conflate workspace history with application session state.
@@ -546,65 +563,36 @@ Main branch: `main`. Build must pass before committing. Run `xcodegen generate` 
 
 ---
 
-## Session Handoff (2026-07-31)
+## Session Handoff (2026-08-01)
 
-### What Was Completed
+### What Was Completed This Session
 
-**Virtual Session** — complete cross-mode investigation memory system:
-1. Core domain models: `VirtualSession`, `Investigation`, `Insight`, `InsightContext`, `InsightMode`, `InvestigationAnchor`, `KnowledgeSentence`, `WorkingMemory`.
-2. `VirtualSessionManager`: session lifecycle, investigation boundary detection, knowledge evolution algorithm, retrieval scoring, prompt augmentation, understanding extraction.
-3. **Working Memory**: bounded (1000 chars), topic-aware reset, sentence-level knowledge evolution, async LLM compression with deterministic fallback, unconditional prompt injection.
-4. **Topic Switching**: two-layer detection — structural anchor comparison (Session Mode), semantic keyword overlap (Selection/Screenshot Mode).
-5. **Coordinator Integration**: `workingMemoryBlock()` injected into system prompts in all three coordinators; `extractUnderstanding()` + `recordInsight()` called in `onComplete` callbacks.
-6. **Memory Inspector**: `VirtualSessionInspectorView` popover showing statistics, Working Memory, investigations.
-7. **Persistence**: JSON file with incremental saves, atomic writes, restoration on launch.
-8. **Comprehensive Tests**: ~120 tests across 15 suites (VS-01 through VS-27) covering lifecycle, investigations, expiration, persistence, restoration, storage limits, boundary detection, data model, retrieval, affinity scoring, prompt augmentation, understanding extraction, Working Memory model, WM lifecycle, WM prompt injection, topic keywords, topic switching, WM evolution, deterministic compression.
-9. **Production readiness audit**: 8-criteria verification completed, one LOW issue found and fixed (compression task cancellation on session end).
-10. **Architecture specification**: `architecture/VAS-001-VirtualSessionArchitecture.md` — 2,358 lines, 15,134 words, 20 sections, canonical cross-platform specification.
+Three cross-cutting initiatives completed:
+
+1. **KGR Phase 2 — Proactive File Understanding**: Migrated semantic enrichment from reactive (computed on first user question) to proactive (computed immediately after indexing). `FileUnderstandingJob` as first production `KnowledgeJobDescriptor`. Background planning triggers wired at 4 workspace lifecycle points. `KnowledgeArtifactStore` for persistent JSON cache. `SessionQuestionCoordinator` checks artifact store first, falls back to reactive on cache miss.
+
+2. **Multi-Provider AI Routing**: Decode's first multi-provider architecture. Claude remains the provider for premium reasoning (Explain, Follow-up, Improve) via Decode Gateway. Groq added as provider for background knowledge production (FileUnderstandingJob) via direct client-side API. `KnowledgeCapabilityResolver` provides capability-based routing — no job or reasoning engine references any provider directly. Graceful fallback: if `GROQ_API_KEY` missing, everything routes to Claude.
+
+3. **AI Platform Infrastructure Cleanup**: `AIConfiguration` as single source of truth for all AI env vars. `ProviderConfig` dependency injection — providers never read env vars directly. `AIProviderRegistry` for runtime provider tracking. Backend config updated with explicit per-provider variables and `resolve_*()` fallback methods for legacy backward compatibility.
 
 ### Current Implementation Status
 
 | Component | Status | Location |
 |-----------|--------|----------|
-| Domain models | Complete, frozen | `Decode/Domain/Models/VirtualSession.swift` |
-| Manager | Complete, frozen | `Decode/Application/VirtualSessionManager.swift` |
-| Inspector UI | Complete, frozen | `Decode/Presentation/Settings/VirtualSessionInspectorView.swift` |
-| Toggle UI | Complete, frozen | `ContentView.swift` (lines ~134-163) |
-| AppDependencies wiring | Complete | `Decode/App/AppDependencies.swift` |
-| Tests | Complete | `DecodeTests/Application/VirtualSessionManagerTests.swift` |
-| Architecture spec | Canonical | `architecture/VAS-001-VirtualSessionArchitecture.md` |
-
-### Architecture Status
-
-All specifications frozen:
-- DAS-000 through DAS-012, DDS-000 through DDS-009, IAG-001 through IAG-004 (understanding pipeline).
-- VAS-001 (Virtual Session — new).
-
-### Validation Status
-
-- ~120 Virtual Session tests pass across 15 suites.
-- 855 total tests in the repository; only 4 pre-existing failures (documented in Known Limitations).
-- Production readiness audit: all 8 criteria verified with evidence.
-- No temporary TODOs, debug comments, or unfinished implementation notes in Virtual Session code.
-- All `print()` statements are `#if DEBUG` gated.
+| AIConfiguration | Complete, frozen | `Decode/Infrastructure/AI/AIConfiguration.swift` |
+| AIProviderRegistry | Complete, frozen | `Decode/Infrastructure/AI/AIProviderRegistry.swift` |
+| GroqProvider | Complete, frozen | `Decode/Infrastructure/AI/GroqProvider.swift` |
+| FileUnderstandingJob | Complete, frozen | `Decode/Application/KnowledgeGeneration/FileUnderstandingJob.swift` |
+| KnowledgeCapabilityResolver routing | Complete, frozen | `Decode/Application/KnowledgeGeneration/KnowledgeCapability.swift` |
+| Backend config | Complete | `backend/app/config.py`, `backend/app/gateway_service.py` |
+| Tests (35 new) | Complete | `DecodeTests/Application/KnowledgeGenerationRuntimeTests.swift` |
 
 ### Repository State
 
 - Branch: `main`.
-- Last commit: `410e9ea` — "new feature added: virtual session" (pushed to origin).
-- Working tree: clean (except for this handoff update).
-- No uncommitted changes, no stale branches.
-
-### Known Limitations (Virtual Session Specific)
-
-1. **Pipeline path does not inject Working Memory** — Pipeline reasoning engines are frozen modules. WM injection happens at the coordinator level in the system prompt. The pipeline path in SessionQuestionCoordinator does not inject WM into the pipeline's internal prompts. Both paths record insights that evolve WM.
-2. **Selection/Screenshot topic switching can be aggressive** — Zero keyword overlap triggers a switch even for genuinely related subtopics that happen to use different vocabulary (e.g., "OAuth bearer tokens" → "Keychain encrypted credentials"). Accepted tradeoff: losing a few sentences of WM is lower cost than injecting irrelevant context.
-3. **No LLM compression tests** — LLM compression depends on an external service. Only deterministic compression (the fallback) is tested.
-
-### Outstanding Bugs
-
-None. All known issues are architectural tradeoffs documented above.
+- Working tree: uncommitted changes from this session (3 files created, 12 files modified).
+- All new tests pass. 4 pre-existing failures unchanged.
 
 ### Immediate Next Recommended Task
 
-**Project Intelligence Phase 2 (M8–M12)**: System entity creation, system emergent properties, project-scope context strategy, architecture-aware explanations, and project intelligence validation. See `PROJECT_INTELLIGENCE_IMPLEMENTATION_STATUS.md` for milestone details.
+**Project Intelligence M12 — Validation**: End-to-end validation of the complete Project Intelligence stack (M8–M11). See `PROJECT_INTELLIGENCE_IMPLEMENTATION_STATUS.md` for milestone details. After M12, the Project Intelligence epic is closed.

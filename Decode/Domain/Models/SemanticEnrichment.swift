@@ -29,7 +29,7 @@ import Foundation
 /// - **Lazy**: computed only when a user requests an explanation.
 /// - **Cached**: keyed by `fileHash` — reused until the file changes.
 /// - **Fallible**: if the LLM call fails, deterministic analysis is the fallback.
-struct SemanticEnrichment: Sendable {
+struct SemanticEnrichment: Sendable, Codable {
 
     /// LLM-derived purpose: a rich explanation of why this file exists,
     /// what responsibility it owns, and how it fits into the larger system.

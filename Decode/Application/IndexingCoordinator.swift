@@ -56,6 +56,10 @@ final class IndexingCoordinator {
 
     // MARK: - Public API
 
+    /// Callback invoked when indexing completes successfully.
+    /// Parameters: (fileCount, discoveredFilePaths).
+    var onComplete: (@MainActor (Int, [String]) -> Void)?
+
     /// Start indexing all source files under `rootPath` through the understanding pipeline.
     ///
     /// - Parameters:
@@ -123,6 +127,7 @@ final class IndexingCoordinator {
 
             await MainActor.run {
                 self?.state = .complete(fileCount: totalFiles)
+                self?.onComplete?(totalFiles, files)
             }
         }
     }

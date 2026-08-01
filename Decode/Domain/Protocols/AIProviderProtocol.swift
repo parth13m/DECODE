@@ -48,10 +48,33 @@ protocol AIProviderProtocol: Sendable {
 
     /// Validate that the provider is correctly configured and reachable.
     func validateConnection() async throws
+
+    /// Generate a non-streaming completion from an image and a text prompt.
+    ///
+    /// Used by Enhanced Explanation (Visual Context) extraction. Non-streaming
+    /// because the output is short structured evidence (~100 tokens), not a
+    /// user-facing narrative. `imageData` is JPEG bytes — platform-portable,
+    /// no CoreGraphics dependency in the Domain layer.
+    ///
+    /// - Parameter imageData: JPEG-encoded image bytes.
+    /// - Parameter prompt: The extraction prompt.
+    /// - Parameter mode: The request mode for server-side tracking.
+    func generateVisionCompletion(
+        imageData: Data,
+        prompt: String,
+        mode: String?
+    ) async throws -> String
 }
 
 // Default overloads so callers that don't need mode tracking can omit it.
 extension AIProviderProtocol {
+
+    // Default: providers that don't support vision fail explicitly.
+    func generateVisionCompletion(
+        imageData: Data, prompt: String, mode: String?
+    ) async throws -> String {
+        throw AIProviderError.unsupportedCapability("Vision")
+    }
 
     func generateCompletion(
         userContent: String,

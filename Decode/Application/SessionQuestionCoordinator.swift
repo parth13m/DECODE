@@ -37,6 +37,7 @@ final class SessionQuestionCoordinator {
     private let workspaceProvider: @MainActor () -> WorkspaceResolverInput?
     private let usageTracker: AIUsageTracker
     private let semanticEnrichment: SemanticEnrichmentService
+    private let knowledgeArtifactStore: KnowledgeArtifactStore?
     private let pipelineQueryService: PipelineQueryService?
     private let virtualSessionManager: VirtualSessionManager
 
@@ -69,6 +70,7 @@ final class SessionQuestionCoordinator {
         workspaceProvider: @escaping @MainActor () -> WorkspaceResolverInput?,
         usageTracker: AIUsageTracker,
         semanticEnrichment: SemanticEnrichmentService,
+        knowledgeArtifactStore: KnowledgeArtifactStore? = nil,
         pipelineQueryService: PipelineQueryService? = nil,
         virtualSessionManager: VirtualSessionManager
     ) {
@@ -82,6 +84,7 @@ final class SessionQuestionCoordinator {
         self.workspaceProvider = workspaceProvider
         self.usageTracker = usageTracker
         self.semanticEnrichment = semanticEnrichment
+        self.knowledgeArtifactStore = knowledgeArtifactStore
         self.pipelineQueryService = pipelineQueryService
         self.virtualSessionManager = virtualSessionManager
     }
@@ -277,28 +280,60 @@ final class SessionQuestionCoordinator {
             healthClassification = HealthClassification(tier: .silent, hints: [])
         }
 
-        // 9. Semantic enrichment (lazy, cached).
+        // 9. Semantic enrichment: artifact store → reactive fallback.
         // Runs before the quota check — enrichment is infrastructure,
-        // not a user-visible request. Cache hits are instantaneous.
+        // not a user-visible request.
         var enrichedPurpose: String? = nil
         var enrichedBehavior: String? = nil
         var enrichedSafety: String? = nil
         var enrichedDesign: String? = nil
         var enrichmentCacheHit = false
-        if let intelligence = managed.fileIntelligence {
-            // Check cache before calling enrich to detect hit vs miss.
-            enrichmentCacheHit = semanticEnrichment.cachedEnrichment(forHash: intelligence.fileHash) != nil
-            let enrichment = await semanticEnrichment.enrich(intelligence: intelligence)
-            // Staleness check after enrichment await.
-            guard generation == requestGeneration else { return }
-            enrichedPurpose = enrichment?.purpose
-            enrichedBehavior = enrichment?.behavior
-            enrichedSafety = enrichment?.safety
-            enrichedDesign = enrichment?.design
 
-            // Write enrichment back to ManagedWorkspace for Knowledge Inspector.
-            if let enrichment {
-                managed.fileIntelligence?.semanticEnrichment = enrichment
+        // Resolve the effective FileIntelligence. For directory workspaces,
+        // use per-file intelligence if available.
+        let effectiveIntelligence: FileIntelligence? = {
+            if managed.workspace.kind == .directory,
+               let resolvedPath = resolution.resolvedFilePath {
+                return managed.fileIntelligenceByFile[resolvedPath] ?? managed.fileIntelligence
+            }
+            return managed.fileIntelligence
+        }()
+
+        if let intelligence = effectiveIntelligence {
+            // Primary path: check KnowledgeArtifactStore for proactively
+            // generated File Understanding.
+            if let store = knowledgeArtifactStore,
+               let artifact = store.lookup(
+                   jobIdentifier: FileUnderstandingJob.identifier,
+                   filePath: effectiveFilePath,
+                   contentHash: intelligence.fileHash
+               ),
+               let cachedEnrichment = FileUnderstandingJob.decodeEnrichment(from: artifact.data) {
+                enrichedPurpose = cachedEnrichment.purpose
+                enrichedBehavior = cachedEnrichment.behavior
+                enrichedSafety = cachedEnrichment.safety
+                enrichedDesign = cachedEnrichment.design
+                enrichmentCacheHit = true
+
+                // Write enrichment back to ManagedWorkspace for Knowledge Inspector.
+                if managed.workspace.kind == .file {
+                    managed.fileIntelligence?.semanticEnrichment = cachedEnrichment
+                }
+            } else {
+                // Fallback path: KGR has not yet generated the artifact.
+                // Call SemanticEnrichmentService directly (reactive, no caching).
+                let enrichment = await semanticEnrichment.enrich(intelligence: intelligence)
+                // Staleness check after enrichment await.
+                guard generation == requestGeneration else { return }
+                enrichedPurpose = enrichment?.purpose
+                enrichedBehavior = enrichment?.behavior
+                enrichedSafety = enrichment?.safety
+                enrichedDesign = enrichment?.design
+
+                // Write enrichment back to ManagedWorkspace for Knowledge Inspector.
+                if let enrichment, managed.workspace.kind == .file {
+                    managed.fileIntelligence?.semanticEnrichment = enrichment
+                }
             }
         }
 
@@ -308,7 +343,7 @@ final class SessionQuestionCoordinator {
         // from the prompt to reduce token usage and improve focus.
         let layerSelection = selectContextLayers(
             snippet: snippetText,
-            fileRole: managed.fileIntelligence?.identity.role
+            fileRole: effectiveIntelligence?.identity.role
         )
         if !layerSelection.includeBehavior { enrichedBehavior = nil }
         if !layerSelection.includeSafety { enrichedSafety = nil }

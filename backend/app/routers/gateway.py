@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.auth import get_current_user
 from app.config import settings
 from app.database import get_db
-from app.gateway_service import GatewayError, call_llm, stream_llm
+from app.gateway_service import GatewayError, call_llm, call_vision_llm, stream_llm
 from app.models.analytics_event import AnalyticsEvent
 from app.models.request_log import RequestLog
 from app.models.user import User
@@ -174,6 +174,61 @@ async def chat_stream(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# Vision — Enhanced Explanation visual context extraction
+# ---------------------------------------------------------------------------
+
+class VisionRequest(BaseModel):
+    image_data: str = Field(..., description="Base64-encoded JPEG image")
+    prompt: str = Field(..., min_length=1)
+    mode: str | None = None
+
+
+class VisionResponse(BaseModel):
+    content: str
+
+
+@router.post("/vision", response_model=VisionResponse)
+async def vision(
+    body: VisionRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> VisionResponse:
+    """Extract visual context from an image using Groq Vision.
+
+    Requires Bearer token authentication. Used by the Enhanced Explanation
+    feature to extract contextual evidence from screenshots.
+    """
+    start = time.monotonic()
+
+    try:
+        content, latency_ms, token_usage = await call_vision_llm(
+            image_base64=body.image_data,
+            prompt=body.prompt,
+        )
+    except GatewayError as exc:
+        latency_ms = int((time.monotonic() - start) * 1000)
+        _log_request(
+            db, user.id, success=False, latency_ms=latency_ms,
+            error_type=exc.error_type, mode=body.mode,
+            ai_provider="groq", ai_model=settings.GROQ_VISION_MODEL,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Vision service unavailable",
+        ) from None
+
+    _log_request(
+        db, user.id, success=True, latency_ms=latency_ms, mode=body.mode,
+        ai_provider="groq", ai_model=settings.GROQ_VISION_MODEL,
+        prompt_tokens=token_usage.get("prompt_tokens"),
+        completion_tokens=token_usage.get("completion_tokens"),
+        total_tokens=token_usage.get("total_tokens"),
+    )
+
+    return VisionResponse(content=content)
 
 
 def _log_request(

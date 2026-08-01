@@ -148,6 +148,41 @@ struct KnowledgeCapabilityResolver: Sendable {
         }
     }
 
+    /// Creates a resolver that routes capabilities to specific executors.
+    ///
+    /// Each entry in `routes` maps a capability to a dedicated executor.
+    /// Capabilities not in the routing table use the `fallback` executor.
+    ///
+    /// This enables multi-provider architectures: background knowledge
+    /// production can use a fast inference provider while premium reasoning
+    /// uses a different provider — all without jobs knowing about providers.
+    ///
+    /// - Parameters:
+    ///   - routes: Per-capability executor overrides.
+    ///   - fallback: Default executor for capabilities not in `routes`.
+    static func routed(
+        routes: [KnowledgeCapability: CapabilityExecutor],
+        fallback: @escaping CapabilityExecutor
+    ) -> KnowledgeCapabilityResolver {
+        KnowledgeCapabilityResolver { capability in
+            switch capability {
+            case .moduleSummarization, .architectureSummarization:
+                // These resolve to their routed executor if provided,
+                // otherwise to the fallback. Currently AI-tier for
+                // future Module/Architecture Understanding jobs.
+                if let executor = routes[capability] {
+                    return CapabilityResolution(tier: .summarization, executor: executor)
+                }
+                return CapabilityResolution(tier: .summarization, executor: fallback)
+            default:
+                if let executor = routes[capability] {
+                    return CapabilityResolution(tier: .summarization, executor: executor)
+                }
+                return CapabilityResolution(tier: .summarization, executor: fallback)
+            }
+        }
+    }
+
     /// Creates a resolver where all capabilities are deterministic.
     /// Used in tests and when no AI provider is available.
     static let allDeterministic = KnowledgeCapabilityResolver { _ in

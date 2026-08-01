@@ -82,6 +82,18 @@ final class WorkspaceManager {
     /// Used by `IndexingCoordinator` for directory workspace ingestion.
     var processChanges: (@Sendable ([UpdateEngine.FileChangeEvent]) async -> UpdateEngine.ChangeSetResult)?
 
+    /// Callback invoked when files are ready for proactive knowledge generation.
+    /// Set by AppDependencies to trigger KGR planning after indexing completes
+    /// or a file workspace is created/reparsed.
+    ///
+    /// Parameters: (workspaceId, filePaths, fileHashes, fileIntelligences).
+    var onKnowledgeGenerationNeeded: (
+        (_ workspaceId: UUID,
+         _ filePaths: [String],
+         _ fileHashes: [String: String],
+         _ fileIntelligences: [String: FileIntelligence]) -> Void
+    )?
+
     /// File extensions that receive full SwiftSyntax AST parsing.
     private static let swiftExtensions: Set<String> = ["swift"]
 
@@ -290,6 +302,13 @@ final class WorkspaceManager {
                     try await db.updateWorkspace(updated)
                     workspaces[persisted.id]?.workspace = updated
                 }
+
+                // Trigger proactive knowledge generation.
+                triggerKnowledgeGeneration(
+                    workspaceId: persisted.id,
+                    filePaths: [persisted.rootPath],
+                    intelligences: [persisted.rootPath: intelligence]
+                )
                 return
             }
         }
@@ -330,6 +349,13 @@ final class WorkspaceManager {
         workspaces[workspace.id] = managed
         startWatching(managed: managed)
         activateWorkspace(id: workspace.id)
+
+        // Trigger proactive knowledge generation for this file.
+        triggerKnowledgeGeneration(
+            workspaceId: workspace.id,
+            filePaths: [workspace.rootPath],
+            intelligences: [workspace.rootPath: intelligence]
+        )
     }
 
     /// Create a new `.directory` workspace for the given directory URL.
@@ -399,6 +425,18 @@ final class WorkspaceManager {
 
         let coordinator = IndexingCoordinator()
         managed.indexingCoordinator = coordinator
+
+        // After indexing completes, build per-file FileIntelligence
+        // and trigger proactive knowledge generation.
+        let workspaceId = managed.workspace.id
+        coordinator.onComplete = { [weak self] _, discoveredFiles in
+            guard let self else { return }
+            self.buildPerFileIntelligenceAndTriggerKGR(
+                workspaceId: workspaceId,
+                filePaths: discoveredFiles
+            )
+        }
+
         coordinator.start(
             rootPath: managed.workspace.rootPath,
             processChanges: processChanges
@@ -653,11 +691,97 @@ final class WorkspaceManager {
                 source: source
             )
             workspaces[id]?.fileIntelligence = intelligence
+
+            // Trigger proactive knowledge generation for the updated file.
+            triggerKnowledgeGeneration(
+                workspaceId: currentWorkspace.id,
+                filePaths: [currentWorkspace.rootPath],
+                intelligences: [currentWorkspace.rootPath: intelligence]
+            )
         } catch {
             #if DEBUG
             print("[WorkspaceManager] Reparse failed for \(managed.workspace.rootFileName): \(error)")
             #endif
         }
+    }
+
+    // MARK: - Knowledge Generation
+
+    /// Build FileIntelligence for all discovered files in a directory workspace
+    /// and trigger proactive knowledge generation.
+    ///
+    /// Runs asynchronously to avoid blocking the indexing completion callback.
+    /// Parses each file to build deterministic facts, stores per-file intelligence
+    /// on the ManagedWorkspace, then triggers the KGR planner.
+    private func buildPerFileIntelligenceAndTriggerKGR(
+        workspaceId: UUID,
+        filePaths: [String]
+    ) {
+        guard !filePaths.isEmpty else { return }
+
+        Task { [weak self] in
+            guard let self else { return }
+            guard let managed = self.workspaces[workspaceId] else { return }
+
+            var intelligences: [String: FileIntelligence] = [:]
+            var fileHashes: [String: String] = [:]
+
+            for filePath in filePaths {
+                let url = URL(fileURLWithPath: filePath)
+                guard let source = try? String(contentsOf: url, encoding: .utf8) else {
+                    continue
+                }
+
+                let hash = self.sha256(source)
+                fileHashes[filePath] = hash
+
+                let result = self.parseFile(source: source, url: url)
+                let fileName = url.lastPathComponent
+
+                let intelligence = self.buildFileIntelligence(
+                    workspaceId: workspaceId,
+                    fileName: fileName,
+                    filePath: filePath,
+                    fileHash: hash,
+                    parseResult: result,
+                    source: source
+                )
+                intelligences[filePath] = intelligence
+
+                // Also populate parsedEntitiesByFile for workspace resolution.
+                managed.parsedEntitiesByFile[filePath] = result.entities
+            }
+
+            // Store per-file intelligence on the workspace.
+            managed.fileIntelligenceByFile = intelligences
+
+            #if DEBUG
+            print("[WorkspaceManager] Built FileIntelligence for \(intelligences.count)/\(filePaths.count) files in workspace \(managed.workspace.rootFileName)")
+            #endif
+
+            // Trigger KGR planning.
+            self.triggerKnowledgeGeneration(
+                workspaceId: workspaceId,
+                filePaths: Array(intelligences.keys),
+                intelligences: intelligences
+            )
+        }
+    }
+
+    /// Notify the KGR that files are ready for proactive knowledge generation.
+    private func triggerKnowledgeGeneration(
+        workspaceId: UUID,
+        filePaths: [String],
+        intelligences: [String: FileIntelligence]
+    ) {
+        guard !filePaths.isEmpty else { return }
+
+        var fileHashes: [String: String] = [:]
+        for (path, intelligence) in intelligences {
+            fileHashes[path] = intelligence.fileHash
+        }
+
+        onKnowledgeGenerationNeeded?(workspaceId, filePaths, fileHashes, intelligences)
     }
 
     // MARK: - Helpers
@@ -722,6 +846,12 @@ final class ManagedWorkspace: Identifiable {
     /// their parsed entities. For `.file` workspaces, contains a single entry
     /// keyed by `workspace.rootPath`.
     var parsedEntitiesByFile: [String: [ParsedEntity]] = [:]
+
+    /// Per-file FileIntelligence for `.directory` workspaces. Maps file paths to
+    /// their deterministic intelligence. Built after indexing completes so that
+    /// the KGR can proactively generate File Understanding.
+    var fileIntelligenceByFile: [String: FileIntelligence] = [:]
+
     var lastRefreshedAt: Date?
     var isFileAccessible: Bool = true
 

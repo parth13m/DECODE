@@ -112,6 +112,36 @@ final class OpenAICompatibleProvider: AIProviderProtocol, Sendable {
         }
     }
 
+    func generateVisionCompletion(
+        imageData: Data,
+        prompt: String,
+        mode: String?
+    ) async throws -> String {
+        let base64Image = imageData.base64EncodedString()
+
+        // OpenAI-compatible vision format: multimodal content blocks.
+        let userContent: [[String: Any]] = [
+            ["type": "image_url", "image_url": ["url": "data:image/jpeg;base64,\(base64Image)"]],
+            ["type": "text", "text": prompt],
+        ]
+
+        let messages: [[String: Any]] = [
+            ["role": "user", "content": userContent],
+        ]
+
+        let body: [String: Any] = [
+            "model": modelID,
+            "messages": messages,
+            "max_tokens": AILimits.maxVisionResponseTokens,
+            "stream": false,
+        ]
+
+        let request = try buildRequest(body: body)
+        let (data, _) = try await client.performRequest(request)
+
+        return try parseCompletionResponse(data)
+    }
+
     func validateConnection() async throws {
         let messages: [[String: String]] = [
             ["role": "user", "content": "Say OK"],

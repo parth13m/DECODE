@@ -36,4 +36,23 @@ enum AILimits {
 
     /// Maximum characters for OCR output (Screenshot Mode).
     static let maxOCRTextCharacters = 10_000
+
+    // MARK: - Vision (Enhanced Explanation)
+
+    /// Maximum tokens the vision model may generate.
+    /// The extraction prompt targets 80-120 tokens. Hard cap at 256
+    /// prevents runaway generation while allowing headroom.
+    static let maxVisionResponseTokens = 256
+
+    /// Maximum JPEG bytes sent to the vision provider.
+    static let maxVisionImageBytes = 800 * 1024  // 800 KB
+
+    /// Timeout for vision extraction (seconds).
+    /// Shorter than explanation timeout — visual context is optional enrichment.
+    static let visionTimeoutSeconds: TimeInterval = 10
+
+    /// Maximum characters for formatted visual evidence injected into the
+    /// explanation prompt. ~150 tokens. Evidence exceeding this is truncated
+    /// by dropping lowest-priority (last) items.
+    static let maxVisualEvidenceCharacters = 600
 }

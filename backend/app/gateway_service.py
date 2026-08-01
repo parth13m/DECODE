@@ -54,11 +54,40 @@ class GatewayError(Exception):
 # ── Resolve effective config ────────────────────────────────────────────
 
 def _resolve_api_key() -> str:
-    """Return the configured API key, with legacy GROQ_API_KEY fallback."""
-    key = settings.AI_API_KEY or settings.GROQ_API_KEY
+    """Return the configured API key for the active adapter.
+
+    Prefers explicit provider keys (ANTHROPIC_API_KEY, GROQ_API_KEY).
+    Falls back to legacy AI_API_KEY for backward compatibility.
+    """
+    adapter = settings.AI_ADAPTER
+
+    # Prefer explicit provider keys.
+    if adapter == "anthropic":
+        key = settings.resolve_anthropic_key()
+    elif adapter in ("groq", "openai_compat") or adapter in _OPENAI_COMPAT_URLS:
+        key = settings.resolve_groq_key()
+    else:
+        # Gemini or unknown — use legacy AI_API_KEY.
+        key = settings.AI_API_KEY
+
     if not key:
         raise GatewayError("AI service is not configured", error_type="config_error")
     return key
+
+
+def _resolve_model() -> str:
+    """Return the effective model for the active adapter.
+
+    Prefers explicit provider models (ANTHROPIC_MODEL, GROQ_MODEL).
+    Falls back to legacy AI_MODEL for backward compatibility.
+    """
+    adapter = settings.AI_ADAPTER
+    if adapter == "anthropic":
+        return settings.resolve_anthropic_model()
+    elif adapter in ("groq", "openai_compat") or adapter in _OPENAI_COMPAT_URLS:
+        return settings.resolve_groq_model()
+    else:
+        return settings.AI_MODEL or "gemini-pro"
 
 
 def _resolve_api_url(adapter: str, model: str) -> str:
@@ -312,7 +341,7 @@ async def call_llm(
     Values are ``None`` when the provider does not report them.
     """
     api_key = _resolve_api_key()
-    model = settings.AI_MODEL
+    model = _resolve_model()
     adapter_name, adapter_fn = _resolve_adapter(settings.AI_ADAPTER)
     api_url = _resolve_api_url(adapter_name, model)
 
@@ -343,6 +372,87 @@ async def call_llm(
 
     # Attach prompt character count for analytics persistence.
     token_usage["prompt_character_count"] = total_chars
+
+    return content, latency_ms, token_usage
+
+
+# ── Vision: Groq Vision via OpenAI-compatible multimodal ─────────────
+
+_VISION_MAX_TOKENS = 256
+
+async def call_vision_llm(
+    image_base64: str,
+    prompt: str,
+) -> tuple[str, int, dict[str, int | None]]:
+    """Call Groq Vision with a base64-encoded image and text prompt.
+
+    Always routes to Groq regardless of the primary AI_ADAPTER setting.
+    Uses the OpenAI-compatible multimodal content format.
+
+    Returns (content, latency_ms, token_usage).  Raises GatewayError on failure.
+    """
+    api_key = settings.resolve_groq_key()
+    if not api_key:
+        raise GatewayError(
+            "GROQ_API_KEY is not configured — vision requests require Groq",
+            error_type="config_error",
+        )
+
+    model = settings.GROQ_VISION_MODEL
+    api_url = _OPENAI_COMPAT_URLS["groq"]
+
+    # Build multimodal message with image + text content blocks.
+    messages: list[dict[str, Any]] = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"},
+                },
+                {"type": "text", "text": prompt},
+            ],
+        }
+    ]
+
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": _VISION_MAX_TOKENS,
+    }
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    logger.info(
+        "Vision request: model=%s prompt_len=%d image_base64_len=%d",
+        model, len(prompt), len(image_base64),
+    )
+
+    start = time.monotonic()
+    data = await _http_post(api_url, headers=headers, payload=payload)
+    latency_ms = int((time.monotonic() - start) * 1000)
+
+    choices = data.get("choices", [])
+    if not choices:
+        raise GatewayError("Vision service returned an empty response", error_type="empty_response")
+
+    content = choices[0].get("message", {}).get("content")
+    if not content:
+        raise GatewayError("Vision service returned an empty response", error_type="empty_response")
+
+    usage = data.get("usage", {})
+    token_usage: dict[str, int | None] = {
+        "prompt_tokens": usage.get("prompt_tokens"),
+        "completion_tokens": usage.get("completion_tokens"),
+        "total_tokens": usage.get("total_tokens"),
+    }
+
+    logger.info(
+        "Vision success: model=%s latency=%dms content_length=%d",
+        model, latency_ms, len(content),
+    )
 
     return content, latency_ms, token_usage
 
@@ -500,7 +610,7 @@ async def stream_llm(
     Raises GatewayError on failure (before or during streaming).
     """
     api_key = _resolve_api_key()
-    model = settings.AI_MODEL
+    model = _resolve_model()
     adapter_name, _ = _resolve_adapter(settings.AI_ADAPTER)
     api_url = _resolve_api_url(adapter_name, model)
 

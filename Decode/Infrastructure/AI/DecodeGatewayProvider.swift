@@ -196,6 +196,61 @@ struct DecodeGatewayProvider: AIProviderProtocol, Sendable {
         }
     }
 
+    func generateVisionCompletion(
+        imageData: Data,
+        prompt: String,
+        mode: String?
+    ) async throws -> String {
+        guard let token = accessToken(), !token.isEmpty else {
+            throw AIProviderError.notAuthenticated
+        }
+
+        let url = DecodeConfig.backendBaseURL.appendingPathComponent("api/gateway/vision")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = Self.timeout
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        let body = VisionGatewayRequest(
+            imageData: imageData.base64EncodedString(),
+            prompt: prompt,
+            mode: mode
+        )
+        request.httpBody = try JSONEncoder().encode(body)
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch let error as URLError where error.code == .timedOut {
+            throw AIProviderError.timeout
+        } catch {
+            throw AIProviderError.networkError(underlying: error)
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw AIProviderError.invalidResponse(detail: "Not an HTTP response")
+        }
+
+        switch httpResponse.statusCode {
+        case 200:
+            let decoded = try JSONDecoder().decode(GatewayResponse.self, from: data)
+            guard !decoded.content.isEmpty else {
+                throw AIProviderError.emptyResponse
+            }
+            return decoded.content
+        case 401:
+            throw AIProviderError.sessionExpired
+        case 403:
+            throw AIProviderError.accountDisabled
+        case 502:
+            throw AIProviderError.serviceUnavailable
+        default:
+            throw AIProviderError.serviceUnavailable
+        }
+    }
+
     func validateConnection() async throws {
         // Validate by sending a minimal request to the gateway.
         let messages = [AIMessage(role: .user, content: "hi")]
@@ -351,6 +406,18 @@ private struct GatewayRequest: Encodable {
         case contextTier = "context_tier"
         case explanationProfile = "explanation_profile"
         case language
+    }
+}
+
+private struct VisionGatewayRequest: Encodable {
+    let imageData: String
+    let prompt: String
+    let mode: String?
+
+    enum CodingKeys: String, CodingKey {
+        case imageData = "image_data"
+        case prompt
+        case mode
     }
 }
 

@@ -93,6 +93,30 @@ final class AppDependencies {
     /// Task running the understanding pipeline startup sequence.
     private var understandingStartupTask: Task<Void, Never>?
 
+    // MARK: - Knowledge Generation Runtime
+
+    /// Persistent cache for knowledge artifacts produced by the KGR.
+    private(set) var knowledgeArtifactStore: KnowledgeArtifactStore?
+
+    /// Determines which knowledge generation jobs need to run.
+    private(set) var knowledgePlanner: KnowledgePlanner?
+
+    /// Schedules and executes knowledge generation work items.
+    private(set) var knowledgeRuntime: KnowledgeGenerationRuntime?
+
+    // MARK: - AI Platform
+
+    /// Centralized AI provider configuration loaded from environment variables.
+    private(set) var aiConfiguration: AIConfiguration?
+
+    /// Registry of all initialized AI providers indexed by identifier.
+    private(set) var providerRegistry: AIProviderRegistry?
+
+    /// Dedicated provider for background knowledge generation.
+    /// Uses Groq for fast inference. Falls back to the primary provider
+    /// (Claude via gateway) when GROQ_API_KEY is not configured.
+    private(set) var knowledgeProvider: GroqProvider?
+
     // MARK: - Usage Tracking
 
     /// Shared quota tracker for AI request limits across all modes.
@@ -226,14 +250,107 @@ final class AppDependencies {
         let tracker = AIUsageTracker()
         self.usageTracker = tracker
 
+        // 1c. AI Platform — multi-provider architecture.
+        //
+        // AIConfiguration loads all provider config from environment once.
+        // Providers receive their config via dependency injection.
+        // AIProviderRegistry tracks all available providers.
+        //
+        // Primary provider (Claude via gateway): Explain, Follow-up, Improve.
+        // Knowledge provider (Groq via direct API): FileUnderstandingJob, future
+        //   ModuleUnderstandingJob, ArchitectureUnderstandingJob.
+        //
+        // If GROQ_API_KEY is not set, all capabilities fall back to Claude.
+        let config = AIConfiguration.fromEnvironment()
+        self.aiConfiguration = config
+        config.logStatus()
+
+        let registry = AIProviderRegistry()
+        self.providerRegistry = registry
+
+        // Initialize Groq provider from centralized configuration.
+        let groqProvider = GroqProvider(config: config.groq, visionModel: config.groqVisionModel)
+        self.knowledgeProvider = groqProvider
+        registry.register(groqProvider, identifier: "groq", isAvailable: groqProvider.isAvailable)
+
+        // 1d. Knowledge Generation Runtime.
+        let artifactStore = KnowledgeArtifactStore()
+        artifactStore.loadFromDisk()
+        self.knowledgeArtifactStore = artifactStore
+
+        // Primary executor: routes through the Decode Gateway → Claude.
+        let primaryExecutor: CapabilityExecutor = { [weak self] userContent, systemPrompt, capability, mode in
+            guard let provider = await MainActor.run(body: { self?.aiProvider }) else {
+                throw KnowledgeGenerationError.noProvider
+            }
+            return try await provider.generateCompletion(
+                userContent: userContent,
+                systemPrompt: systemPrompt,
+                mode: mode
+            )
+        }
+
+        // Build the capability resolver: routed if Groq is available, uniform otherwise.
+        let capabilityResolver: KnowledgeCapabilityResolver
+        if groqProvider.isAvailable {
+            // Knowledge executor: routes directly to Groq for background work.
+            let knowledgeExecutor: CapabilityExecutor = { userContent, systemPrompt, capability, mode in
+                return try await groqProvider.generateCompletion(
+                    userContent: userContent,
+                    systemPrompt: systemPrompt,
+                    mode: mode
+                )
+            }
+
+            capabilityResolver = KnowledgeCapabilityResolver.routed(
+                routes: [
+                    .fileSummarization: knowledgeExecutor,
+                    .moduleSummarization: knowledgeExecutor,
+                    .architectureSummarization: knowledgeExecutor,
+                ],
+                fallback: primaryExecutor
+            )
+        } else {
+            capabilityResolver = KnowledgeCapabilityResolver.uniform(executor: primaryExecutor)
+        }
+
+        let planner = KnowledgePlanner(resolver: capabilityResolver)
+        self.knowledgePlanner = planner
+
+        let kgRuntime = KnowledgeGenerationRuntime(
+            resolver: capabilityResolver,
+            store: artifactStore
+        )
+        self.knowledgeRuntime = kgRuntime
+
+        // Register FileUnderstandingJob with planner and runtime.
+        let fileUnderstandingJob = FileUnderstandingJob()
+        planner.register(fileUnderstandingJob)
+        kgRuntime.registerJob(fileUnderstandingJob)
+
         // 2. Wire up coordinators.
+        // Create VisualContextExtractor for Enhanced Explanation.
+        // Routes vision requests through the Decode Gateway (Railway) → Groq Vision.
+        // The gateway provider is always created — it uses the Keychain token closure
+        // so it works even if rebuilt later. If not authenticated or GROQ_API_KEY is
+        // not set server-side, the request fails and the extractor returns nil
+        // (graceful degradation).
+        let visionGatewayProvider = DecodeGatewayProvider(
+            accessToken: { [weak self] in
+                guard let keychain = self?.keychain else { return nil }
+                return try? keychain.retrieve(forAccount: "decode-access-token")
+            }
+        )
+        let vcExtractor = VisualContextExtractor(provider: visionGatewayProvider)
+
         let selCoordinator = SelectionModeCoordinator(
             selectionCapture: selectionCapture,
             aiProvider: { [weak self] in self?.aiProvider },
             hud: hud,
             toastManager: toastManager,
             usageTracker: tracker,
-            virtualSessionManager: virtualSessionManager
+            virtualSessionManager: virtualSessionManager,
+            visualContextExtractor: vcExtractor
         )
         self.selectionCoordinator = selCoordinator
 
@@ -244,7 +361,8 @@ final class AppDependencies {
             hud: hud,
             toastManager: toastManager,
             usageTracker: tracker,
-            virtualSessionManager: virtualSessionManager
+            virtualSessionManager: virtualSessionManager,
+            visualContextExtractor: vcExtractor
         )
         self.screenshotCoordinator = ssCoordinator
 
@@ -340,10 +458,34 @@ final class AppDependencies {
             },
             usageTracker: tracker,
             semanticEnrichment: enrichment,
+            knowledgeArtifactStore: artifactStore,
             pipelineQueryService: pipelineQueryService,
             virtualSessionManager: virtualSessionManager
         )
         self.sessionQuestionCoordinator = sqCoordinator
+
+        // 2e. Wire KGR trigger: when WorkspaceManager signals that files
+        //     are ready (after indexing or file creation/reparse), plan and
+        //     enqueue knowledge generation work items.
+        wsManager.onKnowledgeGenerationNeeded = { [weak planner, weak kgRuntime, weak artifactStore] workspaceId, filePaths, fileHashes, fileIntelligences in
+            guard let planner, let kgRuntime, let artifactStore else { return }
+
+            let policy = KnowledgePolicy.live(aiAvailable: true)
+
+            let workItems = planner.planForFiles(
+                filePaths,
+                fileHashes: fileHashes,
+                fileIntelligences: fileIntelligences,
+                workspaceId: workspaceId,
+                store: artifactStore,
+                policy: policy
+            )
+
+            if !workItems.isEmpty {
+                kgRuntime.resetProgress()
+                kgRuntime.enqueue(workItems)
+            }
+        }
 
         // 2d. Start understanding pipeline (IAG-004 §8.1: called from performDeferredStartup).
         // Runs async — does not block deferred startup. No @MainActor on pipeline (IAG-003 §6.3).
