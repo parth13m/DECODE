@@ -34,12 +34,14 @@ class Settings(BaseSettings):
     # --- Explicit provider configuration (preferred) ---
     ANTHROPIC_API_KEY: str = ""
     ANTHROPIC_MODEL: str = "claude-haiku-4-5-20251001"
-    ANTHROPIC_VISION_MODEL: str = "claude-haiku-4-5-20251001"
     GROQ_API_KEY: str = ""
     GROQ_MODEL: str = "llama-3.3-70b-versatile"
-    GROQ_VISION_MODEL: str = "qwen/qwen3.6-27b"
 
-    # --- Vision provider selection ---
+    # --- Vision subsystem (independent of explanation) ---
+    # ANTHROPIC_VISION_API_KEY: dedicated key for vision. Falls back to ANTHROPIC_API_KEY.
+    ANTHROPIC_VISION_API_KEY: str = ""
+    ANTHROPIC_VISION_MODEL: str = "claude-haiku-4-5-20251001"
+    GROQ_VISION_MODEL: str = "qwen/qwen3.6-27b"
     # Which provider to use for vision requests: "anthropic" | "groq"
     VISION_PROVIDER: str = "anthropic"
 
@@ -79,6 +81,16 @@ class Settings(BaseSettings):
         if self.AI_MODEL and self.AI_ADAPTER == "anthropic":
             return self.AI_MODEL
         return self.ANTHROPIC_MODEL
+
+    def resolve_vision_anthropic_key(self) -> str:
+        """Return the effective Anthropic API key for vision requests.
+
+        Prefers ANTHROPIC_VISION_API_KEY (dedicated vision key).
+        Falls back to resolve_anthropic_key() (shared key).
+        """
+        if self.ANTHROPIC_VISION_API_KEY:
+            return self.ANTHROPIC_VISION_API_KEY
+        return self.resolve_anthropic_key()
 
     def resolve_groq_key(self) -> str:
         """Return the effective Groq API key.

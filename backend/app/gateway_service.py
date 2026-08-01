@@ -389,10 +389,10 @@ async def _vision_anthropic(
 
     Returns (provider, model, content, token_usage).
     """
-    api_key = settings.resolve_anthropic_key()
+    api_key = settings.resolve_vision_anthropic_key()
     if not api_key:
         raise GatewayError(
-            "ANTHROPIC_API_KEY is not configured — vision requests require Anthropic",
+            "ANTHROPIC_VISION_API_KEY (or ANTHROPIC_API_KEY) is not configured — vision requests require Anthropic",
             error_type="config_error",
         )
 

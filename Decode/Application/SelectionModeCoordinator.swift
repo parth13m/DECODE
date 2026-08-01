@@ -150,6 +150,9 @@ final class SelectionModeCoordinator {
             return
         }
 
+        #if DEBUG
+        let tSelectionStart = CFAbsoluteTimeGetCurrent()
+        #endif
         let captureResult: SelectionCaptureResult?
         do {
             captureResult = try await selectionCapture.captureSelection(fromPID: sourceAppPID)
@@ -161,6 +164,9 @@ final class SelectionModeCoordinator {
             toastManager.show("Failed to capture selection: \(error.localizedDescription)", icon: "exclamationmark.triangle")
             return
         }
+        #if DEBUG
+        let tSelectionDone = CFAbsoluteTimeGetCurrent()
+        #endif
 
         // Staleness check after capture await.
         guard generation == requestGeneration else {
@@ -212,54 +218,47 @@ final class SelectionModeCoordinator {
         let enhancedEnabled = UserDefaults.standard.bool(forKey: "enhancedExplanationEnabled")
         var visualContext: VisualContext?
         #if DEBUG
-        print("[EnhancedExplanation] enabled=\(enhancedEnabled), extractor=\(visualContextExtractor != nil ? "present" : "NIL")")
+        let tVisionPipelineStart = CFAbsoluteTimeGetCurrent()
+        var latencySelectionMs = (tSelectionDone - tSelectionStart) * 1000
+        var latencyScreenCaptureMs: Double = 0
+        var latencyVisionApiMs: Double = 0
         #endif
         if enhancedEnabled, let extractor = visualContextExtractor {
             #if DEBUG
-            let vcStartTime = CFAbsoluteTimeGetCurrent()
-            print("[EnhancedExplanation] capturing screenshot for PID \(sourceAppPID)...")
+            let tScreenCaptureStart = CFAbsoluteTimeGetCurrent()
             #endif
             if let screenImage = await Self.captureScreenImage(forPID: sourceAppPID) {
                 #if DEBUG
-                let captureMs = (CFAbsoluteTimeGetCurrent() - vcStartTime) * 1000
-                print("[EnhancedExplanation] screenshot captured: \(screenImage.width)x\(screenImage.height) in \(String(format: "%.0f", captureMs))ms")
-                print("[EnhancedExplanation] gateway vision request starting...")
-                let visionStartTime = CFAbsoluteTimeGetCurrent()
+                latencyScreenCaptureMs = (CFAbsoluteTimeGetCurrent() - tScreenCaptureStart) * 1000
+                let tVisionApiStart = CFAbsoluteTimeGetCurrent()
                 #endif
                 visualContext = await extractor.extract(from: screenImage)
                 #if DEBUG
-                let visionMs = (CFAbsoluteTimeGetCurrent() - visionStartTime) * 1000
-                let totalMs = (CFAbsoluteTimeGetCurrent() - vcStartTime) * 1000
+                latencyVisionApiMs = (CFAbsoluteTimeGetCurrent() - tVisionApiStart) * 1000
                 if let vc = visualContext {
-                    let lineCount = vc.content.components(separatedBy: "\n").count
-                    print("[EnhancedExplanation] vision request finished in \(String(format: "%.0f", visionMs))ms")
-                    print("[EnhancedExplanation] validated output: \(lineCount) lines, \(vc.content.count) chars")
-                    print("[EnhancedExplanation] total Enhanced Explanation overhead: \(String(format: "%.0f", totalMs))ms")
                     EnhancedExplanationDebug.shared.lastVisualContext = vc
                     EnhancedExplanationDebug.shared.lastTimestamp = Date()
                     EnhancedExplanationDebug.shared.lastError = nil
                 } else {
-                    print("[EnhancedExplanation] vision request returned nil after \(String(format: "%.0f", visionMs))ms — proceeding without")
-                    EnhancedExplanationDebug.shared.lastError = "Vision returned nil after \(String(format: "%.0f", visionMs))ms"
+                    EnhancedExplanationDebug.shared.lastError = "Vision returned nil"
                     EnhancedExplanationDebug.shared.lastTimestamp = Date()
                 }
                 #endif
             } else {
                 #if DEBUG
-                print("[EnhancedExplanation] screenshot capture FAILED for PID \(sourceAppPID) — proceeding without visual context")
+                latencyScreenCaptureMs = (CFAbsoluteTimeGetCurrent() - tScreenCaptureStart) * 1000
                 EnhancedExplanationDebug.shared.lastError = "Screenshot capture failed for PID \(sourceAppPID)"
                 EnhancedExplanationDebug.shared.lastTimestamp = Date()
                 #endif
             }
             // Staleness check after vision extraction await.
             guard generation == requestGeneration else { return }
-        } else if enhancedEnabled {
-            #if DEBUG
-            print("[EnhancedExplanation] toggle ON but extractor is NIL — is GROQ_API_KEY set?")
-            #endif
         }
 
         // 7. Build prompt and stream response.
+        #if DEBUG
+        let tPromptStart = CFAbsoluteTimeGetCurrent()
+        #endif
         let dsaMode = UserDefaults.standard.bool(forKey: "dsaModeEnabled")
         let explanationProfile = dsaMode ? "dsa" : "general"
         var systemPrompt = buildSystemPrompt(sourceApp: sourceAppName, codeContent: text, dsaMode: dsaMode)
@@ -280,24 +279,23 @@ final class SelectionModeCoordinator {
         let userMessage: String
         if let vc = visualContext, !vc.isEmpty {
             userMessage = "[Context]\n\(vc.formatted())\n[/Context]\n\n\(text)"
-            #if DEBUG
-            print("[EnhancedExplanation] final prompt contains Visual Context: YES (\(vc.formatted().count) chars)")
-            #endif
         } else {
             userMessage = text
-            #if DEBUG
-            print("[EnhancedExplanation] final prompt contains Visual Context: NO")
-            #endif
         }
         let messages = [AIMessage(role: .user, content: userMessage)]
+
+        #if DEBUG
+        let tPromptDone = CFAbsoluteTimeGetCurrent()
+        let latencyPromptMs = (tPromptDone - tPromptStart) * 1000
+        let latencyVisionPipelineMs = (tPromptDone - tVisionPipelineStart) * 1000
+        #endif
 
         // Show HUD immediately so the user sees loading state while
         // the AI request is in flight.
         hud.showLoading(sourceApp: sourceAppName, mode: "selection", explanationProfile: explanationProfile)
 
         #if DEBUG
-        let diagStreamRequestStart = CFAbsoluteTimeGetCurrent()
-        print("[DIAG_COORD] streamChat request starting")
+        let tExplainStart = CFAbsoluteTimeGetCurrent()
         #endif
 
         do {
@@ -320,9 +318,24 @@ final class SelectionModeCoordinator {
             }
 
             #if DEBUG
-            let diagStreamReady = CFAbsoluteTimeGetCurrent()
-            let streamReadyMs = (diagStreamReady - diagStreamRequestStart) * 1000
-            print("[DIAG_COORD] streamChat returned stream_ready_ms=\(String(format: "%.0f", streamReadyMs))")
+            let tExplainReady = CFAbsoluteTimeGetCurrent()
+            let latencyExplainSetupMs = (tExplainReady - tExplainStart) * 1000
+            let totalMs = (tExplainReady - tSelectionStart) * 1000
+
+            // ── LATENCY BUDGET ──
+            print("[LATENCY] ═══════════════════════════════════════════")
+            print("[LATENCY]  ENHANCED EXPLANATION LATENCY BUDGET")
+            print("[LATENCY] ═══════════════════════════════════════════")
+            print("[LATENCY]")
+            print("[LATENCY]  Selection capture:   \(String(format: "%6.0f", latencySelectionMs))ms")
+            print("[LATENCY]  Screen capture:      \(String(format: "%6.0f", latencyScreenCaptureMs))ms  (see breakdown above)")
+            print("[LATENCY]  Vision pipeline:     \(String(format: "%6.0f", latencyVisionApiMs))ms  (JPEG + API + sanitize)")
+            print("[LATENCY]  Prompt assembly:     \(String(format: "%6.0f", latencyPromptMs))ms")
+            print("[LATENCY]  Explain stream setup: \(String(format: "%6.0f", latencyExplainSetupMs))ms  (HTTP connect + first response)")
+            print("[LATENCY] ───────────────────────────────────────────")
+            print("[LATENCY]  Total to first token: \(String(format: "%6.0f", totalMs))ms")
+            print("[LATENCY]  Visual context:       \(visualContext != nil ? "YES" : "NO")")
+            print("[LATENCY] ═══════════════════════════════════════════")
             #endif
 
             let followUpCtx = ExplanationHUDViewModel.FollowUpContext(
@@ -375,19 +388,25 @@ final class SelectionModeCoordinator {
     @MainActor
     static func captureScreenImage(forPID pid: pid_t) async -> CGImage? {
         do {
+            #if DEBUG
+            let tWindowEnum = CFAbsoluteTimeGetCurrent()
+            #endif
             let content = try await SCShareableContent.excludingDesktopWindows(
                 false, onScreenWindowsOnly: true
             )
+            #if DEBUG
+            let tWindowEnumDone = CFAbsoluteTimeGetCurrent()
+            #endif
 
-            // Find the first on-screen window matching the PID.
-            guard let window = content.windows.first(where: {
-                $0.owningApplication?.processID == pid
-            }) else {
+            guard let window = WindowSelector.selectWindow(from: content.windows, forPID: pid) else {
                 #if DEBUG
                 print("[VisualContext] no window found for PID \(pid)")
                 #endif
                 return nil
             }
+            #if DEBUG
+            let tWindowSelect = CFAbsoluteTimeGetCurrent()
+            #endif
 
             let filter = SCContentFilter(desktopIndependentWindow: window)
             let config = SCStreamConfiguration()
@@ -395,10 +414,23 @@ final class SelectionModeCoordinator {
             config.height = window.frame.height > 0 ? Int(window.frame.height) * 2 : 1080
             config.showsCursor = false
 
-            return try await SCScreenshotManager.captureImage(
+            #if DEBUG
+            let tCaptureStart = CFAbsoluteTimeGetCurrent()
+            #endif
+            let image = try await SCScreenshotManager.captureImage(
                 contentFilter: filter,
                 configuration: config
             )
+            #if DEBUG
+            let tCaptureDone = CFAbsoluteTimeGetCurrent()
+            print("[LATENCY] ── Screen Capture Breakdown ──")
+            print("[LATENCY]   Window enumeration:  \(String(format: "%.0f", (tWindowEnumDone - tWindowEnum) * 1000))ms")
+            print("[LATENCY]   Window selection:    \(String(format: "%.0f", (tWindowSelect - tWindowEnumDone) * 1000))ms")
+            print("[LATENCY]   SCK capture:         \(String(format: "%.0f", (tCaptureDone - tCaptureStart) * 1000))ms")
+            print("[LATENCY]   Capture total:       \(String(format: "%.0f", (tCaptureDone - tWindowEnum) * 1000))ms")
+            print("[LATENCY]   Output: \(image.width)x\(image.height)")
+            #endif
+            return image
         } catch {
             #if DEBUG
             print("[VisualContext] screen capture failed: \(error.localizedDescription)")

@@ -1,3 +1,4 @@
+import CommonCrypto
 import CoreGraphics
 import Foundation
 import ImageIO
@@ -21,18 +22,43 @@ struct VisualContextExtractor: VisualContextExtracting, Sendable {
     /// The AI provider used for vision completion.
     private let provider: any AIProviderProtocol
 
+    /// Configuration for cropping the captured screenshot before vision processing.
+    private let captureConfiguration: VisualContextCaptureConfiguration
+
     /// The extraction prompt version, tracked for analytics.
     static let promptVersion = "v1"
 
-    init(provider: any AIProviderProtocol) {
+    init(
+        provider: any AIProviderProtocol,
+        captureConfiguration: VisualContextCaptureConfiguration = .default
+    ) {
         self.provider = provider
+        self.captureConfiguration = captureConfiguration
     }
 
     // MARK: - Extraction
 
     func extract(from image: CGImage) async -> VisualContext? {
-        // 1. Convert CGImage to JPEG data.
-        guard let jpegData = jpegData(from: image) else {
+        #if DEBUG
+        let tPipelineStart = CFAbsoluteTimeGetCurrent()
+        #endif
+
+        // 1. Crop inner rectangle to discard window chrome and reduce tokens.
+        let sourceImage = cropInnerRect(from: image)
+
+        #if DEBUG
+        let tCropDone = CFAbsoluteTimeGetCurrent()
+        let originalPixels = image.width * image.height
+        let croppedPixels = sourceImage.width * sourceImage.height
+        let removedPercent = originalPixels > 0 ? Double(originalPixels - croppedPixels) / Double(originalPixels) * 100 : 0
+        print("[LATENCY]   Edge crop:           \(String(format: "%.0f", (tCropDone - tPipelineStart) * 1000))ms")
+        print("[LATENCY]     Original: \(image.width)×\(image.height)")
+        print("[LATENCY]     Cropped:  \(sourceImage.width)×\(sourceImage.height)")
+        print("[LATENCY]     Pixels removed: \(String(format: "%.0f", removedPercent))%")
+        #endif
+
+        // 2. Convert CGImage to JPEG data.
+        guard let jpegData = jpegData(from: sourceImage) else {
             #if DEBUG
             print("[VisualContext] failed to convert CGImage to JPEG")
             #endif
@@ -40,7 +66,8 @@ struct VisualContextExtractor: VisualContextExtracting, Sendable {
         }
 
         #if DEBUG
-        print("[VisualContext] JPEG encoded: \(jpegData.count) bytes from \(image.width)x\(image.height) image")
+        let tJpegDone = CFAbsoluteTimeGetCurrent()
+        print("[LATENCY]   JPEG conversion:     \(String(format: "%.0f", (tJpegDone - tCropDone) * 1000))ms (\(sourceImage.width)x\(sourceImage.height) → \(jpegData.count) bytes)")
         #endif
 
         // 2. Check image size limit.
@@ -53,8 +80,7 @@ struct VisualContextExtractor: VisualContextExtracting, Sendable {
 
         // 3. Call vision LLM with timeout.
         #if DEBUG
-        print("[VisualContext] gateway request starting (timeout=\(AILimits.visionTimeoutSeconds)s)...")
-        let apiStartTime = CFAbsoluteTimeGetCurrent()
+        let tApiStart = CFAbsoluteTimeGetCurrent()
         #endif
         let rawOutput: String
         do {
@@ -78,7 +104,7 @@ struct VisualContextExtractor: VisualContextExtracting, Sendable {
             }
         } catch {
             #if DEBUG
-            let apiMs = (CFAbsoluteTimeGetCurrent() - apiStartTime) * 1000
+            let apiMs = (CFAbsoluteTimeGetCurrent() - tApiStart) * 1000
             let errorDetail: String
             if error is CancellationError {
                 errorDetail = "TIMEOUT after \(String(format: "%.0f", apiMs))ms"
@@ -86,7 +112,6 @@ struct VisualContextExtractor: VisualContextExtracting, Sendable {
                 errorDetail = "\(error.localizedDescription) after \(String(format: "%.0f", apiMs))ms"
             }
             print("[VisualContext] gateway request FAILED: \(errorDetail)")
-            print("[VisualContext] error type: \(type(of: error)), description: \(error)")
             await MainActor.run {
                 EnhancedExplanationDebug.shared.lastError = errorDetail
                 EnhancedExplanationDebug.shared.lastRawResponse = nil
@@ -98,10 +123,8 @@ struct VisualContextExtractor: VisualContextExtracting, Sendable {
         }
 
         #if DEBUG
-        let apiMs = (CFAbsoluteTimeGetCurrent() - apiStartTime) * 1000
-        print("[VisualContext] Railway response received in \(String(format: "%.0f", apiMs))ms")
-        print("[VisualContext] raw response (\(rawOutput.count) chars):")
-        print(rawOutput)
+        let tApiDone = CFAbsoluteTimeGetCurrent()
+        let apiMs = (tApiDone - tApiStart) * 1000
         await MainActor.run {
             EnhancedExplanationDebug.shared.lastRawResponse = rawOutput
             EnhancedExplanationDebug.shared.lastLatencyMs = apiMs
@@ -111,7 +134,11 @@ struct VisualContextExtractor: VisualContextExtracting, Sendable {
         // 4. Lightweight validation — the vision model produces the final artifact.
         guard let validated = sanitize(rawOutput) else {
             #if DEBUG
-            print("[VisualContext] sanitize returned nil — no additive context")
+            let totalMs = (CFAbsoluteTimeGetCurrent() - tPipelineStart) * 1000
+            print("[LATENCY]   Vision API (total):  \(String(format: "%.0f", apiMs))ms")
+            print("[LATENCY]   Sanitize:            <1ms (nil result)")
+            print("[LATENCY]   Vision pipeline:     \(String(format: "%.0f", totalMs))ms")
+            print("[VisualContext] sanitize returned nil — no additive context (\(rawOutput.count) chars)")
             await MainActor.run {
                 EnhancedExplanationDebug.shared.lastError = "No additive context from \(rawOutput.count)-char response"
                 EnhancedExplanationDebug.shared.lastTimestamp = Date()
@@ -121,8 +148,12 @@ struct VisualContextExtractor: VisualContextExtracting, Sendable {
         }
 
         #if DEBUG
+        let tSanitizeDone = CFAbsoluteTimeGetCurrent()
+        let totalMs = (tSanitizeDone - tPipelineStart) * 1000
         let lineCount = validated.components(separatedBy: "\n").count
-        print("[VisualContext] validated output: \(lineCount) lines, \(validated.count) chars")
+        print("[LATENCY]   Vision API (total):  \(String(format: "%.0f", apiMs))ms (\(rawOutput.count) chars response)")
+        print("[LATENCY]   Sanitize:            \(String(format: "%.1f", (tSanitizeDone - tApiDone) * 1000))ms → \(lineCount) lines, \(validated.count) chars")
+        print("[LATENCY]   Vision pipeline:     \(String(format: "%.0f", totalMs))ms")
         #endif
 
         return VisualContext(content: validated)
@@ -183,6 +214,34 @@ struct VisualContextExtractor: VisualContextExtracting, Sendable {
         return data as Data
     }
 
+    // MARK: - Edge Cropping
+
+    /// Crop the inner rectangle of a CGImage, removing a configurable percentage
+    /// from each edge. Returns the original image if the crop would be invalid
+    /// (e.g. too small, or configuration is zero).
+    private func cropInnerRect(from image: CGImage) -> CGImage {
+        let hPad = captureConfiguration.horizontalPaddingPercent
+        let vPad = captureConfiguration.verticalPaddingPercent
+
+        // No cropping needed.
+        guard hPad > 0 || vPad > 0 else { return image }
+
+        let w = Double(image.width)
+        let h = Double(image.height)
+
+        let cropX = (w * hPad).rounded()
+        let cropY = (h * vPad).rounded()
+        let cropW = (w - 2 * cropX).rounded()
+        let cropH = (h - 2 * cropY).rounded()
+
+        // Guard against degenerate crops.
+        guard cropW >= 100, cropH >= 100 else { return image }
+
+        let rect = CGRect(x: cropX, y: cropY, width: cropW, height: cropH)
+        guard let cropped = image.cropping(to: rect) else { return image }
+        return cropped
+    }
+
     // MARK: - Lightweight Validation
 
     /// Sanitize raw vision output into a validated context string.
@@ -240,41 +299,135 @@ struct VisualContextExtractor: VisualContextExtracting, Sendable {
         return joined
     }
 
+    // MARK: - Debug: Save Captured Images to Disk
+
+    #if DEBUG
+    /// Save both the original CGImage (as PNG) and the exact JPEG bytes that
+    /// will be uploaded, to ~/Desktop/DecodeVisionDebug/ with timestamp filenames.
+    private static func saveDebugImages(originalCGImage: CGImage, jpegData: Data) {
+        let dir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Desktop/DecodeVisionDebug")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+        let timestamp = formatter.string(from: Date())
+
+        // 1. Save the exact JPEG bytes that are uploaded (identical to what the backend receives).
+        let jpegPath = dir.appendingPathComponent("vision_\(timestamp)_uploaded.jpg")
+        do {
+            try jpegData.write(to: jpegPath)
+            print("[VisualContext] DEBUG saved uploaded JPEG to \(jpegPath.path)")
+        } catch {
+            print("[VisualContext] DEBUG failed to save JPEG: \(error.localizedDescription)")
+        }
+
+        // 2. Save PNG directly from the original CGImage (before JPEG conversion).
+        let pngPath = dir.appendingPathComponent("vision_\(timestamp)_original.png")
+        if let dest = CGImageDestinationCreateWithURL(
+            pngPath as CFURL, UTType.png.identifier as CFString, 1, nil
+        ) {
+            CGImageDestinationAddImage(dest, originalCGImage, nil)
+            if CGImageDestinationFinalize(dest) {
+                print("[VisualContext] DEBUG saved original PNG to \(pngPath.path)")
+            } else {
+                print("[VisualContext] DEBUG failed to finalize PNG")
+            }
+        } else {
+            print("[VisualContext] DEBUG failed to create PNG destination")
+        }
+    }
+    /// Save the JPEG-before-base64 and the JPEG-decoded-from-base64 for comparison.
+    private static func savePipelineVerificationImages(jpegData: Data, base64String: String) {
+        let dir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Desktop/DecodeVisionDebug")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+        let timestamp = formatter.string(from: Date())
+
+        // File 1: Exact JPEG bytes before base64 encoding
+        let preBase64Path = dir.appendingPathComponent("pipeline_\(timestamp)_pre_base64.jpg")
+        do {
+            try jpegData.write(to: preBase64Path)
+            print("[PIPELINE_DIAG] Saved pre-base64 JPEG: \(preBase64Path.path)")
+        } catch {
+            print("[PIPELINE_DIAG] ERROR saving pre-base64 JPEG: \(error.localizedDescription)")
+        }
+
+        // File 2: JPEG reconstructed by decoding the base64 string
+        if let decodedData = Data(base64Encoded: base64String) {
+            let postBase64Path = dir.appendingPathComponent("pipeline_\(timestamp)_post_base64.jpg")
+            do {
+                try decodedData.write(to: postBase64Path)
+                print("[PIPELINE_DIAG] Saved post-base64 JPEG: \(postBase64Path.path)")
+            } catch {
+                print("[PIPELINE_DIAG] ERROR saving post-base64 JPEG: \(error.localizedDescription)")
+            }
+
+            // Print final hash comparison
+            let preHash = sha256Hex(data: jpegData)
+            let postHash = sha256Hex(data: decodedData)
+            print("[PIPELINE_DIAG] ── Hash Summary ──")
+            print("[PIPELINE_DIAG]   JPEG SHA256:    \(preHash)")
+            print("[PIPELINE_DIAG]   Decoded SHA256: \(postHash)")
+            if preHash == postHash {
+                print("[PIPELINE_DIAG]   Result: IDENTICAL ✓")
+            } else {
+                print("[PIPELINE_DIAG]   Result: DIVERGENCE DETECTED ✗")
+            }
+        }
+    }
+
+    // MARK: - SHA-256 Helpers
+
+    /// SHA-256 hex digest of a Data blob.
+    private static func sha256Hex(data: Data) -> String {
+        var hash = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
+        data.withUnsafeBytes { buffer in
+            _ = CC_SHA256(buffer.baseAddress, CC_LONG(buffer.count), &hash)
+        }
+        return hash.map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// SHA-256 hex digest of a CGImage's raw pixel data.
+    private static func sha256Hex(bytes image: CGImage) -> String {
+        guard let dataProvider = image.dataProvider,
+              let cfData = dataProvider.data else {
+            return "<no-pixel-data>"
+        }
+        let data = cfData as Data
+        return sha256Hex(data: data)
+    }
+    #endif
+
     // MARK: - Extraction Prompt
 
     static let extractionPrompt = """
-        Another AI is explaining the highlighted code to a developer. \
-        It already has the highlighted code's full text.
+        The highlighted code in this screenshot is already available as text to another AI. \
+        Extract ONLY information visible OUTSIDE the highlighted region that the other AI cannot know.
 
-        Read the highlighted code. Use it as a query. \
-        Search the rest of the screen for information that improves the explanation.
+        Report what you see in the surrounding screen. Do not describe the highlighted code.
 
-        EVERY LINE YOU OUTPUT must answer: \
-        "What does the screen tell the explanation model that it cannot know from the highlighted code alone?"
+        PRIORITY (report if visible):
+        - file name or breadcrumb path shown in tab/title bar
+        - name of the function, class, or struct containing the selection
+        - whether the selection is part of a larger function (e.g. more code above/below)
+        - comment, TODO, or FIXME immediately above or below the selection
+        - code immediately before the selection that sets up context
+        - code immediately after the selection (return statements, error handling, continuations)
+        - compiler error or warning indicator
+        - region markers or section headers
 
-        One excellent observation beats five mediocre ones. \
-        Do not fill the output. Only include genuinely valuable evidence.
+        NEVER report:
+        - anything already visible in the highlighted code
+        - properties of the highlighted code (e.g. "function is async", "uses await", "destructures data")
+        - editor UI, layout, theme, coordinates
+        - descriptions of what you see in the image
 
-        HIGH VALUE (include if visible):
-        compiler error or warning related to the selection
-        nearby comment, TODO, FIXME explaining intent
-        visible documentation about the selected code
-        terminal output related to the selection
-        nearby code that calls, is called by, or relates to the selection
-        surrounding type or function signature NOT in the selection
+        FORMAT: Plain text. One fact per line. Max 5 lines.
 
-        NEVER include:
-        filename, language, editor, UI, layout, coordinates, image description, \
-        markdown, XML, JSON, prose, explanation, reasoning, <think>, \
-        or anything already in the highlighted code
-
-        Output plain text. One observation per line. Max 5 lines. 50-100 tokens.
-
-        Good output:
-        nearby comment says TODO: migrate to async registration
-        compiler warning: unused result of type 'Result<Int, Error>'
-        function processQueue() calls this method in a retry loop
-
-        If nothing qualifies, output exactly: none
+        If nothing outside the highlighted code adds value, respond exactly: none
         """
 }

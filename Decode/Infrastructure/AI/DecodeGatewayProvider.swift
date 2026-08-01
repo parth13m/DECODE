@@ -1,3 +1,4 @@
+import CommonCrypto
 import Foundation
 
 /// AI provider that routes requests through the Decode backend gateway.
@@ -205,6 +206,10 @@ struct DecodeGatewayProvider: AIProviderProtocol, Sendable {
             throw AIProviderError.notAuthenticated
         }
 
+        #if DEBUG
+        let tStart = CFAbsoluteTimeGetCurrent()
+        #endif
+
         let url = DecodeConfig.backendBaseURL.appendingPathComponent("api/gateway/vision")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -212,12 +217,23 @@ struct DecodeGatewayProvider: AIProviderProtocol, Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 
+        let base64ImageString = imageData.base64EncodedString()
+
+        #if DEBUG
+        let tBase64Done = CFAbsoluteTimeGetCurrent()
+        #endif
+
         let body = VisionGatewayRequest(
-            imageData: imageData.base64EncodedString(),
+            imageData: base64ImageString,
             prompt: prompt,
             mode: mode
         )
         request.httpBody = try JSONEncoder().encode(body)
+
+        #if DEBUG
+        let tJsonDone = CFAbsoluteTimeGetCurrent()
+        let bodySize = request.httpBody?.count ?? 0
+        #endif
 
         let data: Data
         let response: URLResponse
@@ -229,6 +245,10 @@ struct DecodeGatewayProvider: AIProviderProtocol, Sendable {
             throw AIProviderError.networkError(underlying: error)
         }
 
+        #if DEBUG
+        let tNetworkDone = CFAbsoluteTimeGetCurrent()
+        #endif
+
         guard let httpResponse = response as? HTTPURLResponse else {
             throw AIProviderError.invalidResponse(detail: "Not an HTTP response")
         }
@@ -236,6 +256,17 @@ struct DecodeGatewayProvider: AIProviderProtocol, Sendable {
         switch httpResponse.statusCode {
         case 200:
             let decoded = try JSONDecoder().decode(GatewayResponse.self, from: data)
+
+            #if DEBUG
+            let tParseDone = CFAbsoluteTimeGetCurrent()
+            print("[LATENCY] ── Gateway Vision Breakdown ──")
+            print("[LATENCY]   Base64 encoding:    \(String(format: "%.1f", (tBase64Done - tStart) * 1000))ms (\(imageData.count) bytes → \(base64ImageString.count) chars)")
+            print("[LATENCY]   JSON serialization:  \(String(format: "%.1f", (tJsonDone - tBase64Done) * 1000))ms (\(bodySize) bytes body)")
+            print("[LATENCY]   Network round-trip:  \(String(format: "%.0f", (tNetworkDone - tJsonDone) * 1000))ms (upload + backend + Anthropic + download)")
+            print("[LATENCY]   Response parsing:    \(String(format: "%.1f", (tParseDone - tNetworkDone) * 1000))ms (\(data.count) bytes response)")
+            print("[LATENCY]   Gateway total:       \(String(format: "%.0f", (tParseDone - tStart) * 1000))ms")
+            #endif
+
             guard !decoded.content.isEmpty else {
                 throw AIProviderError.emptyResponse
             }
@@ -382,6 +413,18 @@ struct DecodeGatewayProvider: AIProviderProtocol, Sendable {
             throw AIProviderError.serviceUnavailable
         }
     }
+
+    // MARK: - Pipeline Diagnostics
+
+    #if DEBUG
+    private static func sha256Hex(data: Data) -> String {
+        var hash = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
+        data.withUnsafeBytes { buffer in
+            _ = CC_SHA256(buffer.baseAddress, CC_LONG(buffer.count), &hash)
+        }
+        return hash.map { String(format: "%02x", $0) }.joined()
+    }
+    #endif
 }
 
 // MARK: - Request/Response Models
