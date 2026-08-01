@@ -81,7 +81,7 @@ struct AIConfiguration: Sendable {
     static let defaultGroqModel = "llama-3.3-70b-versatile"
 
     /// Default Groq vision model for Enhanced Explanation.
-    static let defaultGroqVisionModel = "llama-3.2-90b-vision-preview"
+    static let defaultGroqVisionModel = "qwen/qwen3.6-27b"
 
     // MARK: - Base URLs
 

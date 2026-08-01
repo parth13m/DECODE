@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     ANTHROPIC_MODEL: str = "claude-haiku-4-5-20251001"
     GROQ_API_KEY: str = ""
     GROQ_MODEL: str = "llama-3.3-70b-versatile"
-    GROQ_VISION_MODEL: str = "llama-3.2-90b-vision-preview"
+    GROQ_VISION_MODEL: str = "qwen/qwen3.6-27b"
 
     # --- Legacy single-provider configuration (deprecated) ---
     # These are preserved for backward compatibility. New deployments
