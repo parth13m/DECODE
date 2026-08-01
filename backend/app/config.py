@@ -34,9 +34,14 @@ class Settings(BaseSettings):
     # --- Explicit provider configuration (preferred) ---
     ANTHROPIC_API_KEY: str = ""
     ANTHROPIC_MODEL: str = "claude-haiku-4-5-20251001"
+    ANTHROPIC_VISION_MODEL: str = "claude-haiku-4-5-20251001"
     GROQ_API_KEY: str = ""
     GROQ_MODEL: str = "llama-3.3-70b-versatile"
     GROQ_VISION_MODEL: str = "qwen/qwen3.6-27b"
+
+    # --- Vision provider selection ---
+    # Which provider to use for vision requests: "anthropic" | "groq"
+    VISION_PROVIDER: str = "anthropic"
 
     # --- Legacy single-provider configuration (deprecated) ---
     # These are preserved for backward compatibility. New deployments

@@ -196,15 +196,16 @@ async def vision(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> VisionResponse:
-    """Extract visual context from an image using Groq Vision.
+    """Extract visual context from an image using the configured vision provider.
 
     Requires Bearer token authentication. Used by the Enhanced Explanation
     feature to extract contextual evidence from screenshots.
+    Provider is selected by VISION_PROVIDER env var.
     """
     start = time.monotonic()
 
     try:
-        content, latency_ms, token_usage = await call_vision_llm(
+        content, latency_ms, token_usage, ai_provider, ai_model = await call_vision_llm(
             image_base64=body.image_data,
             prompt=body.prompt,
         )
@@ -213,7 +214,7 @@ async def vision(
         _log_request(
             db, user.id, success=False, latency_ms=latency_ms,
             error_type=exc.error_type, mode=body.mode,
-            ai_provider="groq", ai_model=settings.GROQ_VISION_MODEL,
+            ai_provider=settings.VISION_PROVIDER, ai_model=None,
         )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -222,7 +223,7 @@ async def vision(
 
     _log_request(
         db, user.id, success=True, latency_ms=latency_ms, mode=body.mode,
-        ai_provider="groq", ai_model=settings.GROQ_VISION_MODEL,
+        ai_provider=ai_provider, ai_model=ai_model,
         prompt_tokens=token_usage.get("prompt_tokens"),
         completion_tokens=token_usage.get("completion_tokens"),
         total_tokens=token_usage.get("total_tokens"),

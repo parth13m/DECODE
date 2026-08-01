@@ -376,20 +376,85 @@ async def call_llm(
     return content, latency_ms, token_usage
 
 
-# ── Vision: Groq Vision via OpenAI-compatible multimodal ─────────────
+# ── Vision: provider-agnostic visual context extraction ──────────────
 
 _VISION_MAX_TOKENS = 256
 
-async def call_vision_llm(
+
+async def _vision_anthropic(
     image_base64: str,
     prompt: str,
-) -> tuple[str, int, dict[str, int | None]]:
-    """Call Groq Vision with a base64-encoded image and text prompt.
+) -> tuple[str, str, str, dict[str, int | None]]:
+    """Call Anthropic Messages API with an image content block.
 
-    Always routes to Groq regardless of the primary AI_ADAPTER setting.
-    Uses the OpenAI-compatible multimodal content format.
+    Returns (provider, model, content, token_usage).
+    """
+    api_key = settings.resolve_anthropic_key()
+    if not api_key:
+        raise GatewayError(
+            "ANTHROPIC_API_KEY is not configured — vision requests require Anthropic",
+            error_type="config_error",
+        )
 
-    Returns (content, latency_ms, token_usage).  Raises GatewayError on failure.
+    model = settings.ANTHROPIC_VISION_MODEL
+
+    messages: list[dict[str, Any]] = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/jpeg",
+                        "data": image_base64,
+                    },
+                },
+                {"type": "text", "text": prompt},
+            ],
+        }
+    ]
+
+    payload: dict[str, Any] = {
+        "model": model,
+        "max_tokens": _VISION_MAX_TOKENS,
+        "messages": messages,
+    }
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+
+    data = await _http_post(_ANTHROPIC_URL, headers=headers, payload=payload)
+
+    content_blocks = data.get("content", [])
+    if not content_blocks:
+        raise GatewayError("Vision service returned an empty response", error_type="empty_response")
+
+    content = content_blocks[0].get("text")
+    if not content:
+        raise GatewayError("Vision service returned an empty response", error_type="empty_response")
+
+    usage = data.get("usage", {})
+    token_usage: dict[str, int | None] = {
+        "prompt_tokens": usage.get("input_tokens"),
+        "completion_tokens": usage.get("output_tokens"),
+        "total_tokens": None,
+    }
+    if token_usage["prompt_tokens"] is not None and token_usage["completion_tokens"] is not None:
+        token_usage["total_tokens"] = token_usage["prompt_tokens"] + token_usage["completion_tokens"]
+
+    return "anthropic", model, content, token_usage
+
+
+async def _vision_groq(
+    image_base64: str,
+    prompt: str,
+) -> tuple[str, str, str, dict[str, int | None]]:
+    """Call Groq Vision via OpenAI-compatible multimodal format.
+
+    Returns (provider, model, content, token_usage).
     """
     api_key = settings.resolve_groq_key()
     if not api_key:
@@ -401,7 +466,6 @@ async def call_vision_llm(
     model = settings.GROQ_VISION_MODEL
     api_url = _OPENAI_COMPAT_URLS["groq"]
 
-    # Build multimodal message with image + text content blocks.
     messages: list[dict[str, Any]] = [
         {
             "role": "user",
@@ -425,14 +489,7 @@ async def call_vision_llm(
         "Content-Type": "application/json",
     }
 
-    logger.info(
-        "Vision request: model=%s prompt_len=%d image_base64_len=%d",
-        model, len(prompt), len(image_base64),
-    )
-
-    start = time.monotonic()
     data = await _http_post(api_url, headers=headers, payload=payload)
-    latency_ms = int((time.monotonic() - start) * 1000)
 
     choices = data.get("choices", [])
     if not choices:
@@ -449,12 +506,51 @@ async def call_vision_llm(
         "total_tokens": usage.get("total_tokens"),
     }
 
+    return "groq", model, content, token_usage
+
+
+_VISION_PROVIDERS: dict[str, Any] = {
+    "anthropic": _vision_anthropic,
+    "groq": _vision_groq,
+}
+
+
+async def call_vision_llm(
+    image_base64: str,
+    prompt: str,
+) -> tuple[str, int, dict[str, int | None], str, str]:
+    """Call the configured vision provider with a base64-encoded image.
+
+    Provider is selected by VISION_PROVIDER env var (default: "anthropic").
+    Independent of the primary AI_ADAPTER used for text reasoning.
+
+    Returns (content, latency_ms, token_usage, provider_name, model_name).
+    Raises GatewayError on failure.
+    """
+    provider_name = settings.VISION_PROVIDER
+    vision_fn = _VISION_PROVIDERS.get(provider_name)
+    if vision_fn is None:
+        raise GatewayError(
+            f"Unknown VISION_PROVIDER: '{provider_name}'. "
+            f"Valid values: {', '.join(_VISION_PROVIDERS)}",
+            error_type="config_error",
+        )
+
     logger.info(
-        "Vision success: model=%s latency=%dms content_length=%d",
-        model, latency_ms, len(content),
+        "Vision request: provider=%s prompt_len=%d image_base64_len=%d",
+        provider_name, len(prompt), len(image_base64),
     )
 
-    return content, latency_ms, token_usage
+    start = time.monotonic()
+    provider, model, content, token_usage = await vision_fn(image_base64, prompt)
+    latency_ms = int((time.monotonic() - start) * 1000)
+
+    logger.info(
+        "Vision success: provider=%s model=%s latency=%dms content_length=%d",
+        provider, model, latency_ms, len(content),
+    )
+
+    return content, latency_ms, token_usage, provider, model
 
 
 # ── Streaming: Anthropic SSE adapter ──────────────────────────────────
