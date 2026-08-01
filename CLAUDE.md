@@ -18,7 +18,11 @@ A **Product Validation Sprint** (July 2026) audited the completed epics, fixed e
 
 **Virtual Session** — cross-mode investigation memory — is **complete** and production-ready. Provides Working Memory (bounded, topic-aware prompt augmentation), Investigation tracking (living knowledge documents), and a Memory Inspector UI. Canonical architecture specification: `architecture/VAS-001-VirtualSessionArchitecture.md`.
 
-The next engineering epic is **Project Intelligence** — understanding the whole codebase as architecture. Phase 1 (Module Intelligence, milestones M1–M7) is **complete**. Phase 2 (Project Intelligence, milestones M8–M12) is **not started**.
+The next engineering epic is **Project Intelligence** — understanding the whole codebase as architecture. Phase 1 (Module Intelligence, milestones M1–M7) is **complete**. Phase 2 (Project Intelligence, milestones M8–M11) is **complete**. M12 (Validation) not started. Cross-cutting: KGR Phase 2, Multi-Provider AI Platform, and Enhanced Explanation are all complete.
+
+**Enhanced Explanation** — optional visual context extraction for Selection Mode — is **complete** and production-ready. Captures a screenshot of the user's working area, sends to a vision LLM (Claude Haiku via backend gateway), and injects contextual observations into the explanation prompt. Architecture: `architecture/VISUAL_CONTEXT_ARCHITECTURE.md`. Off by default.
+
+**Context Resolution Layer** — unified context assembly infrastructure — is **architecturally specified** but not yet implemented. Will replace per-coordinator bespoke context assembly with a generic signal-demand resolver. Architecture specification: `architecture/CRL-001-ContextResolutionLayer.md`. This is the next major epic after Project Intelligence M12.
 
 The architecture is fully specified across three document layers (DAS → DDS → IAG). All specifications are frozen. Implementation follows these documents exactly. Architecture changes require an RFC (IAG-004 §21).
 
@@ -34,7 +38,7 @@ All four File Intelligence understanding layers (Identity, Purpose, Behavior, Sa
 
 | Mode | Trigger | Flow |
 |------|---------|------|
-| Selection | Double-tap Control | Capture selected text → AI → HUD |
+| Selection | Double-tap Control | Capture selected text → [optional: screenshot → vision → context] → AI → HUD |
 | Screenshot | Double-tap Option | Drag-select region → OCR → AI → HUD |
 | Session | `⌃⇧O` open file / `⌃⇧P` open directory, then Double-tap Shift | Capture snippet → resolve workspace → build context → AI → HUD |
 
@@ -67,6 +71,16 @@ All four File Intelligence understanding layers (Identity, Purpose, Behavior, Sa
 - **Persistence**: JSON file at `~/Library/Application Support/Decode/virtual-session.json`, incremental save after every mutation.
 - **Architecture specification**: `architecture/VAS-001-VirtualSessionArchitecture.md` (canonical, cross-platform).
 
+**Enhanced Explanation** — optional visual context for Selection Mode:
+- **VisualContextExtractor**: captures screenshot via ScreenCaptureKit, converts to JPEG, sends to vision LLM, validates response.
+- **WindowSelector**: weighted scoring system for selecting the correct content window from ScreenCaptureKit candidates. Scores: title (1000), normalLayer (500), active (100), onScreen (50), normalizedArea (0-200).
+- **VisualContextCaptureConfiguration**: configurable edge cropping (default 10% per edge) to reduce image tokens.
+- **Vision prompt**: extracts information OUTSIDE the highlighted code (file name, containing function, surrounding code, compiler errors).
+- **Backend vision gateway**: `POST /api/gateway/vision` with `ANTHROPIC_VISION_API_KEY` → falls back to `ANTHROPIC_API_KEY`.
+- **Graceful degradation**: any vision failure → proceed without visual context → identical to feature disabled.
+- **Off by default**: toggled via `enhancedExplanationEnabled` UserDefaults key.
+- **Architecture**: `architecture/VISUAL_CONTEXT_ARCHITECTURE.md`.
+
 **Backend**: FastAPI + PostgreSQL on Railway. Full analytics pipeline, admin dashboard, invite management.
 
 **Multi-Provider AI Platform** — capability-based provider routing:
@@ -96,9 +110,9 @@ Protocols for cross-layer communication (dependency inversion). No layer imports
 ### Key Services by Layer
 
 **App**: `AppDependencies` — root DI container, deferred startup, hotkey fan-out.
-**Application**: `SelectionModeCoordinator`, `ScreenshotModeCoordinator`, `SessionQuestionCoordinator`, `WorkspaceManager`, `WorkspaceResolver`, `IndexingCoordinator`, `NavigationState`, `SessionState`, `SessionStatePersistence`, `SessionManager`, `SessionResolver`, `ContextBuilderService`, `ExplanationFramework`, `RepresentationGuidance`, `SnippetHealthClassifier`, `ImprovementService`, `SemanticEnrichmentService`, `FilePurposeDeriver`, `FileIdentityClassifier`, `VirtualSessionManager`.
-**Domain**: Models (`Workspace`, `WorkspaceKind`, `Session`, `CodeEntity`, `SessionContext`, `AILimits`, `FileIntelligence`, `Relationship`, `SemanticEnrichment`, `ImportDeclaration`, `VirtualSession`, `Investigation`, `Insight`, `InsightContext`, `WorkingMemory`, `InvestigationAnchor`), Protocols (`AIProviderProtocol`, `DatabaseProtocol`, `DirectoryWatcherProtocol`).
-**Infrastructure**: `DecodeGatewayProvider`, `GroqProvider`, `AIConfiguration`, `AIProviderRegistry`, `AccessibilityCapture`, `HotkeyService`, `SwiftSyntaxParser`, `TreeSitterParser`, `DatabaseService`, `KeychainService`, `FileWatcherService`, `DirectoryWatcherService`, `ScreenCaptureService`, `VisionOCRService`, `TextReplacementService`, `AnalyticsEventService`.
+**Application**: `SelectionModeCoordinator`, `ScreenshotModeCoordinator`, `SessionQuestionCoordinator`, `WorkspaceManager`, `WorkspaceResolver`, `IndexingCoordinator`, `NavigationState`, `SessionState`, `SessionStatePersistence`, `SessionManager`, `SessionResolver`, `ContextBuilderService`, `ExplanationFramework`, `RepresentationGuidance`, `SnippetHealthClassifier`, `ImprovementService`, `SemanticEnrichmentService`, `FilePurposeDeriver`, `FileIdentityClassifier`, `VirtualSessionManager`, `VisualContextExtractor`.
+**Domain**: Models (`Workspace`, `WorkspaceKind`, `Session`, `CodeEntity`, `SessionContext`, `AILimits`, `FileIntelligence`, `Relationship`, `SemanticEnrichment`, `ImportDeclaration`, `VirtualSession`, `Investigation`, `Insight`, `InsightContext`, `WorkingMemory`, `InvestigationAnchor`, `VisualContext`, `VisualContextCaptureConfiguration`), Protocols (`AIProviderProtocol`, `DatabaseProtocol`, `DirectoryWatcherProtocol`, `VisualContextExtracting`).
+**Infrastructure**: `DecodeGatewayProvider`, `GroqProvider`, `AIConfiguration`, `AIProviderRegistry`, `AccessibilityCapture`, `HotkeyService`, `SwiftSyntaxParser`, `TreeSitterParser`, `DatabaseService`, `KeychainService`, `FileWatcherService`, `DirectoryWatcherService`, `ScreenCaptureService`, `VisionOCRService`, `TextReplacementService`, `AnalyticsEventService`, `WindowSelector`.
 **Presentation**: `FloatingExplanationHUD`, `ExplanationHUDViewModel`, `ExplanationTagParser`, `ImprovementSectionView`, `FloatingSessionDock`, `SessionView`, `ProjectExplorerView`, `VirtualSessionInspectorView`.
 
 ### Dependency Injection
@@ -117,7 +131,7 @@ Decode/Presentation/   → Overlay/, Session/, Onboarding/, Settings/
 Decode/Understanding/  → Understanding pipeline modules (IAG-001 §5 — created during implementation)
 backend/app/           → routers/, models/, static/, gateway_service.py, auth.py, config.py
 backend/alembic/       → Database migrations
-architecture/          → Frozen specifications: das/, dds/, iag/, rfc/, glossary/, VAS-001 (Virtual Session)
+architecture/          → Frozen specifications: das/, dds/, iag/, rfc/, glossary/, VAS-001 (Virtual Session), CRL-001 (Context Resolution Layer)
 docs/                  → VISION.md (product vision and philosophy)
 ```
 
@@ -304,6 +318,7 @@ Implementation — Source code that realizes all of the above
 | DDS | DDS-000 through DDS-009 | Design: authoring standard, producer runtime, DIR runtime, pass runtime, index runtime, retrieval runtime, context assembly, update engine, storage engine, consumer runtime |
 | IAG | IAG-001 through IAG-004 | Implementation: module architecture, technology decisions, runtime architecture, implementation sequence |
 | VAS | VAS-001 | Virtual Session: cross-platform architecture specification for investigation memory, Working Memory, topic switching, compression |
+| CRL | CRL-001 | Context Resolution Layer: signal-demand resolver for unified context assembly across all capabilities |
 
 ### Understanding Pipeline Modules (IAG-001)
 
@@ -394,12 +409,15 @@ Each phase has objective exit criteria (IAG-004 §3–§8). Verification is bina
 5. ~~**Product Validation Sprint**~~ — **Complete.** Engineering health cleanup (E1-01, E2-00, E3-01 findings), folder upload UI completion, SessionState architecture (workspace history vs application session separation).
 6. ~~**Virtual Session**~~ — **Complete.** Cross-mode investigation memory with Working Memory, Investigations, topic switching, compression, and Memory Inspector. Architecture specification: `architecture/VAS-001-VirtualSessionArchitecture.md`.
 7. **Project Intelligence** — **In progress.** Phase 1 (Module Intelligence, M1–M7) complete. Phase 2 (Project Intelligence, M8–M11) complete. M12 (Validation) not started. Cross-cutting: KGR Phase 2 (proactive File Understanding) and Multi-Provider AI Platform complete. See `PROJECT_INTELLIGENCE_IMPLEMENTATION_STATUS.md`.
+8. ~~**Enhanced Explanation**~~ — **Complete.** Visual context extraction for Selection Mode. WindowSelector for reliable content window selection. Edge cropping for image token optimization. Backend vision gateway integration. Latency instrumentation. Architecture: `architecture/VISUAL_CONTEXT_ARCHITECTURE.md`.
+9. **Context Resolution Layer** — **Architecture complete, not implemented.** Signal-demand resolver for unified context assembly. Will replace per-coordinator bespoke context paths. Specification: `architecture/CRL-001-ContextResolutionLayer.md`.
 
 ### Implementation Status Tracking
 
 Session Mode implementation is tracked in `SESSION_MODE_IMPLEMENTATION_STATUS.md` (complete, read-only reference).
 Workspace Mode implementation is tracked in `WORKSPACE_IMPLEMENTATION_STATUS.md` (complete, read-only reference).
 Virtual Session architecture is specified in `architecture/VAS-001-VirtualSessionArchitecture.md` (canonical cross-platform specification).
+Context Resolution Layer architecture is specified in `architecture/CRL-001-ContextResolutionLayer.md` (canonical, not yet implemented).
 
 ---
 
@@ -563,36 +581,48 @@ Main branch: `main`. Build must pass before committing. Run `xcodegen generate` 
 
 ---
 
-## Session Handoff (2026-08-01)
+## Session Handoff (2026-08-02)
 
 ### What Was Completed This Session
 
-Three cross-cutting initiatives completed:
+**Enhanced Explanation** — complete visual context pipeline for Selection Mode:
 
-1. **KGR Phase 2 — Proactive File Understanding**: Migrated semantic enrichment from reactive (computed on first user question) to proactive (computed immediately after indexing). `FileUnderstandingJob` as first production `KnowledgeJobDescriptor`. Background planning triggers wired at 4 workspace lifecycle points. `KnowledgeArtifactStore` for persistent JSON cache. `SessionQuestionCoordinator` checks artifact store first, falls back to reactive on cache miss.
+1. **Backend Vision Gateway**: `ANTHROPIC_VISION_API_KEY` with fallback to `ANTHROPIC_API_KEY`. Vision-specific `resolve_vision_anthropic_key()` method. Provider-agnostic dispatch via `VISION_PROVIDER` env var.
 
-2. **Multi-Provider AI Routing**: Decode's first multi-provider architecture. Claude remains the provider for premium reasoning (Explain, Follow-up, Improve) via Decode Gateway. Groq added as provider for background knowledge production (FileUnderstandingJob) via direct client-side API. `KnowledgeCapabilityResolver` provides capability-based routing — no job or reasoning engine references any provider directly. Graceful fallback: if `GROQ_API_KEY` missing, everything routes to Claude.
+2. **Image Pipeline Investigation**: SHA-256 instrumentation proved image bytes identical from capture to Anthropic API. Root cause of "none" responses identified: `SelectionModeCoordinator` was selecting a toolbar window (1470x44) instead of the editor window (1470x920) because `.first(where:)` returned the first PID match.
 
-3. **AI Platform Infrastructure Cleanup**: `AIConfiguration` as single source of truth for all AI env vars. `ProviderConfig` dependency injection — providers never read env vars directly. `AIProviderRegistry` for runtime provider tracking. Backend config updated with explicit per-provider variables and `resolve_*()` fallback methods for legacy backward compatibility.
+3. **WindowSelector**: Dedicated window selection with weighted scoring — title (1000), normalLayer (500), active (100), onScreen (50), normalizedArea (0-200). Deterministically selects the correct content window. DEBUG logging shows all candidates with scores.
+
+4. **Vision Prompt Rewrite (v4)**: Focuses on information OUTSIDE the highlighted code. Concrete negative examples prevent parroting. Prioritizes consistently-available information (file name, containing function, surrounding code, compiler errors).
+
+5. **Latency Instrumentation**: Complete timing for every pipeline stage — selection capture, screen capture (enumeration, selection, SCK), vision pipeline (crop, JPEG, API, sanitize), prompt assembly, explain stream setup. Budget printout in console.
+
+6. **Edge Cropping**: `VisualContextCaptureConfiguration` with configurable padding (default 10% per edge, ~36% pixel reduction). Reduces image tokens and cost. Applied after screenshot capture, before JPEG conversion.
+
+7. **Context Resolution Layer Architecture**: Three-iteration design process: Smart Vision Gate (rejected — too narrow) → Policy-Based Resolver (rejected — couples policy to providers) → Signal-Demand Resolver (adopted). Canonical specification: `architecture/CRL-001-ContextResolutionLayer.md`.
 
 ### Current Implementation Status
 
 | Component | Status | Location |
 |-----------|--------|----------|
-| AIConfiguration | Complete, frozen | `Decode/Infrastructure/AI/AIConfiguration.swift` |
-| AIProviderRegistry | Complete, frozen | `Decode/Infrastructure/AI/AIProviderRegistry.swift` |
-| GroqProvider | Complete, frozen | `Decode/Infrastructure/AI/GroqProvider.swift` |
-| FileUnderstandingJob | Complete, frozen | `Decode/Application/KnowledgeGeneration/FileUnderstandingJob.swift` |
-| KnowledgeCapabilityResolver routing | Complete, frozen | `Decode/Application/KnowledgeGeneration/KnowledgeCapability.swift` |
-| Backend config | Complete | `backend/app/config.py`, `backend/app/gateway_service.py` |
-| Tests (35 new) | Complete | `DecodeTests/Application/KnowledgeGenerationRuntimeTests.swift` |
+| VisualContextExtractor | Complete | `Decode/Application/VisualContextExtractor.swift` |
+| WindowSelector | Complete | `Decode/Infrastructure/Capture/WindowSelector.swift` |
+| VisualContext model | Complete | `Decode/Domain/Models/VisualContext.swift` |
+| VisualContextCaptureConfiguration | Complete | `Decode/Domain/Models/VisualContext.swift` |
+| SelectionModeCoordinator (enhanced) | Complete | `Decode/Application/SelectionModeCoordinator.swift` |
+| DecodeGatewayProvider (vision) | Complete | `Decode/Infrastructure/AI/DecodeGatewayProvider.swift` |
+| Backend vision config | Complete | `backend/app/config.py`, `backend/app/gateway_service.py` |
+| Visual Context Architecture | Complete | `architecture/VISUAL_CONTEXT_ARCHITECTURE.md` |
+| CRL-001 Architecture Spec | Complete | `architecture/CRL-001-ContextResolutionLayer.md` |
 
 ### Repository State
 
 - Branch: `main`.
-- Working tree: uncommitted changes from this session (3 files created, 12 files modified).
-- All new tests pass. 4 pre-existing failures unchanged.
+- Working tree: clean (committed as `d255f8c` + architecture doc uncommitted).
+- All new code builds successfully. 4 pre-existing test failures unchanged.
 
-### Immediate Next Recommended Task
+### Immediate Next Recommended Tasks
 
-**Project Intelligence M12 — Validation**: End-to-end validation of the complete Project Intelligence stack (M8–M11). See `PROJECT_INTELLIGENCE_IMPLEMENTATION_STATUS.md` for milestone details. After M12, the Project Intelligence epic is closed.
+1. **Project Intelligence M12 — Validation**: End-to-end validation of the complete Project Intelligence stack (M8–M11). See `PROJECT_INTELLIGENCE_IMPLEMENTATION_STATUS.md`.
+
+2. **Context Resolution Layer Implementation**: After M12 closes the Project Intelligence epic. Follow `architecture/CRL-001-ContextResolutionLayer.md`. Recommended implementation order: domain types → WorkingMemoryProvider → WorkspaceProvider → ContextResolver → wire SelectionModeCoordinator → remaining providers → wire SessionQuestionCoordinator.

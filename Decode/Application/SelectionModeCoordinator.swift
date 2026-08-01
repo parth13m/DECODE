@@ -278,7 +278,7 @@ final class SelectionModeCoordinator {
         // Assemble user message with visual context evidence.
         let userMessage: String
         if let vc = visualContext, !vc.isEmpty {
-            userMessage = "[Context]\n\(vc.formatted())\n[/Context]\n\n\(text)"
+            userMessage = "[Visual Context]\n\(vc.formatted())\n[/Visual Context]\n\n\(text)"
         } else {
             userMessage = text
         }
@@ -461,13 +461,14 @@ final class SelectionModeCoordinator {
     }
 
     /// System prompt guidance for using visual context evidence.
-    /// Appended unconditionally — a no-op when the user message has no [Context] block.
+    /// Appended unconditionally — a no-op when the user message has no [Visual Context] block.
     private static let visualContextGuidance = """
 
-        If a [Context]...[/Context] block is present in the user's message, it contains \
-        trusted contextual evidence extracted from the user's visible working environment. \
-        Use this evidence only when it is relevant to improve the explanation. \
-        Do not assume it is complete, and do not repeat it verbatim unless necessary.
+        If a [Visual Context]...[/Visual Context] block is present, another AI has examined \
+        the user's full screen and identified what you would most likely misunderstand from \
+        seeing only the highlighted code. This evidence is factual and grounded in what is \
+        visible on screen. Integrate it into your reasoning — it may significantly change how \
+        the code should be understood. Do not quote it verbatim or reference its source.
         """
 }
 

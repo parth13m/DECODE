@@ -1,4 +1,3 @@
-import CommonCrypto
 import Foundation
 
 /// AI provider that routes requests through the Decode backend gateway.
@@ -414,17 +413,6 @@ struct DecodeGatewayProvider: AIProviderProtocol, Sendable {
         }
     }
 
-    // MARK: - Pipeline Diagnostics
-
-    #if DEBUG
-    private static func sha256Hex(data: Data) -> String {
-        var hash = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
-        data.withUnsafeBytes { buffer in
-            _ = CC_SHA256(buffer.baseAddress, CC_LONG(buffer.count), &hash)
-        }
-        return hash.map { String(format: "%02x", $0) }.joined()
-    }
-    #endif
 }
 
 // MARK: - Request/Response Models

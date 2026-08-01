@@ -1,4 +1,3 @@
-import CommonCrypto
 import CoreGraphics
 import Foundation
 import ImageIO
@@ -299,135 +298,37 @@ struct VisualContextExtractor: VisualContextExtracting, Sendable {
         return joined
     }
 
-    // MARK: - Debug: Save Captured Images to Disk
-
-    #if DEBUG
-    /// Save both the original CGImage (as PNG) and the exact JPEG bytes that
-    /// will be uploaded, to ~/Desktop/DecodeVisionDebug/ with timestamp filenames.
-    private static func saveDebugImages(originalCGImage: CGImage, jpegData: Data) {
-        let dir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Desktop/DecodeVisionDebug")
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
-        let timestamp = formatter.string(from: Date())
-
-        // 1. Save the exact JPEG bytes that are uploaded (identical to what the backend receives).
-        let jpegPath = dir.appendingPathComponent("vision_\(timestamp)_uploaded.jpg")
-        do {
-            try jpegData.write(to: jpegPath)
-            print("[VisualContext] DEBUG saved uploaded JPEG to \(jpegPath.path)")
-        } catch {
-            print("[VisualContext] DEBUG failed to save JPEG: \(error.localizedDescription)")
-        }
-
-        // 2. Save PNG directly from the original CGImage (before JPEG conversion).
-        let pngPath = dir.appendingPathComponent("vision_\(timestamp)_original.png")
-        if let dest = CGImageDestinationCreateWithURL(
-            pngPath as CFURL, UTType.png.identifier as CFString, 1, nil
-        ) {
-            CGImageDestinationAddImage(dest, originalCGImage, nil)
-            if CGImageDestinationFinalize(dest) {
-                print("[VisualContext] DEBUG saved original PNG to \(pngPath.path)")
-            } else {
-                print("[VisualContext] DEBUG failed to finalize PNG")
-            }
-        } else {
-            print("[VisualContext] DEBUG failed to create PNG destination")
-        }
-    }
-    /// Save the JPEG-before-base64 and the JPEG-decoded-from-base64 for comparison.
-    private static func savePipelineVerificationImages(jpegData: Data, base64String: String) {
-        let dir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Desktop/DecodeVisionDebug")
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
-        let timestamp = formatter.string(from: Date())
-
-        // File 1: Exact JPEG bytes before base64 encoding
-        let preBase64Path = dir.appendingPathComponent("pipeline_\(timestamp)_pre_base64.jpg")
-        do {
-            try jpegData.write(to: preBase64Path)
-            print("[PIPELINE_DIAG] Saved pre-base64 JPEG: \(preBase64Path.path)")
-        } catch {
-            print("[PIPELINE_DIAG] ERROR saving pre-base64 JPEG: \(error.localizedDescription)")
-        }
-
-        // File 2: JPEG reconstructed by decoding the base64 string
-        if let decodedData = Data(base64Encoded: base64String) {
-            let postBase64Path = dir.appendingPathComponent("pipeline_\(timestamp)_post_base64.jpg")
-            do {
-                try decodedData.write(to: postBase64Path)
-                print("[PIPELINE_DIAG] Saved post-base64 JPEG: \(postBase64Path.path)")
-            } catch {
-                print("[PIPELINE_DIAG] ERROR saving post-base64 JPEG: \(error.localizedDescription)")
-            }
-
-            // Print final hash comparison
-            let preHash = sha256Hex(data: jpegData)
-            let postHash = sha256Hex(data: decodedData)
-            print("[PIPELINE_DIAG] ── Hash Summary ──")
-            print("[PIPELINE_DIAG]   JPEG SHA256:    \(preHash)")
-            print("[PIPELINE_DIAG]   Decoded SHA256: \(postHash)")
-            if preHash == postHash {
-                print("[PIPELINE_DIAG]   Result: IDENTICAL ✓")
-            } else {
-                print("[PIPELINE_DIAG]   Result: DIVERGENCE DETECTED ✗")
-            }
-        }
-    }
-
-    // MARK: - SHA-256 Helpers
-
-    /// SHA-256 hex digest of a Data blob.
-    private static func sha256Hex(data: Data) -> String {
-        var hash = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
-        data.withUnsafeBytes { buffer in
-            _ = CC_SHA256(buffer.baseAddress, CC_LONG(buffer.count), &hash)
-        }
-        return hash.map { String(format: "%02x", $0) }.joined()
-    }
-
-    /// SHA-256 hex digest of a CGImage's raw pixel data.
-    private static func sha256Hex(bytes image: CGImage) -> String {
-        guard let dataProvider = image.dataProvider,
-              let cfData = dataProvider.data else {
-            return "<no-pixel-data>"
-        }
-        let data = cfData as Data
-        return sha256Hex(data: data)
-    }
-    #endif
 
     // MARK: - Extraction Prompt
 
     static let extractionPrompt = """
-        The highlighted code in this screenshot is already available as text to another AI. \
-        Extract ONLY information visible OUTSIDE the highlighted region that the other AI cannot know.
+        Another AI will explain the highlighted code to a user. It can see ONLY the highlighted \
+        text. You can see the entire screen.
 
-        Report what you see in the surrounding screen. Do not describe the highlighted code.
+        You are sending it one brief message before it writes the explanation. \
+        Include only evidence that corrects what it will otherwise get wrong.
 
-        PRIORITY (report if visible):
-        - file name or breadcrumb path shown in tab/title bar
-        - name of the function, class, or struct containing the selection
-        - whether the selection is part of a larger function (e.g. more code above/below)
-        - comment, TODO, or FIXME immediately above or below the selection
-        - code immediately before the selection that sets up context
-        - code immediately after the selection (return statements, error handling, continuations)
-        - compiler error or warning indicator
-        - region markers or section headers
+        Ask yourself: What will it misunderstand because it cannot see the rest of the screen?
 
-        NEVER report:
-        - anything already visible in the highlighted code
-        - properties of the highlighted code (e.g. "function is async", "uses await", "destructures data")
-        - editor UI, layout, theme, coordinates
-        - descriptions of what you see in the image
+        Provide that evidence as facts. Do not explain the code — the other AI reasons better \
+        than you.
 
-        FORMAT: Plain text. One fact per line. Max 5 lines.
+        WORTH REPORTING (changes the explanation):
+        - Error or warning on or near the highlight — quote the text
+        - Code outside the selection that alters its meaning — quote it
+        - The selection is part of a larger construct whose role is not apparent from the \
+        selection alone
+        - Runtime state visible in debugger or console
 
-        If nothing outside the highlighted code adds value, respond exactly: none
+        NOT WORTH REPORTING:
+        - File names, line numbers, project structure
+        - Anything already visible in the highlighted code
+        - Editor appearance or UI elements
+        - Anything you cannot clearly read on screen
+
+        State the single most important observation. Add a second only if it independently \
+        changes the explanation.
+
+        If nothing would change the explanation, respond exactly: none
         """
 }
