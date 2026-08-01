@@ -181,7 +181,7 @@ async def chat_stream(
 # ---------------------------------------------------------------------------
 
 class VisionRequest(BaseModel):
-    image_data: str = Field(..., description="Base64-encoded JPEG image")
+    image_data: str = Field(..., min_length=1, description="Base64-encoded JPEG image")
     prompt: str = Field(..., min_length=1)
     mode: str | None = None
 
@@ -203,6 +203,11 @@ async def vision(
     Provider is selected by VISION_PROVIDER env var.
     """
     start = time.monotonic()
+
+    logger.info(
+        "VISION_ENDPOINT: image_data_len=%d prompt_len=%d mode=%s provider=%s",
+        len(body.image_data), len(body.prompt), body.mode, settings.VISION_PROVIDER,
+    )
 
     try:
         content, latency_ms, token_usage, ai_provider, ai_model = await call_vision_llm(

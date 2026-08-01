@@ -398,6 +398,14 @@ async def _vision_anthropic(
 
     model = settings.ANTHROPIC_VISION_MODEL
 
+    # Diagnostic: verify image data is present and non-empty.
+    logger.info(
+        "VISION_DIAG: image_base64_len=%d prompt_len=%d model=%s api_key_present=%s",
+        len(image_base64), len(prompt), model, bool(api_key),
+    )
+    if not image_base64:
+        logger.error("VISION_DIAG: image_base64 is EMPTY — Anthropic will not see an image")
+
     messages: list[dict[str, Any]] = [
         {
             "role": "user",
@@ -425,6 +433,22 @@ async def _vision_anthropic(
         "anthropic-version": "2023-06-01",
         "content-type": "application/json",
     }
+
+    # Diagnostic: log the exact payload shape (redact base64 after 100 chars).
+    redacted_b64 = image_base64[:100] + "...<redacted>" if len(image_base64) > 100 else image_base64
+    logger.info(
+        "VISION_DIAG: payload_shape model=%s max_tokens=%d "
+        "message_role=%s content_blocks=%d "
+        "block0_type=%s source_type=%s media_type=%s data_preview=%s "
+        "block1_type=%s",
+        payload["model"], payload["max_tokens"],
+        messages[0]["role"], len(messages[0]["content"]),
+        messages[0]["content"][0]["type"],
+        messages[0]["content"][0]["source"]["type"],
+        messages[0]["content"][0]["source"]["media_type"],
+        redacted_b64,
+        messages[0]["content"][1]["type"],
+    )
 
     data = await _http_post(_ANTHROPIC_URL, headers=headers, payload=payload)
 
