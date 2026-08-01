@@ -460,15 +460,16 @@ private struct PermissionStatusView: View {
 
 /// Displays the most recent Visual Context for debugging.
 /// **Remove once Enhanced Explanation is verified working.**
+///
+/// Reads directly from `EnhancedExplanationDebug.shared` which is `@Observable`.
+/// SwiftUI tracks property access in `body` and re-renders automatically.
 private struct EnhancedExplanationDebugView: View {
 
-    @State private var debugState = EnhancedExplanationDebug.shared
-
-    /// Polls for updates since EnhancedExplanationDebug is not @Observable.
-    private let refreshTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
+    var debug = EnhancedExplanationDebug.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
+            // Header row with timestamp and latency.
             HStack(spacing: 6) {
                 Image(systemName: "ladybug.fill")
                     .font(.system(size: 11))
@@ -477,7 +478,12 @@ private struct EnhancedExplanationDebugView: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.purple)
                 Spacer()
-                if let ts = debugState.lastTimestamp {
+                if let ms = debug.lastLatencyMs {
+                    Text("\(String(format: "%.0f", ms))ms")
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.orange)
+                }
+                if let ts = debug.lastTimestamp {
                     Text(ts, style: .relative)
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
@@ -487,7 +493,19 @@ private struct EnhancedExplanationDebugView: View {
                 }
             }
 
-            if let vc = debugState.lastVisualContext {
+            // Status: success or failure.
+            if let error = debug.lastError {
+                Text("FAILED: \(error)")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.red)
+                    .lineLimit(3)
+            }
+
+            // Parsed Visual Context items.
+            if let vc = debug.lastVisualContext {
+                Text("Parsed Visual Context (\(vc.items.count) items):")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.primary)
                 ForEach(Array(vc.items.enumerated()), id: \.offset) { _, item in
                     HStack(alignment: .top, spacing: 4) {
                         Text(item.type + ":")
@@ -499,7 +517,23 @@ private struct EnhancedExplanationDebugView: View {
                             .lineLimit(2)
                     }
                 }
-            } else {
+            }
+
+            // Raw Vision Response (before parsing).
+            if let raw = debug.lastRawResponse {
+                Divider()
+                Text("Raw Vision Response:")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.primary)
+                Text(raw)
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(10)
+                    .textSelection(.enabled)
+            }
+
+            // Empty state.
+            if debug.lastVisualContext == nil && debug.lastError == nil {
                 Text("No Visual Context captured yet. Use Selection or Screenshot mode with Enhanced Explanation ON.")
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
@@ -514,9 +548,6 @@ private struct EnhancedExplanationDebugView: View {
                         .stroke(Color.purple.opacity(0.2), lineWidth: 1)
                 )
         )
-        .onReceive(refreshTimer) { _ in
-            debugState = EnhancedExplanationDebug.shared
-        }
     }
 }
 #endif

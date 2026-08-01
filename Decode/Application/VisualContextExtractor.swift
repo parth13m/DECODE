@@ -53,7 +53,7 @@ struct VisualContextExtractor: VisualContextExtracting, Sendable {
 
         // 3. Call vision LLM with timeout.
         #if DEBUG
-        print("[VisualContext] calling Groq Vision API (timeout=\(AILimits.visionTimeoutSeconds)s)...")
+        print("[VisualContext] gateway request starting (timeout=\(AILimits.visionTimeoutSeconds)s)...")
         let apiStartTime = CFAbsoluteTimeGetCurrent()
         #endif
         let rawOutput: String
@@ -79,31 +79,54 @@ struct VisualContextExtractor: VisualContextExtracting, Sendable {
         } catch {
             #if DEBUG
             let apiMs = (CFAbsoluteTimeGetCurrent() - apiStartTime) * 1000
-            print("[VisualContext] Groq Vision FAILED after \(String(format: "%.0f", apiMs))ms: \(error.localizedDescription)")
+            let errorDetail: String
+            if error is CancellationError {
+                errorDetail = "TIMEOUT after \(String(format: "%.0f", apiMs))ms"
+            } else {
+                errorDetail = "\(error.localizedDescription) after \(String(format: "%.0f", apiMs))ms"
+            }
+            print("[VisualContext] gateway request FAILED: \(errorDetail)")
+            print("[VisualContext] error type: \(type(of: error)), description: \(error)")
+            await MainActor.run {
+                EnhancedExplanationDebug.shared.lastError = errorDetail
+                EnhancedExplanationDebug.shared.lastRawResponse = nil
+                EnhancedExplanationDebug.shared.lastLatencyMs = apiMs
+                EnhancedExplanationDebug.shared.lastTimestamp = Date()
+            }
             #endif
             return nil
         }
 
         #if DEBUG
         let apiMs = (CFAbsoluteTimeGetCurrent() - apiStartTime) * 1000
-        print("[VisualContext] Groq Vision responded in \(String(format: "%.0f", apiMs))ms")
+        print("[VisualContext] Railway response received in \(String(format: "%.0f", apiMs))ms")
         print("[VisualContext] raw response (\(rawOutput.count) chars):")
         print(rawOutput)
+        await MainActor.run {
+            EnhancedExplanationDebug.shared.lastRawResponse = rawOutput
+            EnhancedExplanationDebug.shared.lastLatencyMs = apiMs
+        }
         #endif
 
         // 4. Parse response into evidence items.
         let items = parseEvidence(rawOutput)
+        #if DEBUG
+        print("[VisualContext] parsed \(items.count) evidence items from raw response")
+        for item in items {
+            print("[VisualContext]   \(item.type): \(item.content)")
+        }
+        #endif
 
         guard !items.isEmpty else {
             #if DEBUG
-            print("[VisualContext] no evidence items parsed from response")
+            print("[VisualContext] WARNING: no evidence items parsed — raw response may be in unexpected format")
+            await MainActor.run {
+                EnhancedExplanationDebug.shared.lastError = "Parser produced 0 items from \(rawOutput.count)-char response"
+                EnhancedExplanationDebug.shared.lastTimestamp = Date()
+            }
             #endif
             return nil
         }
-
-        #if DEBUG
-        print("[VisualContext] parsed \(items.count) evidence items")
-        #endif
 
         // 5. Truncate if evidence exceeds character budget.
         let trimmedItems = trimToCharacterBudget(items)

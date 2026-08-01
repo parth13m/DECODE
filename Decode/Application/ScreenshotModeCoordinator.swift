@@ -178,8 +178,13 @@ final class ScreenshotModeCoordinator {
                 for item in vc.items {
                     print("[EnhancedExplanation]   \(item.type): \(item.content)")
                 }
+                EnhancedExplanationDebug.shared.lastVisualContext = vc
+                EnhancedExplanationDebug.shared.lastTimestamp = Date()
+                EnhancedExplanationDebug.shared.lastError = nil
             } else {
                 print("[EnhancedExplanation] parallel complete in \(String(format: "%.0f", parallelMs))ms — vision returned nil")
+                EnhancedExplanationDebug.shared.lastError = "Vision returned nil after \(String(format: "%.0f", parallelMs))ms"
+                EnhancedExplanationDebug.shared.lastTimestamp = Date()
             }
             #endif
         } else if enhancedEnabled {
@@ -262,10 +267,6 @@ final class ScreenshotModeCoordinator {
             userMessage = "[Context]\n\(vc.formatted())\n[/Context]\n\n\(ocrText)"
             #if DEBUG
             print("[EnhancedExplanation] final prompt contains Visual Context: YES (\(vc.items.count) items, \(vc.formatted().count) chars)")
-            #endif
-            #if DEBUG
-            EnhancedExplanationDebug.shared.lastVisualContext = vc
-            EnhancedExplanationDebug.shared.lastTimestamp = Date()
             #endif
         } else {
             userMessage = ocrText

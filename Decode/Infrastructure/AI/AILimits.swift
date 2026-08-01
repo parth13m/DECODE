@@ -48,8 +48,12 @@ enum AILimits {
     static let maxVisionImageBytes = 800 * 1024  // 800 KB
 
     /// Timeout for vision extraction (seconds).
-    /// Shorter than explanation timeout — visual context is optional enrichment.
-    static let visionTimeoutSeconds: TimeInterval = 10
+    /// Includes the Railway gateway hop (App → Railway → Groq → Railway → App),
+    /// so budget is higher than a direct API call would need.
+    // TODO: Revisit after collecting latency measurements from production.
+    // 20s is deliberately generous for debugging. Target: 10-12s once
+    // Railway cold-start and Groq vision latency are characterized.
+    static let visionTimeoutSeconds: TimeInterval = 20
 
     /// Maximum characters for formatted visual evidence injected into the
     /// explanation prompt. ~150 tokens. Evidence exceeding this is truncated

@@ -223,7 +223,7 @@ final class SelectionModeCoordinator {
                 #if DEBUG
                 let captureMs = (CFAbsoluteTimeGetCurrent() - vcStartTime) * 1000
                 print("[EnhancedExplanation] screenshot captured: \(screenImage.width)x\(screenImage.height) in \(String(format: "%.0f", captureMs))ms")
-                print("[EnhancedExplanation] vision request starting...")
+                print("[EnhancedExplanation] gateway vision request starting...")
                 let visionStartTime = CFAbsoluteTimeGetCurrent()
                 #endif
                 visualContext = await extractor.extract(from: screenImage)
@@ -237,13 +237,20 @@ final class SelectionModeCoordinator {
                         print("[EnhancedExplanation]   \(item.type): \(item.content)")
                     }
                     print("[EnhancedExplanation] total Enhanced Explanation overhead: \(String(format: "%.0f", totalMs))ms")
+                    EnhancedExplanationDebug.shared.lastVisualContext = vc
+                    EnhancedExplanationDebug.shared.lastTimestamp = Date()
+                    EnhancedExplanationDebug.shared.lastError = nil
                 } else {
                     print("[EnhancedExplanation] vision request returned nil after \(String(format: "%.0f", visionMs))ms — proceeding without")
+                    EnhancedExplanationDebug.shared.lastError = "Vision returned nil after \(String(format: "%.0f", visionMs))ms"
+                    EnhancedExplanationDebug.shared.lastTimestamp = Date()
                 }
                 #endif
             } else {
                 #if DEBUG
                 print("[EnhancedExplanation] screenshot capture FAILED for PID \(sourceAppPID) — proceeding without visual context")
+                EnhancedExplanationDebug.shared.lastError = "Screenshot capture failed for PID \(sourceAppPID)"
+                EnhancedExplanationDebug.shared.lastTimestamp = Date()
                 #endif
             }
             // Staleness check after vision extraction await.
@@ -277,11 +284,6 @@ final class SelectionModeCoordinator {
             userMessage = "[Context]\n\(vc.formatted())\n[/Context]\n\n\(text)"
             #if DEBUG
             print("[EnhancedExplanation] final prompt contains Visual Context: YES (\(vc.items.count) items, \(vc.formatted().count) chars)")
-            #endif
-            #if DEBUG
-            // Update shared debug state for UI inspection.
-            EnhancedExplanationDebug.shared.lastVisualContext = vc
-            EnhancedExplanationDebug.shared.lastTimestamp = Date()
             #endif
         } else {
             userMessage = text
