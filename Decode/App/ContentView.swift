@@ -568,13 +568,14 @@ private struct EnhancedExplanationDebugView: View {
                 }
             }
 
-            // Evidence count.
+            // Line count.
             if let vc = debug.lastVisualContext {
+                let lineCount = vc.content.components(separatedBy: "\n").count
                 HStack(spacing: 4) {
-                    Text("Items:")
+                    Text("Lines:")
                         .font(monoSmall)
                         .foregroundStyle(.gray)
-                    Text("\(vc.items.count)")
+                    Text("\(lineCount)")
                         .font(monoBold)
                         .foregroundStyle(.cyan)
                 }
@@ -596,31 +597,22 @@ private struct EnhancedExplanationDebugView: View {
         }
     }
 
-    // MARK: - Parsed Visual Context Section
+    // MARK: - Validated Visual Context Section
 
     @ViewBuilder
     private var debugParsedSection: some View {
-        Text("──── Parsed Visual Context ────")
+        Text("──── Validated Visual Context ────")
             .font(monoBold)
             .foregroundStyle(.purple)
 
-        if let vc = debug.lastVisualContext, !vc.items.isEmpty {
+        if let vc = debug.lastVisualContext, !vc.isEmpty {
             ScrollView {
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(Array(vc.items.enumerated()), id: \.offset) { _, item in
-                        HStack(alignment: .top, spacing: 6) {
-                            Text(item.type + ":")
-                                .font(monoBold)
-                                .foregroundStyle(.cyan)
-                            Text(item.content)
-                                .font(mono)
-                                .foregroundStyle(.white)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .textSelection(.enabled)
+                Text(vc.content)
+                    .font(mono)
+                    .foregroundStyle(.white)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
             }
             .frame(maxHeight: 150)
         } else {

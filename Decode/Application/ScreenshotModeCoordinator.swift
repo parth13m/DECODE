@@ -174,10 +174,8 @@ final class ScreenshotModeCoordinator {
             #if DEBUG
             let parallelMs = (CFAbsoluteTimeGetCurrent() - parallelStart) * 1000
             if let vc = visualContext {
-                print("[EnhancedExplanation] parallel complete in \(String(format: "%.0f", parallelMs))ms — \(vc.items.count) evidence items:")
-                for item in vc.items {
-                    print("[EnhancedExplanation]   \(item.type): \(item.content)")
-                }
+                let lineCount = vc.content.components(separatedBy: "\n").count
+                print("[EnhancedExplanation] parallel complete in \(String(format: "%.0f", parallelMs))ms — \(lineCount) lines, \(vc.content.count) chars")
                 EnhancedExplanationDebug.shared.lastVisualContext = vc
                 EnhancedExplanationDebug.shared.lastTimestamp = Date()
                 EnhancedExplanationDebug.shared.lastError = nil
@@ -266,7 +264,7 @@ final class ScreenshotModeCoordinator {
         if let vc = visualContext, !vc.isEmpty {
             userMessage = "[Context]\n\(vc.formatted())\n[/Context]\n\n\(ocrText)"
             #if DEBUG
-            print("[EnhancedExplanation] final prompt contains Visual Context: YES (\(vc.items.count) items, \(vc.formatted().count) chars)")
+            print("[EnhancedExplanation] final prompt contains Visual Context: YES (\(vc.formatted().count) chars)")
             #endif
         } else {
             userMessage = ocrText

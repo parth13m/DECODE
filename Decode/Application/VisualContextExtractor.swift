@@ -108,36 +108,24 @@ struct VisualContextExtractor: VisualContextExtracting, Sendable {
         }
         #endif
 
-        // 4. Parse response into evidence items.
-        let items = parseEvidence(rawOutput)
-        #if DEBUG
-        print("[VisualContext] parsed \(items.count) evidence items from raw response")
-        for item in items {
-            print("[VisualContext]   \(item.type): \(item.content)")
-        }
-        #endif
-
-        guard !items.isEmpty else {
+        // 4. Lightweight validation — the vision model produces the final artifact.
+        guard let validated = sanitize(rawOutput) else {
             #if DEBUG
-            print("[VisualContext] WARNING: no evidence items parsed — raw response may be in unexpected format")
+            print("[VisualContext] sanitize returned nil — no additive context")
             await MainActor.run {
-                EnhancedExplanationDebug.shared.lastError = "Parser produced 0 items from \(rawOutput.count)-char response"
+                EnhancedExplanationDebug.shared.lastError = "No additive context from \(rawOutput.count)-char response"
                 EnhancedExplanationDebug.shared.lastTimestamp = Date()
             }
             #endif
             return nil
         }
 
-        // 5. Truncate if evidence exceeds character budget.
-        let trimmedItems = trimToCharacterBudget(items)
-
         #if DEBUG
-        if trimmedItems.count < items.count {
-            print("[VisualContext] trimmed from \(items.count) to \(trimmedItems.count) items (character budget)")
-        }
+        let lineCount = validated.components(separatedBy: "\n").count
+        print("[VisualContext] validated output: \(lineCount) lines, \(validated.count) chars")
         #endif
 
-        return VisualContext(items: trimmedItems)
+        return VisualContext(content: validated)
     }
 
     // MARK: - JPEG Conversion
@@ -195,74 +183,97 @@ struct VisualContextExtractor: VisualContextExtracting, Sendable {
         return data as Data
     }
 
-    // MARK: - Response Parsing
+    // MARK: - Lightweight Validation
 
-    /// Parse the vision model's line-based "key: value" output into
-    /// structured `VisualEvidence` items.
-    func parseEvidence(_ rawOutput: String) -> [VisualEvidence] {
-        rawOutput
-            .split(separator: "\n")
-            .compactMap { line -> VisualEvidence? in
-                let str = line.trimmingCharacters(in: .whitespaces)
-                guard let colonIndex = str.firstIndex(of: ":") else { return nil }
-                let type = str[str.startIndex..<colonIndex]
-                    .trimmingCharacters(in: .whitespaces)
-                    .lowercased()
-                let content = str[str.index(after: colonIndex)...]
-                    .trimmingCharacters(in: .whitespaces)
-                guard !type.isEmpty, !content.isEmpty else { return nil }
-                return VisualEvidence(type: type, content: content)
-            }
-    }
+    /// Sanitize raw vision output into a validated context string.
+    ///
+    /// The vision model produces the final artifact directly. This method
+    /// performs only guardrail operations:
+    /// - Strip `<think>…</think>` blocks (model reasoning leakage)
+    /// - Trim whitespace and remove empty lines
+    /// - Detect `NO_ADDITIONAL_CONTEXT` / `none` sentinel → return nil
+    /// - Enforce character limit
+    ///
+    /// Returns `nil` when the output contains no additive context.
+    func sanitize(_ rawOutput: String) -> String? {
+        var text = rawOutput
 
-    /// Drop lowest-priority (last) items until formatted output is within
-    /// the character budget.
-    private func trimToCharacterBudget(_ items: [VisualEvidence]) -> [VisualEvidence] {
-        var result = items
-        while !result.isEmpty {
-            let formatted = VisualContext(items: result).formatted()
-            if formatted.count <= AILimits.maxVisualEvidenceCharacters {
-                break
+        // Strip <think>…</think> blocks (Qwen reasoning leakage).
+        while let startRange = text.range(of: "<think>", options: .caseInsensitive) {
+            if let endRange = text.range(of: "</think>", options: .caseInsensitive, range: startRange.upperBound..<text.endIndex) {
+                text.removeSubrange(startRange.lowerBound..<endRange.upperBound)
+            } else {
+                // Unclosed <think> — remove everything from <think> onward.
+                text.removeSubrange(startRange.lowerBound..<text.endIndex)
             }
-            result.removeLast()
         }
-        return result
+
+        // Remove empty lines and trim each line.
+        let lines = text
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+
+        // Detect empty-output sentinel.
+        let joined = lines.joined(separator: "\n")
+        let normalized = joined.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        if normalized.isEmpty
+            || normalized == "none"
+            || normalized == "no_additional_context" {
+            return nil
+        }
+
+        // Enforce character limit.
+        if joined.count > AILimits.maxVisualEvidenceCharacters {
+            // Keep complete lines that fit within the budget.
+            var result: [String] = []
+            var length = 0
+            for line in lines {
+                let addition = result.isEmpty ? line.count : line.count + 1 // +1 for \n
+                if length + addition > AILimits.maxVisualEvidenceCharacters { break }
+                result.append(line)
+                length += addition
+            }
+            return result.isEmpty ? nil : result.joined(separator: "\n")
+        }
+
+        return joined
     }
 
     // MARK: - Extraction Prompt
 
     static let extractionPrompt = """
-        A separate AI model is explaining the highlighted code to a developer. \
-        That model already has the full text of the highlighted code.
+        Another AI is explaining the highlighted code to a developer. \
+        It already has the highlighted code's full text.
 
-        Your job: find information OUTSIDE the highlighted code that the other model cannot know.
+        Read the highlighted code. Use it as a query. \
+        Search the rest of the screen for information that improves the explanation.
 
-        QUALITY RULE: One excellent observation is better than five mediocre ones. \
-        Only output evidence that changes or significantly improves the downstream explanation. \
-        Never pad output. If only one observation is genuinely valuable, return only one line.
+        EVERY LINE YOU OUTPUT must answer: \
+        "What does the screen tell the explanation model that it cannot know from the highlighted code alone?"
 
-        DECISION RULE — for each observation ask:
-        Can it be known from the highlighted code alone? → SKIP
-        Will it materially improve the explanation? → if NO, SKIP
+        One excellent observation beats five mediocre ones. \
+        Do not fill the output. Only include genuinely valuable evidence.
 
-        OUTPUT exactly: key: value (one per line, max 5 lines)
+        HIGH VALUE (include if visible):
+        compiler error or warning related to the selection
+        nearby comment, TODO, FIXME explaining intent
+        visible documentation about the selected code
+        terminal output related to the selection
+        nearby code that calls, is called by, or relates to the selection
+        surrounding type or function signature NOT in the selection
 
-        PRIORITY (highest first):
-        1. error/warning: compiler or linter diagnostic related to the selection
-        2. comment: nearby TODO, FIXME, or explanatory comment
-        3. doc: visible documentation about the selected code
-        4. terminal: related terminal/console output
-        5. caller: function or method that calls into the selection
-        6. signature: surrounding type or function signature NOT in the selection
+        NEVER include:
+        filename, language, editor, UI, layout, coordinates, image description, \
+        markdown, XML, JSON, prose, explanation, reasoning, <think>, \
+        or anything already in the highlighted code
 
-        NEVER output: filename, language, editor, UI elements, layout, coordinates, \
-        image description, markdown, prose, explanation, reasoning, tags, \
-        or anything inside the highlighted code.
+        Output plain text. One observation per line. Max 5 lines. 50-100 tokens.
 
         Good output:
-        comment: TODO migrate producer registration to async
-        error: Cannot convert value of type 'Int' to 'String'
-        terminal: build failed — missing return in closure
+        nearby comment says TODO: migrate to async registration
+        compiler warning: unused result of type 'Result<Int, Error>'
+        function processQueue() calls this method in a retry loop
 
         If nothing qualifies, output exactly: none
         """

@@ -231,11 +231,9 @@ final class SelectionModeCoordinator {
                 let visionMs = (CFAbsoluteTimeGetCurrent() - visionStartTime) * 1000
                 let totalMs = (CFAbsoluteTimeGetCurrent() - vcStartTime) * 1000
                 if let vc = visualContext {
+                    let lineCount = vc.content.components(separatedBy: "\n").count
                     print("[EnhancedExplanation] vision request finished in \(String(format: "%.0f", visionMs))ms")
-                    print("[EnhancedExplanation] parsed \(vc.items.count) evidence items:")
-                    for item in vc.items {
-                        print("[EnhancedExplanation]   \(item.type): \(item.content)")
-                    }
+                    print("[EnhancedExplanation] validated output: \(lineCount) lines, \(vc.content.count) chars")
                     print("[EnhancedExplanation] total Enhanced Explanation overhead: \(String(format: "%.0f", totalMs))ms")
                     EnhancedExplanationDebug.shared.lastVisualContext = vc
                     EnhancedExplanationDebug.shared.lastTimestamp = Date()
@@ -283,7 +281,7 @@ final class SelectionModeCoordinator {
         if let vc = visualContext, !vc.isEmpty {
             userMessage = "[Context]\n\(vc.formatted())\n[/Context]\n\n\(text)"
             #if DEBUG
-            print("[EnhancedExplanation] final prompt contains Visual Context: YES (\(vc.items.count) items, \(vc.formatted().count) chars)")
+            print("[EnhancedExplanation] final prompt contains Visual Context: YES (\(vc.formatted().count) chars)")
             #endif
         } else {
             userMessage = text
