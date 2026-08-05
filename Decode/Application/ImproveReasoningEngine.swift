@@ -77,7 +77,7 @@ struct ImproveReasoningEngine: ReasoningEngine, Sendable {
         let response = try await provider.generateCompletion(
             userContent: userPrompt,
             systemPrompt: systemPrompt,
-            mode: "improve"
+            mode: "session_improve"
         )
 
         // Parse the XML-tagged response using ImprovementService.

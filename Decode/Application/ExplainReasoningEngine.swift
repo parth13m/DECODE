@@ -101,7 +101,7 @@ struct ExplainReasoningEngine: ReasoningEngine, Sendable {
         let response = try await provider.generateCompletion(
             userContent: userPrompt,
             systemPrompt: systemPrompt,
-            mode: "explain"
+            mode: "session"
         )
 
         let claims = ReasoningEngineSupport.buildClaims(

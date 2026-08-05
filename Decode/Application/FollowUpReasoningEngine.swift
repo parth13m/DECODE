@@ -186,7 +186,7 @@ struct FollowUpReasoningEngine: ReasoningEngine, Sendable {
         let response = try await provider.generateCompletion(
             userContent: userPrompt,
             systemPrompt: systemPrompt,
-            mode: "followup"
+            mode: "session_followup"
         )
 
         let claims = ReasoningEngineSupport.buildClaims(
@@ -252,7 +252,7 @@ struct FollowUpReasoningEngine: ReasoningEngine, Sendable {
         let stream = try await provider.streamChat(
             messages: messages,
             systemPrompt: Self.followUpSystemPrompt,
-            mode: "followup"
+            mode: "session_followup"
         )
 
         // Collect streamed chunks into a single response.

@@ -3,7 +3,7 @@
 ```
 Chapter:       DAS-006
 Title:         Pass Architecture
-Status:        Draft
+Status:        Frozen
 Version:       1.0
 Author:        Principal Architect
 Reviewers:     —

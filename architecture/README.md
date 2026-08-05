@@ -65,29 +65,31 @@ See [DAS-002](das/DAS-002-Decode-Intermediate-Representation.md) for the complet
 
 | Chapter | Title | Layer | Status | Dependencies |
 |---------|-------|-------|--------|-------------|
-| [DAS-000](das/DAS-000-Architecture-Authoring-Standard.md) | Architecture Authoring Standard | Meta | Draft | None |
-| [DAS-001](das/DAS-001-Architectural-Principles.md) | Architectural Principles | L0 | Draft | DAS-000 |
-| [DAS-002](das/DAS-002-Decode-Intermediate-Representation.md) | Decode Intermediate Representation (DIR) | L1 | Draft | DAS-000, DAS-001 |
-| [DAS-003](das/DAS-003-Tier-Model.md) | Tier Model | L1 | Draft | DAS-000, DAS-001, DAS-002 |
-| [DAS-004](das/DAS-004-Entity-Model.md) | Entity Model | L1 | Draft | DAS-000, DAS-001, DAS-002, DAS-003 |
-| [DAS-005](das/DAS-005-Relationship-Model.md) | Relationship Model | L1 | Draft | DAS-000, DAS-001, DAS-002, DAS-004 |
-| [DAS-006](das/DAS-006-Pass-Architecture.md) | Pass Architecture | L2 | Draft | DAS-000, DAS-001, DAS-002, DAS-003 |
-| [DAS-007](das/DAS-007-Index-Architecture.md) | Index Architecture | L3 | Draft | DAS-000, DAS-001, DAS-002, DAS-003, DAS-004, DAS-005, DAS-006 |
-| [DAS-008](das/DAS-008-Retrieval-Architecture.md) | Retrieval Architecture | L3 | Draft | DAS-000, DAS-001, DAS-002, DAS-003, DAS-004, DAS-005, DAS-006, DAS-007 |
-| [DAS-009](das/DAS-009-Context-Assembly.md) | Context Assembly | L3 | Draft | DAS-000, DAS-001, DAS-002, DAS-003, DAS-004, DAS-005, DAS-006, DAS-007, DAS-008 |
-| [DAS-010](das/DAS-010-Incremental-Update-Model.md) | Incremental Update Model | L2 | Draft | DAS-000, DAS-001, DAS-002, DAS-003, DAS-006, DAS-007 |
-| [DAS-011](das/DAS-011-Consumer-Architecture.md) | Consumer Architecture | L4 | Draft | DAS-000, DAS-001, DAS-002, DAS-003, DAS-006, DAS-008, DAS-009 |
-| [DAS-012](das/DAS-012-Storage-Realization.md) | Storage Realization | L5 | Draft | DAS-000, DAS-001, DAS-002, DAS-007, DAS-010, DAS-011 |
+| [DAS-000](das/DAS-000-Architecture-Authoring-Standard.md) | Architecture Authoring Standard | Meta | Frozen | None |
+| [DAS-001](das/DAS-001-Architectural-Principles.md) | Architectural Principles | L0 | Frozen | DAS-000 |
+| [DAS-002](das/DAS-002-Decode-Intermediate-Representation.md) | Decode Intermediate Representation (DIR) | L1 | Frozen | DAS-000, DAS-001 |
+| [DAS-003](das/DAS-003-Tier-Model.md) | Tier Model | L1 | Frozen | DAS-000, DAS-001, DAS-002 |
+| [DAS-004](das/DAS-004-Entity-Model.md) | Entity Model | L1 | Frozen | DAS-000, DAS-001, DAS-002, DAS-003 |
+| [DAS-005](das/DAS-005-Relationship-Model.md) | Relationship Model | L1 | Frozen | DAS-000, DAS-001, DAS-002, DAS-004 |
+| [DAS-006](das/DAS-006-Pass-Architecture.md) | Pass Architecture | L2 | Frozen | DAS-000, DAS-001, DAS-002, DAS-003 |
+| [DAS-007](das/DAS-007-Index-Architecture.md) | Index Architecture | L3 | Frozen | DAS-000, DAS-001, DAS-002, DAS-003, DAS-004, DAS-005, DAS-006 |
+| [DAS-008](das/DAS-008-Retrieval-Architecture.md) | Retrieval Architecture | L3 | Frozen | DAS-000, DAS-001, DAS-002, DAS-003, DAS-004, DAS-005, DAS-006, DAS-007 |
+| [DAS-009](das/DAS-009-Context-Assembly.md) | Context Assembly | L3 | Frozen | DAS-000, DAS-001, DAS-002, DAS-003, DAS-004, DAS-005, DAS-006, DAS-007, DAS-008 |
+| [DAS-010](das/DAS-010-Incremental-Update-Model.md) | Incremental Update Model | L2 | Frozen | DAS-000, DAS-001, DAS-002, DAS-003, DAS-006, DAS-007 |
+| [DAS-011](das/DAS-011-Consumer-Architecture.md) | Consumer Architecture | L4 | Frozen | DAS-000, DAS-001, DAS-002, DAS-003, DAS-006, DAS-008, DAS-009 |
+| [DAS-012](das/DAS-012-Storage-Realization.md) | Storage Realization | L5 | Frozen | DAS-000, DAS-001, DAS-002, DAS-007, DAS-010, DAS-011 |
 
-## RFC Inventory
+## RFC Inventory (Archived)
+
+All RFCs have been accepted and their conclusions incorporated into DAS chapters. They are archived in `rfc/archive/` and are no longer updated.
 
 | RFC | Title | Status | Target DAS Chapters |
 |-----|-------|--------|-------------------|
-| [RFC-000](rfc/RFC-000-Canonical-Asset.md) | Canonical Asset | Accepted | DAS-001, DAS-002 |
-| [RFC-001](rfc/RFC-001-Decode-Identity.md) | Decode Identity | Accepted | DAS-001 |
-| [RFC-002](rfc/RFC-002-Canonical-Asset-Adversarial-Review.md) | Canonical Asset — Adversarial Review | Accepted | DAS-001, DAS-002 |
-| [RFC-005](rfc/RFC-005-Atomic-Unit-Contract.md) | Contract of the Atomic Unit | Accepted | DAS-002 |
-| [RFC-006](rfc/RFC-006-DIR-Hypothesis.md) | The Intermediate Representation Hypothesis | Accepted | DAS-001, DAS-002 |
+| [RFC-000](rfc/archive/RFC-000-Canonical-Asset.md) | Canonical Asset | Archived | DAS-001, DAS-002 |
+| [RFC-001](rfc/archive/RFC-001-Decode-Identity.md) | Decode Identity | Archived | DAS-001 |
+| [RFC-002](rfc/archive/RFC-002-Canonical-Asset-Adversarial-Review.md) | Canonical Asset — Adversarial Review | Archived | DAS-001, DAS-002 |
+| [RFC-005](rfc/archive/RFC-005-Atomic-Unit-Contract.md) | Contract of the Atomic Unit | Archived | DAS-002 |
+| [RFC-006](rfc/archive/RFC-006-DIR-Hypothesis.md) | The Intermediate Representation Hypothesis | Archived | DAS-001, DAS-002 |
 
 ## Feature Architecture Specifications
 
@@ -96,6 +98,7 @@ Feature-level architecture specifications define cross-platform behavior for app
 | Spec | Title | Status |
 |------|-------|--------|
 | [VAS-001](VAS-001-VirtualSessionArchitecture.md) | Virtual Session Architecture | Canonical |
+| [VISUAL_CONTEXT](VISUAL_CONTEXT_ARCHITECTURE.md) | Visual Context Architecture | Canonical |
 
 ## Dependency Order
 
@@ -129,6 +132,26 @@ DAS-000 (Authoring Standard)
 ## Change Process
 
 Changes to Approved chapters require an Architecture Change Request (ACR). See [DAS-000 Section 8](das/DAS-000-Architecture-Authoring-Standard.md) for the full process.
+
+## Architectural Modification Process
+
+All DAS, DDS, and feature architecture specifications are **frozen**. Changing a frozen specification requires an explicit RFC that includes:
+
+1. **Which document and section** is proposed for modification.
+2. **What the current specification says** (exact text).
+3. **What the proposed modification is** (exact replacement text).
+4. **Why the current specification is incorrect** — not inconvenient, not suboptimal, but incorrect (produces a system violating a DAS invariant, a DDS contract, or containing an internal contradiction).
+5. **What implementation evidence** demonstrates the incorrectness (failing test, provable violation, or contradiction found during implementation).
+6. **What downstream impact** the modification has on other frozen documents.
+
+The RFC is reviewed and approved before any code is written against the modified specification. Implementation continues against the current frozen specification until the RFC is approved. Implementation convenience is never a valid reason for modification.
+
+## Archived Documents
+
+Historical documents that informed the architecture but are no longer authoritative are preserved in archive directories:
+
+- `rfc/archive/` — Accepted RFCs whose conclusions have been incorporated into DAS chapters.
+- `iag/archive/` — Implementation Architecture Guides consumed during pipeline construction.
 
 ## Conventions
 

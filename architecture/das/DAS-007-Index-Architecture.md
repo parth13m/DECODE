@@ -3,7 +3,7 @@
 ```
 Chapter:       DAS-007
 Title:         Index Architecture
-Status:        Draft
+Status:        Frozen
 Version:       1.0
 Author:        Principal Architect
 Reviewers:     —

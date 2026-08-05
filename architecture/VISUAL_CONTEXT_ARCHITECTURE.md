@@ -486,7 +486,7 @@ Identical to current behavior. Zero change.
 
 ### 8.3 Context Assembly Integration
 
-Selection and Screenshot modes use direct string building in the coordinator — there is no formal `ContextBuilderService` for these modes (that exists only for Session Mode). Visual Context integrates at the same level:
+Selection and Screenshot modes use direct string building in the coordinator. Visual Context integrates at the same level:
 
 ```swift
 // In coordinator, after extraction:
@@ -506,7 +506,7 @@ This is consistent with how these coordinators work today: the system prompt is 
 - **Assemble**: Coordinator combines evidence with selected code/OCR text into the user message
 - **Consume**: `ExplanationFramework` (via `streamChat()`) consumes the assembled context
 
-The difference is that Selection/Screenshot use coordinator-level assembly (simple string building) while Session Mode uses `ContextBuilderService` (structured tiers). This difference is intentional — Selection/Screenshot are simpler modes that don't need tiered context strategies. Visual Context respects this simplicity.
+The difference is that Selection/Screenshot use coordinator-level assembly (simple string building) while Session Mode uses the understanding pipeline (structured evidence retrieval and context assembly). This difference is intentional — Selection/Screenshot are simpler modes that don't need the full pipeline. Visual Context respects this simplicity.
 
 ---
 

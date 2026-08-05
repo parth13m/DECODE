@@ -33,8 +33,8 @@ protocol AIProviderProtocol: Sendable {
     /// Stream a chat response given a conversation history.
     ///
     /// - Parameter mode: The request mode for server-side tracking.
-    /// - Parameter contextTier: The context tier for analytics
-    ///   (`"tier1"`, `"tier2"`, `"tier2.5"`, `"tier3"`). Only sent in session mode.
+    /// - Parameter contextTier: The context tier for analytics (e.g., `"pipeline"`).
+    ///   `nil` for non-session modes.
     /// - Parameter explanationProfile: The explanation profile for analytics
     ///   (`"general"`, `"dsa"`). `nil` defaults to general.
     func streamChat(

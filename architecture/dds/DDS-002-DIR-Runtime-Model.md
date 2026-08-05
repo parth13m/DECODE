@@ -3,7 +3,7 @@
 ```
 Document:      DDS-002
 Title:         DIR Runtime Model
-Status:        Draft
+Status:        Frozen
 Version:       0.3
 Author:        Principal Engineer
 Reviewers:     —

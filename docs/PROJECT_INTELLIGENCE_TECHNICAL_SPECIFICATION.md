@@ -54,7 +54,7 @@ The platform provides:
 - **StorageEngine** — persists DIR snapshots. No changes.
 - **DIRCore** — foundation types. No changes.
 
-The platform was designed for this. IAG-004 §18: "Populating the pipeline with domain-specific producers, index families, and reasoning engines is product development work that uses the pipeline, not pipeline implementation work."
+The platform was designed for this. Populating the pipeline with domain-specific producers, index families, and reasoning engines is product development work that uses the pipeline, not pipeline implementation work.
 
 All Project Intelligence code lives in the **application layer** (`Decode/Application/` or `Decode/App/`), not in pipeline modules (`Decode/Understanding/`). It registers into the pipeline at startup via `AppDependencies.performDeferredStartup()`, following the precedent of SwiftSyntaxFrontend, TreeSitterFrontend, ExplainReasoningEngine, ImproveReasoningEngine, FollowUpReasoningEngine, and ContextStrategies.
 
@@ -105,7 +105,7 @@ The same principle that governs File Intelligence (CLAUDE.md Engineering Princip
 
 ### 5.3 Reuse the Platform
 
-Every new capability is a new producer, pass, context strategy, or reasoning engine registered into the existing pipeline. No new framework targets. No new actor types. No new pipeline modules. If a capability seems to require platform modification, it is either a genuine specification defect (file an RFC per IAG-004 §21.3) or a misunderstanding of the existing contracts.
+Every new capability is a new producer, pass, context strategy, or reasoning engine registered into the existing pipeline. No new framework targets. No new actor types. No new pipeline modules. If a capability seems to require platform modification, it is either a genuine specification defect (file an RFC per `architecture/README.md`) or a misunderstanding of the existing contracts.
 
 ### 5.4 Incremental Value Delivery
 
@@ -265,7 +265,7 @@ As with module-scope context, this strategy competes for budget and must be sele
 | New DAS chapters | DAS-004 and DAS-006 already define Module, System, and composition passes | DAS is frozen |
 | New DDS documents | All 8 runtime subsystems confirm no changes needed for Module/Project Intelligence | DDS is frozen |
 | New IAG documents | IAG governs platform implementation, not capability development | IAG is frozen |
-| Platform module modifications | The pipeline is complete and frozen | RFC required per IAG-004 §21.3 |
+| Platform module modifications | The pipeline is complete and frozen | RFC required per `architecture/README.md` |
 | New framework targets | All 8 modules exist; new code lives in the application layer | IAG-001 §2 is frozen |
 | New actor types | Actor placement is frozen (IAG-003) | RFC required |
 | Background continuous analysis | That is Living Intelligence (Phase 4) | Future epic |

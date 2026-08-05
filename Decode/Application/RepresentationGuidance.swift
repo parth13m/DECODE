@@ -35,7 +35,7 @@ enum RepresentationGuidance {
     ///   - snippet: The user's selected code text.
     ///   - framework: The detected language family, if available.
     ///   - containingEntityType: The entity type of the code entity that
-    ///     contains the snippet, if matched by ``ContextBuilderService``.
+    ///     contains the snippet, if matched during workspace resolution.
     static func guidance(
         snippet: String,
         framework: ExplanationFramework?,

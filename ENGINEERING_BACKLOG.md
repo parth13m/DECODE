@@ -285,7 +285,7 @@ Epic 2: Software Intelligence ←── gates ──→ Epic 3: Context Intellig
 - **Expected user impact:** "What calls this?" and "What would break?" produce complete answers.
 - **Status:** Now
 
-**Note:** This modifies IndexRuntime, a frozen pipeline module. The modification is strictly additive (new index entries, new query method). **An RFC per IAG-004 §21.3 is required.** The justification: inverse lookup is a retrieval capability gap that cannot be worked around at the application layer.
+**Note:** This modifies IndexRuntime, a frozen pipeline module. The modification is strictly additive (new index entries, new query method). **An RFC is required (see `architecture/README.md` § Architectural Modification Process).** The justification: inverse lookup is a retrieval capability gap that cannot be worked around at the application layer.
 
 **Deliverables:**
 - RFC document for IndexRuntime additive modification

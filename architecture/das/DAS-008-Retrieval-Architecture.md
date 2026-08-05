@@ -3,7 +3,7 @@
 ```
 Chapter:       DAS-008
 Title:         Retrieval Architecture
-Status:        Draft
+Status:        Frozen
 Version:       1.0
 Author:        Principal Architect
 Reviewers:     —

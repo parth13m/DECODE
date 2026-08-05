@@ -399,87 +399,35 @@ extension ExplanationFramework {
         Most explanations need 0–1 tags.
         """
 
-    // MARK: Code Health Prompt Augmentation
+    // MARK: - Intent-Aware User Message
 
-    /// Generate prompt augmentation based on the snippet's health classification.
+    /// Build the user message incorporating the user's custom request.
     ///
-    /// Returns an empty string for ``HealthTier/silent`` — the default. Higher
-    /// tiers inject progressively stronger guidance, but the LLM is always
-    /// allowed to dismiss parser evidence as partial-selection artifacts.
-    static func healthPromptAugmentation(
-        tier: HealthTier,
-        hints: [DiagnosticHint]
+    /// When `intent` is empty, returns `defaultMessage` unchanged — preserving
+    /// byte-for-byte identical behavior with the existing default flow.
+    ///
+    /// When `intent` is non-empty, composes a message with the user's request
+    /// followed by the code, using a consistent format across all modes.
+    static func userMessage(
+        intent: String,
+        code: String,
+        visualContext: String? = nil
     ) -> String {
-        switch tier {
-        case .silent:
-            return ""
-
-        case .observe:
-            return """
-
-                ---
-
-                If you notice any issues, bugs, or anti-patterns in this code, \
-                mention them briefly using <note> or <critical> tags — but only \
-                if you are confident. Do not speculate about issues you are unsure of.
-                """
-
-        case .surface:
-            var prompt = """
-
-                ---
-
-                STATIC ANALYSIS NOTES
-
-                Tree-sitter parsing of this snippet in isolation detected \
-                the following potential issues:
-                """
-            for hint in hints where hint.isInterior {
-                prompt += "\n- Line \(hint.line): \(hint.description)"
+        // Default path: return exactly what the coordinator would have produced.
+        if intent.isEmpty {
+            if let vc = visualContext, !vc.isEmpty {
+                return "[Visual Context]\n\(vc)\n[/Visual Context]\n\n\(code)"
             }
-            prompt += """
-
-
-                IMPORTANT: This snippet may have been selected from a larger file. \
-                Some of these may be boundary artifacts from partial selection. \
-                Use your judgment:
-                - If an issue appears to be a real syntax or logic problem, \
-                explain what is wrong and suggest a fix using <critical> and <tip> tags.
-                - If an issue appears to be a partial-selection artifact \
-                (e.g., missing opening brace because the function header was not selected), \
-                ignore it and explain the code normally.
-                """
-            return prompt
-
-        case .diagnose:
-            var prompt = """
-
-                ---
-
-                STATIC ANALYSIS NOTES
-
-                Tree-sitter parsing detected significant issues in this code:
-                """
-            for hint in hints {
-                let marker = hint.isInterior ? "[interior]" : "[edge]"
-                prompt += "\n- Line \(hint.line) \(marker): \(hint.description)"
-            }
-            prompt += """
-
-
-                This code appears to have real syntax or structural problems. \
-                Prioritize diagnosing these issues:
-                - Use <critical> tags for each confirmed issue.
-                - Use <tip> tags for each suggested fix.
-                - After addressing the issues, briefly explain what the code \
-                was trying to do.
-
-                IMPORTANT: If any of these appear to be artifacts from partial \
-                selection rather than real bugs, you may dismiss them. The parser \
-                analyzed the snippet in isolation and may report false positives \
-                at snippet boundaries.
-                """
-            return prompt
+            return code
         }
+
+        // Custom intent path: user's request + code.
+        var message = intent + "\n\n"
+        if let vc = visualContext, !vc.isEmpty {
+            message += "[Visual Context]\n\(vc)\n[/Visual Context]\n\n"
+        }
+        message += "Code:\n\(code)"
+        return message
     }
+
 }

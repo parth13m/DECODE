@@ -3,7 +3,7 @@
 ```
 Document:      DDS-000
 Title:         Design Authoring Standard
-Status:        Draft
+Status:        Frozen
 Version:       0.3
 Author:        Principal Engineer
 Reviewers:     —
@@ -179,7 +179,7 @@ Every DDS document must contain the following sections in the specified order. S
 ```
 Document:      DDS-NNN
 Title:         [document title]
-Status:        Draft | Under Review | Approved | Deprecated | Superseded
+Status:        Frozen | Under Review | Approved | Deprecated | Superseded
 Version:       [semantic version: major.minor]
 Author:        [name]
 Reviewers:     [names]

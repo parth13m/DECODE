@@ -174,7 +174,7 @@ private func makeCodeUnits(
 private func makeModuleUnits(
     moduleName: String = "Application",
     fileCount: Int = 5,
-    publicEntities: String = "SessionResolver, ContextBuilderService",
+    publicEntities: String = "SessionResolver, WorkspaceResolver",
     publicCount: Int = 2,
     startId: UInt64 = 100
 ) -> [AtomicUnit] {

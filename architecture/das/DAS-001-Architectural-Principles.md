@@ -3,7 +3,7 @@
 ```
 Chapter:       DAS-001
 Title:         Architectural Principles
-Status:        Draft
+Status:        Frozen
 Version:       1.0
 Author:        Principal Architect
 Reviewers:     —
@@ -18,7 +18,7 @@ Layer:         L0
 
 ## Abstract
 
-This chapter defines the architectural principles that govern every design decision in Decode. It establishes Decode's canonical asset (Intelligence), its canonical output (Understanding), and the twelve engineering principles that constrain all downstream architecture. Every DAS chapter at layers L1–L5 must demonstrate conformance to these principles. A principle stated here overrides any conflicting decision in a higher-layer chapter.
+This chapter defines the architectural principles that govern every design decision in Decode. It establishes Decode's canonical asset (the DIR), its canonical output (Understanding), and the twelve engineering principles that constrain all downstream architecture. Every DAS chapter at layers L1–L5 must demonstrate conformance to these principles. A principle stated here overrides any conflicting decision in a higher-layer chapter.
 
 ## Motivation
 
@@ -44,7 +44,7 @@ If this chapter is wrong, every chapter that depends on it is wrong. If this cha
 
 **Understanding** — A structured, purpose-calibrated output derived from Intelligence and delivered to a consumer. Understanding is the canonical output of Decode — what the system produces for the developer. Understanding is always *about* a subject, *within* a scope, *at* a depth, and *for* a perspective. *Is:* an explanation of why a coordinator delegates to a service, calibrated to a developer who is debugging a timeout. *Is not:* a list of function signatures, a raw AI completion, or an internal intelligence record. `INTRODUCED`
 
-**Canonical Asset** — The single architectural asset that a system creates, owns, maintains, and evolves, from which all outputs are derived. Decode's canonical asset is Intelligence. `See RFC-000`
+**Canonical Asset** — The single architectural asset that a system creates, owns, maintains, and evolves, from which all outputs are derived. Decode's canonical asset is the DIR. `See RFC-000, RFC-006`
 
 **Canonical Output** — The primary deliverable that a system produces for its consumers, derived from the canonical asset. Decode's canonical output is Understanding. `See RFC-001`
 
@@ -106,20 +106,20 @@ The following principles are ordered by precedence. When two principles conflict
 
 ---
 
-### P1: Intelligence Is the Canonical Asset
+### P1: The DIR Is the Canonical Asset
 
-**Statement.** Decode builds, owns, maintains, and evolves one asset: Intelligence. Every other artifact — explanations, analyses, context frames, UI state, cached outputs — is derived from Intelligence and is disposable. If the derived artifacts are lost, they can be regenerated from Intelligence. If Intelligence is lost, the system must rebuild it from source.
+**Statement.** Decode builds, owns, maintains, and evolves one asset: the Decode Intermediate Representation (DIR). Every other artifact — explanations, analyses, context frames, UI state, cached outputs — is derived from the DIR and is disposable. If the derived artifacts are lost, they can be regenerated from the DIR. If the DIR is lost, the system must rebuild it from source.
 
-**Motivation.** A system with multiple competing sources of truth produces inconsistency. If explanations are cached independently of the intelligence that produced them, they drift. If context is assembled from raw source rather than from intelligence, the assembly logic duplicates knowledge that intelligence already contains. A single canonical asset eliminates this class of defect.
+**Motivation.** A system with multiple competing sources of truth produces inconsistency. If explanations are cached independently of the DIR that produced them, they drift. If context is assembled from raw source rather than from the DIR, the assembly logic duplicates knowledge that the DIR already contains. A single canonical asset eliminates this class of defect.
 
 **Consequences.**
-- C1.1: All persistent state that is not source code is either Intelligence or derivable from Intelligence.
-- C1.2: No subsystem may build a parallel representation of software that is not part of the Intelligence model.
-- C1.3: When a derived artifact and Intelligence disagree, Intelligence is authoritative and the derived artifact must be regenerated.
+- C1.1: All persistent state that is not source code is either the DIR or derivable from the DIR.
+- C1.2: No subsystem may build a parallel representation of software that is not part of the DIR.
+- C1.3: When a derived artifact and the DIR disagree, the DIR is authoritative and the derived artifact must be regenerated.
 
-**Enables.** A single investment target. Engineers know that improving Intelligence improves everything. Cache invalidation is tractable because there is one source, not many.
+**Enables.** A single investment target. Engineers know that improving the DIR improves everything. Cache invalidation is tractable because there is one source, not many.
 
-**Forbids.** Shadow data structures that represent software independently of Intelligence. Subsystem-local caches that are not derived from and invalidated by Intelligence. "Shortcut" paths that bypass Intelligence to produce outputs directly from source.
+**Forbids.** Shadow data structures that represent software independently of the DIR. Subsystem-local caches that are not derived from and invalidated by the DIR. "Shortcut" paths that bypass the DIR to produce outputs directly from source.
 
 ---
 

@@ -6,6 +6,8 @@ import Foundation
 enum HUDDisplayState: Sendable {
     /// HUD is hidden, no content.
     case idle
+    /// Waiting for the user to type a custom request or press Enter for the default explanation.
+    case collectingIntent
     /// AI request in progress, no tokens received yet.
     case loading
     /// Tokens are streaming in. The `explanationText` property accumulates content.
@@ -51,11 +53,123 @@ final class ExplanationHUDViewModel {
     /// The explanation profile ("general" or "dsa").
     private(set) var explanationProfile: String?
 
+    /// Execution context recording which capabilities contributed to this explanation.
+    /// Set by ``showLoading`` and used by the header to display the execution context.
+    private(set) var executionContext: ExplanationExecutionContext?
+
     /// Whether the HUD should be visible.
     var isVisible: Bool { displayState != .idle }
 
     /// Whether the HUD is currently receiving streamed content.
     var isStreaming: Bool { displayState == .loading || displayState == .streaming }
+
+    // MARK: - Intent Collection State
+
+    /// User's intent text (bound to TextField in collectingIntent state).
+    var intentText: String = ""
+
+    /// Whether the user has started typing (transitions from idle→editing state).
+    /// In idle state, the HUD container owns keyboard (Enter/Space → default).
+    /// In editing state, the TextField owns keyboard (normal text editing).
+    var isEditingIntent: Bool = false
+
+    /// Continuation for the async collectIntent flow. Resumed when the user
+    /// submits (empty string = default, non-empty = custom) or cancels (nil).
+    private var intentContinuation: CheckedContinuation<String?, Never>?
+
+    /// One-shot callback invoked when the user transitions from idle to editing
+    /// (first printable character). Used by coordinators to start background work
+    /// (e.g., vision extraction) only when a custom question is being typed.
+    /// Automatically nilled after firing.
+    var onEditingStarted: (@MainActor () -> Void)?
+
+    /// Prepare the HUD for intent collection (synchronous state reset).
+    /// Call this before showing the panel, then call ``awaitIntentSubmission()``
+    /// to suspend until the user submits or cancels.
+    func prepareIntentCollection(
+        sourceApp: String?,
+        mode: String? = nil,
+        sessionFile: String? = nil,
+        explanationProfile: String? = nil
+    ) {
+        // Cancel any previous intent collection.
+        cancelIntentIfNeeded()
+
+        // Reset state for intent collection.
+        activeStreamTask?.cancel()
+        followUpTask?.cancel()
+        improvementTask?.cancel()
+
+        explanationText = ""
+        errorMessage = ""
+        sourceAppName = sourceApp
+        modeName = mode
+        sessionFileName = sessionFile
+        self.explanationProfile = explanationProfile
+        intentText = ""
+        isEditingIntent = false
+        displayState = .collectingIntent
+
+        followUpAnswer = ""
+        followUpError = ""
+        followUpText = ""
+        isFollowUpLoading = false
+        followUpContext = nil
+        resetImprovementState()
+    }
+
+    /// Suspend until the user submits their intent or cancels.
+    /// Returns the user's text (empty = default, non-empty = custom), or nil if cancelled.
+    func awaitIntentSubmission() async -> String? {
+        await withCheckedContinuation { continuation in
+            intentContinuation = continuation
+        }
+    }
+
+    /// Transition from idle to editing state without inserting text.
+    ///
+    /// Used by the AppKit key event monitor, which re-posts the original
+    /// key event so the TextField receives it through the normal responder
+    /// chain — producing native insertion behavior with no selection.
+    func transitionToEditing() {
+        intentText = ""
+        isEditingIntent = true
+        let callback = onEditingStarted
+        onEditingStarted = nil
+        callback?()
+    }
+
+    /// Transition from idle to editing state with the first character.
+    ///
+    /// Used by the SwiftUI `.onKeyPress` fallback path. Sets the character
+    /// directly since there's no NSEvent to re-post.
+    func beginEditing(with character: String) {
+        intentText = character
+        isEditingIntent = true
+        let callback = onEditingStarted
+        onEditingStarted = nil
+        callback?()
+    }
+
+    /// Called when the user submits their intent (Enter key or button).
+    func submitIntent() {
+        let text = intentText.trimmingCharacters(in: .whitespacesAndNewlines)
+        onEditingStarted = nil
+        intentContinuation?.resume(returning: text)
+        intentContinuation = nil
+    }
+
+    /// Called when the user cancels intent collection (Escape or close).
+    func cancelIntent() {
+        cancelIntentIfNeeded()
+        displayState = .idle
+    }
+
+    private func cancelIntentIfNeeded() {
+        onEditingStarted = nil
+        intentContinuation?.resume(returning: nil)
+        intentContinuation = nil
+    }
 
     // MARK: - Follow-up State
 
@@ -99,11 +213,6 @@ final class ExplanationHUDViewModel {
         /// Detected language of the code. Passed through to improvement requests
         /// so they participate in language analytics.
         let language: String?
-
-        /// Session context from the original explanation, reused by Session
-        /// Improve so it operates on the same tier/outline/entity data.
-        /// `nil` for Selection and Screenshot modes.
-        let sessionContext: SessionContext?
 
         // MARK: - Pipeline Follow-Up State
 
@@ -232,7 +341,7 @@ final class ExplanationHUDViewModel {
     /// Resets state and enters `.loading` so the user sees immediate feedback.
     /// When the stream is ready, ``showStream(_:sourceApp:followUpContext:)``
     /// transitions to `.streaming`.
-    func showLoading(sourceApp: String?, mode: String? = nil, sessionFile: String? = nil, explanationProfile: String? = nil) {
+    func showLoading(sourceApp: String?, mode: String? = nil, sessionFile: String? = nil, explanationProfile: String? = nil, executionContext: ExplanationExecutionContext? = nil) {
         activeStreamTask?.cancel()
         followUpTask?.cancel()
         improvementTask?.cancel()
@@ -243,6 +352,7 @@ final class ExplanationHUDViewModel {
         modeName = mode
         sessionFileName = sessionFile
         self.explanationProfile = explanationProfile
+        self.executionContext = executionContext
         displayState = .loading
 
         followUpAnswer = ""
@@ -539,23 +649,12 @@ final class ExplanationHUDViewModel {
 
         let mode = ImprovementService.improvementMode(from: ctx.mode)
 
-        // Use context-aware prompt for Session Improve, generic for Selection.
-        let improveSystemPrompt: String
-        let contextTier: String?
-        if let sessionCtx = ctx.sessionContext {
-            improveSystemPrompt = ImprovementService.contextAwareSystemPrompt(context: sessionCtx)
-            contextTier = sessionCtx.contextTier
-        } else {
-            improveSystemPrompt = ImprovementService.systemPrompt
-            contextTier = nil
-        }
-
         do {
             let stream = try await ctx.aiProvider.streamChat(
                 messages: messages,
-                systemPrompt: improveSystemPrompt,
+                systemPrompt: ImprovementService.systemPrompt,
                 mode: mode,
-                contextTier: contextTier,
+                contextTier: nil,
                 explanationProfile: ctx.explanationProfile,
                 language: ctx.language
             )
@@ -723,6 +822,7 @@ final class ExplanationHUDViewModel {
         modeName = nil
         sessionFileName = nil
         explanationProfile = nil
+        executionContext = nil
         displayState = .error
         followUpContext = nil
         followUpAnswer = ""
@@ -734,6 +834,7 @@ final class ExplanationHUDViewModel {
 
     /// Dismiss the HUD and cancel any in-flight stream.
     func dismiss() {
+        cancelIntentIfNeeded()
         activeStreamTask?.cancel()
         followUpTask?.cancel()
         improvementTask?.cancel()
@@ -748,6 +849,7 @@ final class ExplanationHUDViewModel {
         modeName = nil
         sessionFileName = nil
         explanationProfile = nil
+        executionContext = nil
         followUpContext = nil
         followUpAnswer = ""
         followUpError = ""

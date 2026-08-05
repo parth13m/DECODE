@@ -38,6 +38,10 @@ final class SelectionModeCoordinator {
     /// means a newer request has arrived and the handler should exit early.
     private var requestGeneration: UInt64 = 0
 
+    /// Background vision extraction task, launched when the user starts typing
+    /// a custom question. Cancelled on default explanation, cancel, or new request.
+    private var pendingVisionTask: Task<VisualContext?, Never>?
+
     /// The currently executing request handler task. Cancelled when a newer
     /// event arrives so that `URLSession` tears down the in-flight HTTP
     /// request and the handler exits at the next suspension point.
@@ -114,6 +118,8 @@ final class SelectionModeCoordinator {
         listeningTask = nil
         activeRequestTask?.cancel()
         activeRequestTask = nil
+        pendingVisionTask?.cancel()
+        pendingVisionTask = nil
     }
 
     // MARK: - Selection Flow
@@ -214,53 +220,107 @@ final class SelectionModeCoordinator {
             return
         }
 
-        // 6. Enhanced Explanation: extract visual context if enabled.
-        let enhancedEnabled = UserDefaults.standard.bool(forKey: "enhancedExplanationEnabled")
-        var visualContext: VisualContext?
+        // 6. Capture screenshot for potential visual context (cheap, local only).
+        //    Always captured when the extractor is available — the user's interaction
+        //    with the intent bar (typing vs Enter/Space) determines whether the
+        //    Vision model is actually called.
+        let screenImage: CGImage?
         #if DEBUG
-        let tVisionPipelineStart = CFAbsoluteTimeGetCurrent()
         var latencySelectionMs = (tSelectionDone - tSelectionStart) * 1000
         var latencyScreenCaptureMs: Double = 0
         var latencyVisionApiMs: Double = 0
         #endif
-        if enhancedEnabled, let extractor = visualContextExtractor {
+        if visualContextExtractor != nil {
             #if DEBUG
             let tScreenCaptureStart = CFAbsoluteTimeGetCurrent()
             #endif
-            if let screenImage = await Self.captureScreenImage(forPID: sourceAppPID) {
-                #if DEBUG
-                latencyScreenCaptureMs = (CFAbsoluteTimeGetCurrent() - tScreenCaptureStart) * 1000
-                let tVisionApiStart = CFAbsoluteTimeGetCurrent()
-                #endif
-                visualContext = await extractor.extract(from: screenImage)
-                #if DEBUG
-                latencyVisionApiMs = (CFAbsoluteTimeGetCurrent() - tVisionApiStart) * 1000
-                if let vc = visualContext {
-                    EnhancedExplanationDebug.shared.lastVisualContext = vc
-                    EnhancedExplanationDebug.shared.lastTimestamp = Date()
-                    EnhancedExplanationDebug.shared.lastError = nil
-                } else {
-                    EnhancedExplanationDebug.shared.lastError = "Vision returned nil"
-                    EnhancedExplanationDebug.shared.lastTimestamp = Date()
-                }
-                #endif
-            } else {
-                #if DEBUG
-                latencyScreenCaptureMs = (CFAbsoluteTimeGetCurrent() - tScreenCaptureStart) * 1000
+            screenImage = await Self.captureScreenImage(forPID: sourceAppPID)
+            #if DEBUG
+            latencyScreenCaptureMs = (CFAbsoluteTimeGetCurrent() - tScreenCaptureStart) * 1000
+            if screenImage == nil {
                 EnhancedExplanationDebug.shared.lastError = "Screenshot capture failed for PID \(sourceAppPID)"
                 EnhancedExplanationDebug.shared.lastTimestamp = Date()
-                #endif
             }
-            // Staleness check after vision extraction await.
+            #endif
             guard generation == requestGeneration else { return }
+        } else {
+            screenImage = nil
         }
 
-        // 7. Build prompt and stream response.
+        // 7. Collect user intent. If the user starts typing a custom question,
+        //    launch vision extraction in the background so it runs in parallel
+        //    with their typing. Default explanations (Enter/Space) skip vision entirely.
+        let dsaMode = UserDefaults.standard.bool(forKey: "dsaModeEnabled")
+        let explanationProfile = dsaMode ? "dsa" : "general"
+        let executionContext = ExplanationExecutionContext(mode: "selection", explanationProfile: explanationProfile)
+
+        // Cancel any leftover vision task from a previous interaction.
+        pendingVisionTask?.cancel()
+        pendingVisionTask = nil
+
+        guard let intentText = await hud.collectIntent(
+            sourceApp: sourceAppName,
+            mode: "selection",
+            explanationProfile: explanationProfile,
+            onEditingStarted: { [weak self] in
+                guard let self else { return }
+                guard let image = screenImage, let extractor = self.visualContextExtractor else { return }
+                #if DEBUG
+                print("[EnhancedExplanation] user started typing — launching vision extraction in background")
+                #endif
+                self.pendingVisionTask = Task {
+                    await extractor.extract(from: image)
+                }
+            }
+        ) else {
+            // User cancelled — clean up vision task and screenshot.
+            pendingVisionTask?.cancel()
+            pendingVisionTask = nil
+            return
+        }
+        // Staleness check after intent collection await.
+        guard generation == requestGeneration else {
+            pendingVisionTask?.cancel()
+            pendingVisionTask = nil
+            return
+        }
+
+        // 8. Determine visual context based on intent type.
+        let trimmedIntent = intentText.trimmingCharacters(in: .whitespacesAndNewlines)
+        var visualContext: VisualContext?
+        if !trimmedIntent.isEmpty, let visionTask = pendingVisionTask {
+            // Custom question — await the background vision result.
+            #if DEBUG
+            let tVisionAwaitStart = CFAbsoluteTimeGetCurrent()
+            print("[EnhancedExplanation] custom question submitted — awaiting vision result")
+            #endif
+            visualContext = await visionTask.value
+            pendingVisionTask = nil
+            #if DEBUG
+            latencyVisionApiMs = (CFAbsoluteTimeGetCurrent() - tVisionAwaitStart) * 1000
+            if let vc = visualContext {
+                print("[EnhancedExplanation] vision complete (waited \(String(format: "%.0f", latencyVisionApiMs))ms after submit, \(vc.content.count) chars)")
+                EnhancedExplanationDebug.shared.lastVisualContext = vc
+                EnhancedExplanationDebug.shared.lastTimestamp = Date()
+                EnhancedExplanationDebug.shared.lastError = nil
+            } else {
+                print("[EnhancedExplanation] vision returned nil")
+                EnhancedExplanationDebug.shared.lastError = "Vision returned nil"
+                EnhancedExplanationDebug.shared.lastTimestamp = Date()
+            }
+            #endif
+            // Staleness check after vision await.
+            guard generation == requestGeneration else { return }
+        } else {
+            // Default explanation or no screenshot — skip vision entirely.
+            pendingVisionTask?.cancel()
+            pendingVisionTask = nil
+        }
+
+        // 9. Build prompt and stream response.
         #if DEBUG
         let tPromptStart = CFAbsoluteTimeGetCurrent()
         #endif
-        let dsaMode = UserDefaults.standard.bool(forKey: "dsaModeEnabled")
-        let explanationProfile = dsaMode ? "dsa" : "general"
         var systemPrompt = buildSystemPrompt(sourceApp: sourceAppName, codeContent: text, dsaMode: dsaMode)
         let detectedFramework = ExplanationFramework.detect(fromContent: text)
         systemPrompt += RepresentationGuidance.guidance(
@@ -273,26 +333,26 @@ final class SelectionModeCoordinator {
         if virtualSessionManager.isEnabled,
            let wmBlock = virtualSessionManager.workingMemoryBlock() {
             systemPrompt += "\n\n\(wmBlock)"
+            executionContext.virtualSession = true
         }
 
-        // Assemble user message with visual context evidence.
-        let userMessage: String
-        if let vc = visualContext, !vc.isEmpty {
-            userMessage = "[Visual Context]\n\(vc.formatted())\n[/Visual Context]\n\n\(text)"
-        } else {
-            userMessage = text
-        }
+        // Assemble user message — uses shared prompt composition.
+        let formattedVC = visualContext.flatMap { $0.isEmpty ? nil : $0.formatted() }
+        if formattedVC != nil { executionContext.vision = true }
+        let userMessage = ExplanationFramework.userMessage(
+            intent: intentText,
+            code: text,
+            visualContext: formattedVC
+        )
         let messages = [AIMessage(role: .user, content: userMessage)]
 
         #if DEBUG
         let tPromptDone = CFAbsoluteTimeGetCurrent()
         let latencyPromptMs = (tPromptDone - tPromptStart) * 1000
-        let latencyVisionPipelineMs = (tPromptDone - tVisionPipelineStart) * 1000
         #endif
 
-        // Show HUD immediately so the user sees loading state while
-        // the AI request is in flight.
-        hud.showLoading(sourceApp: sourceAppName, mode: "selection", explanationProfile: explanationProfile)
+        // Show HUD loading state while the AI request is in flight.
+        hud.showLoading(sourceApp: sourceAppName, mode: "selection", explanationProfile: explanationProfile, executionContext: executionContext)
 
         #if DEBUG
         let tExplainStart = CFAbsoluteTimeGetCurrent()
@@ -324,17 +384,18 @@ final class SelectionModeCoordinator {
 
             // ── LATENCY BUDGET ──
             print("[LATENCY] ═══════════════════════════════════════════")
-            print("[LATENCY]  ENHANCED EXPLANATION LATENCY BUDGET")
+            print("[LATENCY]  CONDITIONAL VISION LATENCY BUDGET")
             print("[LATENCY] ═══════════════════════════════════════════")
             print("[LATENCY]")
-            print("[LATENCY]  Selection capture:   \(String(format: "%6.0f", latencySelectionMs))ms")
-            print("[LATENCY]  Screen capture:      \(String(format: "%6.0f", latencyScreenCaptureMs))ms  (see breakdown above)")
-            print("[LATENCY]  Vision pipeline:     \(String(format: "%6.0f", latencyVisionApiMs))ms  (JPEG + API + sanitize)")
-            print("[LATENCY]  Prompt assembly:     \(String(format: "%6.0f", latencyPromptMs))ms")
-            print("[LATENCY]  Explain stream setup: \(String(format: "%6.0f", latencyExplainSetupMs))ms  (HTTP connect + first response)")
+            print("[LATENCY]  Selection capture:    \(String(format: "%6.0f", latencySelectionMs))ms")
+            print("[LATENCY]  Screen capture:       \(String(format: "%6.0f", latencyScreenCaptureMs))ms")
+            print("[LATENCY]  Vision (post-submit):  \(String(format: "%6.0f", latencyVisionApiMs))ms  (wait after Enter, 0=skipped/already done)")
+            print("[LATENCY]  Prompt assembly:      \(String(format: "%6.0f", latencyPromptMs))ms")
+            print("[LATENCY]  Explain stream setup: \(String(format: "%6.0f", latencyExplainSetupMs))ms")
             print("[LATENCY] ───────────────────────────────────────────")
             print("[LATENCY]  Total to first token: \(String(format: "%6.0f", totalMs))ms")
             print("[LATENCY]  Visual context:       \(visualContext != nil ? "YES" : "NO")")
+            print("[LATENCY]  Intent type:          \(trimmedIntent.isEmpty ? "default" : "custom")")
             print("[LATENCY] ═══════════════════════════════════════════")
             #endif
 
@@ -347,7 +408,6 @@ final class SelectionModeCoordinator {
                 originalCode: text,
                 explanationProfile: explanationProfile,
                 language: nil,
-                sessionContext: nil,
                 pipelineQueryService: nil,
                 pipelineConversationState: nil,
                 pipelineFilePath: nil,

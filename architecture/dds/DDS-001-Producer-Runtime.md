@@ -3,7 +3,7 @@
 ```
 Document:      DDS-001
 Title:         Producer Runtime
-Status:        Draft
+Status:        Frozen
 Version:       0.3
 Author:        Principal Engineer
 Reviewers:     —

@@ -3,7 +3,7 @@
 ```
 Document:      DDS-008
 Title:         Storage Engine Runtime
-Status:        Draft
+Status:        Frozen
 Version:       0.2
 Author:        Principal Engineer
 Reviewers:     —

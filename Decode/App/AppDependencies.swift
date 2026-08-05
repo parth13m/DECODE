@@ -457,7 +457,6 @@ final class AppDependencies {
                 )
             },
             usageTracker: tracker,
-            semanticEnrichment: enrichment,
             knowledgeArtifactStore: artifactStore,
             pipelineQueryService: pipelineQueryService,
             virtualSessionManager: virtualSessionManager

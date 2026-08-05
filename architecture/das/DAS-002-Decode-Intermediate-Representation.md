@@ -3,7 +3,7 @@
 ```
 Chapter:       DAS-002
 Title:         Decode Intermediate Representation (DIR)
-Status:        Draft
+Status:        Frozen
 Version:       1.0
 Author:        Principal Architect
 Reviewers:     —

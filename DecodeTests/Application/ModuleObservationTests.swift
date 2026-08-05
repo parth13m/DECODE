@@ -136,7 +136,7 @@ private func makeProviderModuleUnits(
     cohesionRatio: Double = 0.85,
     cohesionInternal: Int = 45,
     cohesionExternal: Int = 8,
-    publicEntities: String = "SessionResolver, ContextBuilderService",
+    publicEntities: String = "SessionResolver, WorkspaceResolver",
     publicCount: Int = 2,
     interactionCalls: Int = 30,
     interactionConformsTo: Int = 5,
@@ -375,7 +375,7 @@ struct M6SuppressionRuleTests {
             makeUnit(id: 1, entityName: "InternalHelper", predicateName: "kind", value: .string("class")),
         ]
         let moduleUnits = makeProviderModuleUnits(
-            publicEntities: "SessionResolver, ContextBuilderService",
+            publicEntities: "SessionResolver, WorkspaceResolver",
             publicCount: 2
         )
         let allUnits = (codeUnits + moduleUnits).map { contextUnit(from: $0) }

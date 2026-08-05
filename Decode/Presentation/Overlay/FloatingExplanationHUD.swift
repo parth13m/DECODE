@@ -20,8 +20,9 @@ final class FloatingExplanationHUD {
 
     private static let panelWidth: CGFloat = 500
     private static let panelHeight: CGFloat = 200
+    private static let intentPanelHeight: CGFloat = 90
     private static let panelMinWidth: CGFloat = 350
-    private static let panelMinHeight: CGFloat = 150
+    private static let panelMinHeight: CGFloat = 80
     private static let panelMaxWidth: CGFloat = 1200
     private static let panelMaxHeight: CGFloat = 1200
     private static let cornerRadius: CGFloat = 12
@@ -30,6 +31,8 @@ final class FloatingExplanationHUD {
 
     let viewModel = ExplanationHUDViewModel()
     private var panel: NSPanel?
+    private var localKeyMonitor: Any?
+    private var globalKeyMonitor: Any?
 
     // MARK: - Public Interface
 
@@ -47,6 +50,7 @@ final class FloatingExplanationHUD {
         print("[DEBUG HUD] showStream called, sourceApp=\(sourceApp ?? "nil")")
         #endif
         viewModel.showStream(stream, sourceApp: sourceApp, followUpContext: followUpContext, onComplete: onComplete)
+        panel?.setContentSize(NSSize(width: Self.panelWidth, height: Self.panelHeight))
         ensurePanelVisible()
     }
 
@@ -55,11 +59,12 @@ final class FloatingExplanationHUD {
     /// Call this before `await provider.streamChat()` so the user sees immediate
     /// feedback. When the stream is ready, call ``showStream(_:sourceApp:followUpContext:)``
     /// which transitions from loading to streaming.
-    func showLoading(sourceApp: String?, mode: String? = nil, sessionFile: String? = nil, explanationProfile: String? = nil) {
+    func showLoading(sourceApp: String?, mode: String? = nil, sessionFile: String? = nil, explanationProfile: String? = nil, executionContext: ExplanationExecutionContext? = nil) {
         #if DEBUG
         print("[DEBUG HUD] showLoading called, sourceApp=\(sourceApp ?? "nil"), mode=\(mode ?? "nil")")
         #endif
-        viewModel.showLoading(sourceApp: sourceApp, mode: mode, sessionFile: sessionFile, explanationProfile: explanationProfile)
+        viewModel.showLoading(sourceApp: sourceApp, mode: mode, sessionFile: sessionFile, explanationProfile: explanationProfile, executionContext: executionContext)
+        panel?.setContentSize(NSSize(width: Self.panelWidth, height: Self.panelHeight))
         ensurePanelVisible()
     }
 
@@ -69,11 +74,60 @@ final class FloatingExplanationHUD {
         print("[DEBUG HUD] showError called — \(message)")
         #endif
         viewModel.showError(message)
+        panel?.setContentSize(NSSize(width: Self.panelWidth, height: Self.panelHeight))
         ensurePanelVisible()
+    }
+
+    /// Show the HUD in intent collection state and wait for the user's input.
+    ///
+    /// Returns the user's text (empty = default explanation, non-empty = custom request),
+    /// or `nil` if the user cancelled (Escape or close button).
+    ///
+    /// - Parameter onEditingStarted: One-shot callback fired when the user types the
+    ///   first printable character (transitions from idle to editing). Coordinators use
+    ///   this to start background work (e.g., vision extraction) only when a custom
+    ///   question is being typed. Not called for Enter/Space/Escape.
+    func collectIntent(
+        sourceApp: String?,
+        mode: String? = nil,
+        sessionFile: String? = nil,
+        explanationProfile: String? = nil,
+        onEditingStarted: (@MainActor () -> Void)? = nil
+    ) async -> String? {
+        // Step 1: Set state synchronously so SwiftUI renders the intent input.
+        viewModel.prepareIntentCollection(
+            sourceApp: sourceApp,
+            mode: mode,
+            sessionFile: sessionFile,
+            explanationProfile: explanationProfile
+        )
+        viewModel.onEditingStarted = onEditingStarted
+        // Step 2: Show the panel at compact intent size.
+        ensurePanelVisible()
+        panel?.setContentSize(NSSize(width: Self.panelWidth, height: Self.intentPanelHeight))
+        positionPanel(panel!)
+        // Step 3: Make the panel key so keyboard events route here.
+        panel?.makeKey()
+        // Step 4: Install key event monitors so keyboard events work
+        // immediately without requiring the user to click the panel.
+        // A local monitor handles events when the app is active. A global
+        // monitor handles events when another app is active (non-activating
+        // panel scenario). Together they cover both cases.
+        installIntentKeyMonitor()
+        // Step 5: Suspend until the user submits or cancels.
+        let result = await viewModel.awaitIntentSubmission()
+        // Clean up the monitor.
+        removeIntentKeyMonitor()
+        // If cancelled, hide the panel.
+        if result == nil {
+            panel?.orderOut(nil)
+        }
+        return result
     }
 
     /// Dismiss the HUD and cancel any in-flight stream.
     func dismiss() {
+        removeIntentKeyMonitor()
         viewModel.dismiss()
         panel?.orderOut(nil)
     }
@@ -136,6 +190,17 @@ final class FloatingExplanationHUD {
         // intrinsic size, which is tiny in loading/idle state.
         panel.setContentSize(NSSize(width: Self.panelWidth, height: Self.panelHeight))
 
+        // Reposition traffic lights downward for tighter grouping with content.
+        // The default position sits them high in the titlebar, creating visual
+        // disconnection from the floating intent bar.
+        if let closeButton = panel.standardWindowButton(.closeButton),
+           let titlebarContainer = closeButton.superview {
+            var containerFrame = titlebarContainer.frame
+            containerFrame.origin.y -= 6
+            containerFrame.origin.x += 4
+            titlebarContainer.frame = containerFrame
+        }
+
         // Handle close button as dismiss
         panel.delegate = panelDelegate
         panelDelegate.onClose = { [weak self] in
@@ -163,6 +228,102 @@ final class FloatingExplanationHUD {
         let y = screenFrame.midY + (screenFrame.height * 0.1)
 
         panel.setFrameOrigin(NSPoint(x: x, y: y))
+    }
+
+    // MARK: - Intent Key Event Monitor
+
+    /// Install event monitors that intercept keyDown events during intent
+    /// collection. Two monitors cover both scenarios:
+    ///
+    /// - **Local monitor**: fires when Decode is the active application.
+    ///   Can consume events (return nil) to prevent them reaching other views.
+    /// - **Global monitor**: fires when another application is active
+    ///   (the common case with `.nonactivatingPanel`). Cannot consume events
+    ///   but can trigger ViewModel actions. Key presses may also reach the
+    ///   underlying app, which is acceptable — the intent bar dismisses
+    ///   immediately so the user never notices a stray keystroke.
+    private func installIntentKeyMonitor() {
+        removeIntentKeyMonitor()
+
+        localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self else { return event }
+            return self.handleIntentKeyEvent(event, canConsume: true)
+        }
+
+        globalKeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self else { return }
+            _ = self.handleIntentKeyEvent(event, canConsume: false)
+        }
+    }
+
+    /// Handle a key event during intent collection.
+    /// Returns `nil` to consume the event (local monitor only), or the event to pass through.
+    private func handleIntentKeyEvent(_ event: NSEvent, canConsume: Bool) -> NSEvent? {
+        guard viewModel.displayState == .collectingIntent else {
+            return event
+        }
+
+        // In editing state, let the TextField handle events normally —
+        // except Escape, which we always intercept to cancel.
+        if viewModel.isEditingIntent {
+            if event.keyCode == 53 { // Escape
+                viewModel.cancelIntent()
+                dismiss()
+                return canConsume ? nil : event
+            }
+            // Let the TextField process all other keys.
+            return event
+        }
+
+        // STATE 1: Idle — intercept all relevant keys.
+        switch event.keyCode {
+        case 36, 76: // Return, Enter (numpad)
+            viewModel.submitIntent()
+            return canConsume ? nil : event
+        case 49: // Space
+            viewModel.submitIntent()
+            return canConsume ? nil : event
+        case 53: // Escape
+            viewModel.cancelIntent()
+            dismiss()
+            return canConsume ? nil : event
+        default:
+            // Printable character → transition to editing.
+            if let chars = event.characters, !chars.isEmpty {
+                let c = chars.first!
+                if !c.isNewline && !c.isWhitespace && (c.isLetter || c.isNumber || c.isPunctuation || c.isSymbol) {
+                    // Transition to editing with empty text. The TextField
+                    // will appear and gain focus with nothing to select.
+                    viewModel.transitionToEditing()
+                    panel?.makeKey()
+
+                    // Re-post the original key event so the TextField
+                    // receives it through the normal responder chain.
+                    // This produces native text insertion — the character
+                    // is typed into the field, cursor ends up after it,
+                    // nothing is selected. The re-posted event will pass
+                    // through the monitor's editing-state path (which
+                    // returns the event for TextField processing).
+                    DispatchQueue.main.async {
+                        NSApp.postEvent(event, atStart: true)
+                    }
+                    return canConsume ? nil : event
+                }
+            }
+            return event
+        }
+    }
+
+    /// Remove event monitors.
+    private func removeIntentKeyMonitor() {
+        if let monitor = localKeyMonitor {
+            NSEvent.removeMonitor(monitor)
+            localKeyMonitor = nil
+        }
+        if let monitor = globalKeyMonitor {
+            NSEvent.removeMonitor(monitor)
+            globalKeyMonitor = nil
+        }
     }
 
     // MARK: - Panel Delegate
@@ -204,6 +365,8 @@ private struct HUDContentView: View {
     @Bindable var viewModel: ExplanationHUDViewModel
     var onDismiss: () -> Void
 
+    @FocusState private var isTextFieldFocused: Bool
+
     init(viewModel: ExplanationHUDViewModel, onDismiss: @escaping () -> Void) {
         self.viewModel = viewModel
         self.onDismiss = onDismiss
@@ -213,20 +376,27 @@ private struct HUDContentView: View {
     private let accentOrange = Color(red: 0.91, green: 0.47, blue: 0.18)
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            headerView
-            Divider()
-                .overlay(Color(red: 0.91, green: 0.90, blue: 0.88))
+        if viewModel.displayState == .collectingIntent {
+            // Intent state: transparent panel, only the floating bar is visible.
             contentArea
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            // All other states: standard HUD chrome.
+            VStack(alignment: .leading, spacing: 10) {
+                headerView
+                Divider()
+                    .overlay(Color(red: 0.91, green: 0.90, blue: 0.88))
+                contentArea
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(red: 0.99, green: 0.98, blue: 0.97))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color.black.opacity(0.06), lineWidth: 0.5)
+            )
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(red: 0.99, green: 0.98, blue: 0.97))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color(red: 0.91, green: 0.90, blue: 0.88), lineWidth: 0.1)
-        )
     }
 
     // MARK: - Header
@@ -254,8 +424,18 @@ private struct HUDContentView: View {
                     .foregroundStyle(.primary)
             }
 
-            // Mode badge
-            if let mode = viewModel.modeName {
+            // Execution context badge
+            if let ctx = viewModel.executionContext {
+                Text(ctx.displayText)
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(accentOrange)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(
+                        Capsule()
+                            .fill(accentOrange.opacity(0.12))
+                    )
+            } else if let mode = viewModel.modeName {
                 Text(Self.modeDisplayName(mode, profile: viewModel.explanationProfile))
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(accentOrange)
@@ -313,6 +493,9 @@ private struct HUDContentView: View {
         switch viewModel.displayState {
         case .idle:
             EmptyView()
+
+        case .collectingIntent:
+            intentInputView
 
         case .loading:
             HStack(spacing: 10) {
@@ -496,6 +679,151 @@ private struct HUDContentView: View {
             }
             .buttonStyle(.plain)
             .padding(.top, 2)
+        }
+    }
+
+    // MARK: - Intent Input
+
+    /// Decode warm white for the floating bar surface.
+    private static let barSurface = Color(red: 0.99, green: 0.98, blue: 0.97)
+
+    @ViewBuilder
+    private var intentInputView: some View {
+        if viewModel.isEditingIntent {
+            intentEditingView
+        } else {
+            intentIdleView
+        }
+    }
+
+    /// State 1: Container is focusable and owns all key events.
+    /// Enter/Space → default explanation. Any printable character → State 2.
+    /// Top padding to position the capsule bar below the traffic lights
+    /// with a comfortable, intentional gap. The titlebar is ~28pt; this
+    /// value places the bar so the two feel visually grouped.
+    private static let intentTopPadding: CGFloat = 5
+
+    private var intentIdleView: some View {
+        VStack(spacing: 6) {
+            // Floating capsule bar
+            HStack(spacing: 10) {
+                Image(systemName: "sparkle")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(accentOrange.opacity(0.7))
+
+                Text("Help me understand this code…")
+                    .font(.system(size: 15))
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+            }
+            .padding(.leading, 18)
+            .padding(.trailing, 20)
+            .padding(.vertical, 13)
+            .background(
+                Capsule()
+                    .fill(Self.barSurface)
+            )
+            .overlay(
+                Capsule()
+                    .stroke(Color.black.opacity(0.06), lineWidth: 0.5)
+            )
+            .shadow(color: .black.opacity(0.03), radius: 1, y: 1)
+            .shadow(color: .black.opacity(0.06), radius: 8, y: 3)
+            .shadow(color: .black.opacity(0.04), radius: 20, y: 8)
+
+            // Hints — quiet, below the bar
+            Text("enter · explain    space · explain    type · ask    esc · cancel")
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundStyle(.tertiary)
+                .opacity(0.7)
+        }
+        .padding(.top, Self.intentTopPadding)
+        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .focusable()
+        .focusEffectDisabled()
+        .onKeyPress(.return) {
+            viewModel.submitIntent()
+            return .handled
+        }
+        .onKeyPress(.space) {
+            viewModel.submitIntent()
+            return .handled
+        }
+        .onKeyPress(.escape) {
+            viewModel.cancelIntent()
+            onDismiss()
+            return .handled
+        }
+        .onKeyPress(characters: .alphanumerics
+            .union(.punctuationCharacters)
+            .union(.symbols),
+                     phases: .down
+        ) { keyPress in
+            let char = keyPress.characters
+            guard !char.isEmpty else { return .ignored }
+            viewModel.beginEditing(with: char)
+            return .handled
+        }
+    }
+
+    /// State 2: TextField is focused and owns all keyboard input.
+    /// Space inserts spaces. Enter submits the custom request.
+    private var intentEditingView: some View {
+        VStack(spacing: 6) {
+            // Floating capsule bar — editing state
+            HStack(spacing: 10) {
+                Image(systemName: "sparkle")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(accentOrange)
+
+                TextField("", text: $viewModel.intentText)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 15))
+                    .focused($isTextFieldFocused)
+                    .onSubmit {
+                        viewModel.submitIntent()
+                    }
+
+                Spacer(minLength: 0)
+            }
+            .padding(.leading, 18)
+            .padding(.trailing, 20)
+            .padding(.vertical, 13)
+            .background(
+                Capsule()
+                    .fill(Self.barSurface)
+            )
+            .overlay(
+                Capsule()
+                    .stroke(accentOrange.opacity(0.2), lineWidth: 0.5)
+            )
+            .shadow(color: .black.opacity(0.03), radius: 1, y: 1)
+            .shadow(color: .black.opacity(0.06), radius: 8, y: 3)
+            .shadow(color: .black.opacity(0.04), radius: 20, y: 8)
+
+            // Hints — editing state
+            Text("enter · submit    esc · cancel")
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundStyle(.tertiary)
+                .opacity(0.7)
+        }
+        .padding(.top, Self.intentTopPadding)
+        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .onKeyPress(.escape) {
+            viewModel.cancelIntent()
+            onDismiss()
+            return .handled
+        }
+        .onAppear {
+            isTextFieldFocused = true
+        }
+        .onChange(of: viewModel.isEditingIntent) { _, editing in
+            if editing {
+                isTextFieldFocused = true
+            }
         }
     }
 }

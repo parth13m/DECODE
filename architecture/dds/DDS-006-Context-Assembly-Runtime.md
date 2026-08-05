@@ -3,7 +3,7 @@
 ```
 Document:      DDS-006
 Title:         Context Assembly Runtime
-Status:        Draft
+Status:        Frozen
 Version:       0.2
 Author:        Principal Engineer
 Created:       2026-06-28

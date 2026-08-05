@@ -14,11 +14,11 @@ Do not reconstruct implementation history from git or conversation logs. Read th
 |-------|--------|
 | DAS (DAS-000 through DAS-012) | Frozen |
 | DDS (DDS-000 through DDS-009) | Frozen |
-| IAG (IAG-001 through IAG-004) | Frozen |
+| IAG (IAG-001 through IAG-004) | Archived |
 
-Architecture changes require an RFC per IAG-004 §21.
+Architecture changes require an RFC per `architecture/README.md` § Architectural Modification Process.
 
-The **Session Mode epic is closed.** All 18 specification-defined capabilities are implemented and tested. Session Mode implementation is tracked in `SESSION_MODE_IMPLEMENTATION_STATUS.md` (read-only reference).
+The **Session Mode epic is closed.** All 18 specification-defined capabilities are implemented and tested.
 
 Project Intelligence is a **consumer** of the completed Software Intelligence Platform. It does not modify the platform. All Project Intelligence code lives in the application layer (`Decode/Application/` or `Decode/App/`), not in pipeline modules (`Decode/Understanding/`). It registers into the pipeline at startup via `AppDependencies.performDeferredStartup()`, following the precedent of SwiftSyntaxFrontend, TreeSitterFrontend, ExplainReasoningEngine, ImproveReasoningEngine, FollowUpReasoningEngine, and ContextStrategies.
 
@@ -83,7 +83,7 @@ Pipeline-first execution for Session Explain, Follow-Up, and Improve with automa
 
 ### Production Hardening (Closed)
 
-Comprehensive unit tests for SessionResolver, ContextBuilderService, SnippetHealthClassifier, ExplanationTagParser. MockAIProvider conformance fix.
+Comprehensive unit tests for SessionResolver, ExplanationTagParser. MockAIProvider conformance fix. ContextBuilderService and SnippetHealthClassifier tests removed with the legacy Session Mode architecture.
 
 ### Containment Migration (Closed)
 
@@ -345,6 +345,22 @@ File → Entity containment (`contains` predicate) migrated from CrossFileResolu
 
 ---
 
+## Completed Cross-Cutting: Screenshot Mode Investigation
+
+**Status:** Researched, validated, and closed (2026-08-02).
+
+**What was completed:**
+- Enhanced Explanation visual context pipeline for Selection Mode (production-ready).
+- Vision prompt redesigned through three iterations to optimize for downstream explanation quality.
+- Multiple real-world benchmarks of Screenshot Mode explanation improvement.
+- Product validation concluded that Screenshot Mode does not currently provide sufficient explanation improvement to justify its latency and complexity.
+
+**Decision:** Screenshot Mode will not proceed further. The feature is considered researched and validated. No additional implementation work is planned unless a future product direction introduces fundamentally different use cases (e.g., debugger state capture, compiler diagnostics, runtime UI inspection).
+
+**CRL-001 Architecture Spec:** Abandoned. Created during the screenshot investigation; no longer part of the active roadmap. Document deleted from repository.
+
+---
+
 ## Current Immediate Task
 
 ### Milestone 12: Project Intelligence Validation
@@ -440,9 +456,9 @@ These decisions are load-bearing. Future work must preserve them.
 
 6. **M4 is the convergence point.** It requires both M1 (resolved cross-file relationships) and M2+M3 (module entities with containment). M4 cannot begin until M1 is complete.
 
-7. **Architecture documents are frozen.** DAS-000–012, DDS-000–009, IAG-001–004. Changes require an RFC per IAG-004 §21.3.
+7. **Architecture documents are frozen.** DAS-000–012, DDS-000–009. Changes require an RFC per `architecture/README.md`.
 
-8. **No downstream compensation for upstream defects.** Fix defects at the earliest phase that introduced them (IAG-004 §20).
+8. **No downstream compensation for upstream defects.** Fix defects at the earliest phase that introduced them.
 
 9. **Project Intelligence code primarily lives in the application layer.** `Decode/Application/` or `Decode/App/`. No new framework targets. Two exceptions: `RetrievalRuntime.gatherScopeEvidence()` received additive extensions — M5 added module-scope evidence when `plan.scope >= .module`, M10 added system-scope evidence when `plan.scope >= .system`. These are necessary because evidence gathering is a retrieval-layer responsibility (DDS-005). Both extensions are additive — existing `.local` and `.module` behavior is unchanged.
 
@@ -670,8 +686,7 @@ Every future Claude Code session implementing Project Intelligence should follow
 1. **Read `CLAUDE.md`** — project rules, engineering principles, constraints.
 2. **Read `PROJECT_INTELLIGENCE_IMPLEMENTATION_STATUS.md`** (this file) — current state, next task, decisions to preserve.
 3. **Read `docs/PROJECT_INTELLIGENCE_TECHNICAL_SPECIFICATION.md`** — capability specification, only the sections relevant to the current milestone.
-4. **Do NOT read `SESSION_MODE_IMPLEMENTATION_STATUS.md`** unless debugging a Session Mode issue. That epic is closed.
-5. **Inspect affected repository files** — the modules being consumed and the code being added.
+4. **Inspect affected repository files** — the modules being consumed and the code being added.
 6. **Implement** — production-quality code, strict concurrency, no stubs.
 7. **Verify** — build clean, all tests pass (new and existing), zero regressions.
 8. **Update this status document** — mark milestone complete, update phase, advance the immediate task, record any new decisions or issues.

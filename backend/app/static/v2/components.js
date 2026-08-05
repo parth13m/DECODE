@@ -857,3 +857,346 @@ D.progressBar = function (value, max, opts = {}) {
       ${label ? `<span class="d-progress-label">${label}</span>` : ''}
     </div>`;
 };
+
+
+/* ══════════════════════════════════════════════════════════
+   DONUT CHART (Canvas)
+   ══════════════════════════════════════════════════════════ */
+
+D.renderDonutChart = function (canvasId, segments, opts = {}) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas || !segments || !segments.length) return;
+
+  const parent = canvas.parentElement;
+  const size = Math.min(parent.offsetWidth || 240, opts.height || 240);
+  const dpr = window.devicePixelRatio || 1;
+
+  canvas.width = size * dpr;
+  canvas.height = size * dpr;
+  canvas.style.width = size + 'px';
+  canvas.style.height = size + 'px';
+
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  const cx = size / 2;
+  const cy = size / 2;
+  const outerR = size / 2 - 8;
+  const innerR = outerR * 0.62;
+  const total = segments.reduce((s, seg) => s + (seg.value || 0), 0);
+  if (total === 0) return;
+
+  let startAngle = -Math.PI / 2;
+  segments.forEach(seg => {
+    const sweep = (seg.value / total) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.arc(cx, cy, outerR, startAngle, startAngle + sweep);
+    ctx.arc(cx, cy, innerR, startAngle + sweep, startAngle, true);
+    ctx.closePath();
+    ctx.fillStyle = seg.color || '#e87830';
+    ctx.fill();
+    startAngle += sweep;
+  });
+
+  // Center text
+  if (opts.centerLabel) {
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    ctx.font = 'bold 22px Inter, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(opts.centerLabel, cx, cy - 6);
+    if (opts.centerSub) {
+      ctx.fillStyle = 'rgba(255,255,255,0.4)';
+      ctx.font = '11px Inter, sans-serif';
+      ctx.fillText(opts.centerSub, cx, cy + 14);
+    }
+  }
+};
+
+/** HTML legend for donut charts */
+D.donutLegend = function (segments, total) {
+  return `<div class="d-donut-legend">${segments.map(s => {
+    const pct = total > 0 ? ((s.value / total) * 100).toFixed(1) : 0;
+    return `<div class="d-donut-legend-item">
+      <span class="d-donut-legend-dot" style="background:${s.color}"></span>
+      <span class="d-donut-legend-label">${D.fmt.escapeHtml(s.label)}</span>
+      <span class="d-donut-legend-value">${D.fmt.num(s.value)}</span>
+      <span class="d-donut-legend-pct">${pct}%</span>
+    </div>`;
+  }).join('')}</div>`;
+};
+
+
+/* ══════════════════════════════════════════════════════════
+   HORIZONTAL BAR CHART (CSS-based)
+   ══════════════════════════════════════════════════════════ */
+
+D.horizontalBars = function (items, opts = {}) {
+  if (!items || !items.length) return D.empty(null, 'No data');
+  const max = Math.max(...items.map(i => i.value), 1);
+  const valueFormat = opts.valueFormat || (v => D.fmt.num(v));
+  return `<div class="d-hbar-list">${items.map(item => {
+    const pct = (item.value / max) * 100;
+    const color = item.color || 'var(--d-brand)';
+    return `<div class="d-hbar-item">
+      <div class="d-hbar-label">${D.fmt.escapeHtml(item.label)}</div>
+      <div class="d-hbar-track">
+        <div class="d-hbar-fill" style="width:${pct}%;background:${color}"></div>
+      </div>
+      <div class="d-hbar-value">${valueFormat(item.value)}</div>
+    </div>`;
+  }).join('')}</div>`;
+};
+
+
+/* ══════════════════════════════════════════════════════════
+   STACKED AREA CHART (Canvas)
+   ══════════════════════════════════════════════════════════ */
+
+D.renderStackedAreaChart = function (canvasId, series, opts = {}) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas || !series || !series.length) return;
+
+  const parent = canvas.parentElement;
+  const w = parent.offsetWidth || 600;
+  const h = opts.height || 200;
+  const dpr = window.devicePixelRatio || 1;
+
+  canvas.width = w * dpr;
+  canvas.height = h * dpr;
+  canvas.style.width = w + 'px';
+  canvas.style.height = h + 'px';
+
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  const labels = opts.labels || [];
+  const padLeft = 48, padRight = 16, padTop = 16, padBottom = 28;
+  const chartW = w - padLeft - padRight;
+  const chartH = h - padTop - padBottom;
+
+  const len = series[0]?.data?.length || 0;
+  if (len === 0) return;
+
+  // Compute stacked totals per point
+  const stacked = Array(len).fill(0);
+  series.forEach(s => s.data.forEach((v, i) => stacked[i] += v));
+  const max = Math.max(...stacked, 1);
+  const step = chartW / (len - 1 || 1);
+
+  function xPos(i) { return padLeft + i * step; }
+  function yPos(v) { return padTop + chartH - (v / max) * chartH; }
+
+  // Grid
+  ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = padTop + (chartH / 4) * i;
+    ctx.beginPath(); ctx.moveTo(padLeft, y); ctx.lineTo(w - padRight, y); ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    ctx.font = '10px Inter, sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(D.fmt.num(Math.round(max - (max / 4) * i)), padLeft - 8, y + 3);
+  }
+
+  // X labels
+  ctx.fillStyle = 'rgba(255,255,255,0.3)';
+  ctx.textAlign = 'center';
+  const labelStep = Math.max(1, Math.floor(len / 6));
+  labels.forEach((l, i) => {
+    if (i % labelStep === 0 || i === len - 1) ctx.fillText(l, xPos(i), h - 6);
+  });
+
+  // Draw stacked areas bottom to top
+  const cumulative = Array(len).fill(0);
+  series.forEach(s => {
+    const prev = [...cumulative];
+    s.data.forEach((v, i) => cumulative[i] += v);
+
+    ctx.beginPath();
+    for (let i = 0; i < len; i++) {
+      const x = xPos(i), y = yPos(cumulative[i]);
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    }
+    for (let i = len - 1; i >= 0; i--) {
+      ctx.lineTo(xPos(i), yPos(prev[i]));
+    }
+    ctx.closePath();
+    const rgb = hexToRgb(s.color || '#e87830');
+    ctx.fillStyle = `rgba(${rgb},0.35)`;
+    ctx.fill();
+
+    // Top line
+    ctx.beginPath();
+    for (let i = 0; i < len; i++) {
+      const x = xPos(i), y = yPos(cumulative[i]);
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = s.color || '#e87830';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  });
+};
+
+
+/* ══════════════════════════════════════════════════════════
+   HEATMAP (Canvas — e.g. hour × day-of-week)
+   ══════════════════════════════════════════════════════════ */
+
+D.renderHeatmap = function (canvasId, grid, opts = {}) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas || !grid || !grid.length) return;
+
+  const parent = canvas.parentElement;
+  const w = parent.offsetWidth || 600;
+  const h = opts.height || 180;
+  const dpr = window.devicePixelRatio || 1;
+
+  canvas.width = w * dpr;
+  canvas.height = h * dpr;
+  canvas.style.width = w + 'px';
+  canvas.style.height = h + 'px';
+
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  const rows = grid.length;
+  const cols = grid[0]?.length || 0;
+  if (cols === 0) return;
+
+  const rowLabels = opts.rowLabels || [];
+  const colLabels = opts.colLabels || [];
+  const padLeft = 40, padTop = 20, padRight = 8, padBottom = 8;
+  const cellW = (w - padLeft - padRight) / cols;
+  const cellH = (h - padTop - padBottom) / rows;
+  const gap = 2;
+
+  const flat = grid.flat();
+  const max = Math.max(...flat, 1);
+  const color = opts.color || '#e87830';
+  const rgb = hexToRgb(color);
+
+  // Row labels
+  ctx.fillStyle = 'rgba(255,255,255,0.3)';
+  ctx.font = '10px Inter, sans-serif';
+  ctx.textAlign = 'right';
+  rowLabels.forEach((l, i) => {
+    ctx.fillText(l, padLeft - 6, padTop + i * cellH + cellH / 2 + 3);
+  });
+
+  // Col labels
+  ctx.textAlign = 'center';
+  colLabels.forEach((l, i) => {
+    if (i % Math.max(1, Math.floor(cols / 12)) === 0) {
+      ctx.fillText(l, padLeft + i * cellW + cellW / 2, padTop - 6);
+    }
+  });
+
+  // Cells
+  grid.forEach((row, ri) => {
+    row.forEach((val, ci) => {
+      const intensity = max > 0 ? val / max : 0;
+      ctx.fillStyle = `rgba(${rgb},${0.05 + intensity * 0.8})`;
+      ctx.beginPath();
+      ctx.roundRect(
+        padLeft + ci * cellW + gap / 2,
+        padTop + ri * cellH + gap / 2,
+        cellW - gap, cellH - gap, 3
+      );
+      ctx.fill();
+    });
+  });
+};
+
+
+/* ══════════════════════════════════════════════════════════
+   MULTI-LINE CHART (Canvas)
+   ══════════════════════════════════════════════════════════ */
+
+D.renderMultiLineChart = function (canvasId, series, opts = {}) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas || !series || !series.length) return;
+
+  const parent = canvas.parentElement;
+  const w = parent.offsetWidth || 600;
+  const h = opts.height || 200;
+  const dpr = window.devicePixelRatio || 1;
+
+  canvas.width = w * dpr;
+  canvas.height = h * dpr;
+  canvas.style.width = w + 'px';
+  canvas.style.height = h + 'px';
+
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  const labels = opts.labels || [];
+  const yFormat = opts.yFormat || (v => v);
+  const padLeft = 48, padRight = 16, padTop = 16, padBottom = 28;
+  const chartW = w - padLeft - padRight;
+  const chartH = h - padTop - padBottom;
+
+  const allVals = series.flatMap(s => s.data);
+  const max = Math.max(...allVals, 1);
+  const min = opts.min != null ? opts.min : 0;
+  const range = max - min || 1;
+  const len = series[0]?.data?.length || 0;
+  if (len === 0) return;
+  const step = chartW / (len - 1 || 1);
+
+  function xPos(i) { return padLeft + i * step; }
+  function yPos(v) { return padTop + chartH - ((v - min) / range) * chartH; }
+
+  // Grid
+  ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = padTop + (chartH / 4) * i;
+    ctx.beginPath(); ctx.moveTo(padLeft, y); ctx.lineTo(w - padRight, y); ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    ctx.font = '10px Inter, sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(yFormat(max - (range / 4) * i), padLeft - 8, y + 3);
+  }
+
+  // X labels
+  ctx.fillStyle = 'rgba(255,255,255,0.3)';
+  ctx.textAlign = 'center';
+  const labelStep = Math.max(1, Math.floor(len / 6));
+  labels.forEach((l, i) => {
+    if (i % labelStep === 0 || i === len - 1) ctx.fillText(l, xPos(i), h - 6);
+  });
+
+  // Lines
+  series.forEach(s => {
+    ctx.beginPath();
+    s.data.forEach((v, i) => {
+      i === 0 ? ctx.moveTo(xPos(i), yPos(v)) : ctx.lineTo(xPos(i), yPos(v));
+    });
+    ctx.strokeStyle = s.color || '#e87830';
+    ctx.lineWidth = 2;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.stroke();
+  });
+};
+
+/** Inline legend for multi-series charts */
+D.chartLegend = function (items) {
+  return `<div class="d-chart-legend">${items.map(i =>
+    `<span class="d-chart-legend-item"><span class="d-chart-legend-dot" style="background:${i.color}"></span>${D.fmt.escapeHtml(i.label)}</span>`
+  ).join('')}</div>`;
+};
+
+
+/* ══════════════════════════════════════════════════════════
+   STAT CARD (compact inline stat)
+   ══════════════════════════════════════════════════════════ */
+
+D.statRow = function (items) {
+  return `<div class="d-stat-row">${items.map(i => `
+    <div class="d-stat-item">
+      <div class="d-stat-value" style="${i.color ? 'color:' + i.color : ''}">${i.value}</div>
+      <div class="d-stat-label">${D.fmt.escapeHtml(i.label)}</div>
+    </div>`).join('')}</div>`;
+};

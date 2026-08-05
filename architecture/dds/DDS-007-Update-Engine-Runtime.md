@@ -3,7 +3,7 @@
 ```
 Document:      DDS-007
 Title:         Update Engine Runtime
-Status:        Draft
+Status:        Frozen
 Version:       0.2
 Author:        Principal Engineer
 Reviewers:     —

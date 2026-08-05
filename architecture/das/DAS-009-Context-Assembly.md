@@ -3,7 +3,7 @@
 ```
 Chapter:       DAS-009
 Title:         Context Assembly
-Status:        Draft
+Status:        Frozen
 Version:       1.0
 Author:        Principal Architect
 Reviewers:     —

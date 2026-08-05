@@ -3,7 +3,7 @@
 ```
 Chapter:       DAS-005
 Title:         Relationship Model
-Status:        Draft
+Status:        Frozen
 Version:       2.0
 Author:        Principal Architect
 Reviewers:     —

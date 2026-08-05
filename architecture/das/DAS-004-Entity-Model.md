@@ -3,7 +3,7 @@
 ```
 Chapter:       DAS-004
 Title:         Entity Model
-Status:        Draft
+Status:        Frozen
 Version:       3.0
 Author:        Principal Architect
 Reviewers:     —

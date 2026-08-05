@@ -20,15 +20,15 @@ A **Product Validation Sprint** (July 2026) audited the completed epics, fixed e
 
 The next engineering epic is **Project Intelligence** — understanding the whole codebase as architecture. Phase 1 (Module Intelligence, milestones M1–M7) is **complete**. Phase 2 (Project Intelligence, milestones M8–M11) is **complete**. M12 (Validation) not started. Cross-cutting: KGR Phase 2, Multi-Provider AI Platform, and Enhanced Explanation are all complete.
 
-**Enhanced Explanation** — optional visual context extraction for Selection Mode — is **complete** and production-ready. Captures a screenshot of the user's working area, sends to a vision LLM (Claude Haiku via backend gateway), and injects contextual observations into the explanation prompt. Architecture: `architecture/VISUAL_CONTEXT_ARCHITECTURE.md`. Off by default.
+**Enhanced Explanation** — visual context extraction for Selection Mode — is **complete** and production-ready. Captures a screenshot of the user's working area, sends to a vision LLM (Claude Haiku via backend gateway), and injects corrective visual evidence into the explanation prompt. Vision prompt redesigned through multiple iterations to optimize for downstream explanation quality rather than screenshot description. Architecture: `architecture/VISUAL_CONTEXT_ARCHITECTURE.md`. In Selection Mode, Vision is now triggered by user intent (typing a custom question) rather than a feature flag — see Intent Bar and Conditional Vision below.
 
-**Context Resolution Layer** — unified context assembly infrastructure — is **architecturally specified** but not yet implemented. Will replace per-coordinator bespoke context assembly with a generic signal-demand resolver. Architecture specification: `architecture/CRL-001-ContextResolutionLayer.md`. This is the next major epic after Project Intelligence M12.
+**Screenshot Mode Investigation** — product validation concluded that Screenshot Mode (OCR-based) does not currently provide sufficient explanation improvement to justify its latency and complexity. The feature is researched, validated, and closed. No further engineering effort should be invested unless a future product direction introduces fundamentally different use cases (e.g., debugger state capture, compiler diagnostics, runtime UI inspection).
 
-The architecture is fully specified across three document layers (DAS → DDS → IAG). All specifications are frozen. Implementation follows these documents exactly. Architecture changes require an RFC (IAG-004 §21).
+The architecture is fully specified across three document layers (DAS → DDS → Feature Architecture). All specifications are frozen. Implementation follows these documents exactly. Architecture changes require an RFC (see `architecture/README.md` § Architectural Modification Process).
 
 ### Completed Platform
 
-The understanding pipeline (all 8 modules from IAG-001) is operational end-to-end: ProducerRuntime → IndexRuntime → RetrievalRuntime → ContextAssembly → ConsumerRuntime, with UnderstandingSystem as the composition root, SwiftSyntaxFrontend and TreeSitterFrontend as producers, and ExplainReasoningEngine, ImproveReasoningEngine, and FollowUpReasoningEngine as consumers. Application integration is wired through AppDependencies with pipeline-first execution and automatic legacy fallback.
+The understanding pipeline (all 8 modules) is operational end-to-end: ProducerRuntime → IndexRuntime → RetrievalRuntime → ContextAssembly → ConsumerRuntime, with UnderstandingSystem as the composition root, SwiftSyntaxFrontend and TreeSitterFrontend as producers, and ExplainReasoningEngine, ImproveReasoningEngine, and FollowUpReasoningEngine as consumers. Application integration is wired through AppDependencies with pipeline-first execution and automatic legacy fallback.
 
 All four File Intelligence understanding layers (Identity, Purpose, Behavior, Safety, Design) are implemented and validated.
 
@@ -38,7 +38,7 @@ All four File Intelligence understanding layers (Identity, Purpose, Behavior, Sa
 
 | Mode | Trigger | Flow |
 |------|---------|------|
-| Selection | Double-tap Control | Capture selected text → [optional: screenshot → vision → context] → AI → HUD |
+| Selection | Double-tap Control | Capture selected text → screenshot → intent bar → [if custom question: vision in parallel] → AI → HUD |
 | Screenshot | Double-tap Option | Drag-select region → OCR → AI → HUD |
 | Session | `⌃⇧O` open file / `⌃⇧P` open directory, then Double-tap Shift | Capture snippet → resolve workspace → build context → AI → HUD |
 
@@ -71,15 +71,35 @@ All four File Intelligence understanding layers (Identity, Purpose, Behavior, Sa
 - **Persistence**: JSON file at `~/Library/Application Support/Decode/virtual-session.json`, incremental save after every mutation.
 - **Architecture specification**: `architecture/VAS-001-VirtualSessionArchitecture.md` (canonical, cross-platform).
 
-**Enhanced Explanation** — optional visual context for Selection Mode:
-- **VisualContextExtractor**: captures screenshot via ScreenCaptureKit, converts to JPEG, sends to vision LLM, validates response.
+**Intent Bar** — universal pre-explanation interaction layer for Selection Mode:
+- **Immediate keyboard interaction**: no click required. NSPanel made key with local+global event monitors.
+- **Two interaction paths**: Enter/Space → default explanation (zero vision cost). Printable character → custom question (vision starts in background).
+- **`onEditingStarted` callback**: one-shot callback from `ExplanationHUDViewModel` to coordinator. Fires on first printable character. Automatically nilled after firing.
+- **`collectIntent()` API**: `FloatingExplanationHUD.collectIntent(sourceApp:mode:explanationProfile:onEditingStarted:)` with `CheckedContinuation` for async/await suspension.
+
+**Conditional Vision** — intent-driven visual context for Selection Mode:
+- **Screenshot captured immediately** on hotkey (cheap, local only, ~180ms via ScreenCaptureKit).
+- **Vision deferred** until user types a custom question. Default explanations (Enter/Space) never invoke vision — zero AI cost.
+- **Parallel execution**: vision runs in background while user types. If vision finishes before user submits, result is available instantly. If still running at submit, coordinator awaits.
+- **Intent is the trigger**, not the Enhanced Explanation toggle. Custom questions always enable vision regardless of the toggle state.
+- **`pendingVisionTask`**: stored as `Task<VisualContext?, Never>?` on coordinator. Cancelled on cancel, staleness, default explanation, re-invocation, or `stopListening()`.
+- **Graceful degradation**: any vision failure → proceed without visual context → identical to no vision.
+
+**Enhanced Explanation** — visual context pipeline components:
+- **VisualContextExtractor**: stateless, Sendable. Crops edges, converts to JPEG, sends to vision LLM, validates response.
 - **WindowSelector**: weighted scoring system for selecting the correct content window from ScreenCaptureKit candidates. Scores: title (1000), normalLayer (500), active (100), onScreen (50), normalizedArea (0-200).
 - **VisualContextCaptureConfiguration**: configurable edge cropping (default 10% per edge) to reduce image tokens.
 - **Vision prompt**: extracts information OUTSIDE the highlighted code (file name, containing function, surrounding code, compiler errors).
 - **Backend vision gateway**: `POST /api/gateway/vision` with `ANTHROPIC_VISION_API_KEY` → falls back to `ANTHROPIC_API_KEY`.
-- **Graceful degradation**: any vision failure → proceed without visual context → identical to feature disabled.
-- **Off by default**: toggled via `enhancedExplanationEnabled` UserDefaults key.
+- **`enhancedExplanationEnabled` toggle**: controls Screenshot Mode vision and debug panel visibility. Selection Mode vision is controlled by user intent, not this toggle.
 - **Architecture**: `architecture/VISUAL_CONTEXT_ARCHITECTURE.md`.
+
+**ExplanationExecutionContext** — canonical runtime model for explanation composition:
+- **`ExplanationExecutionContext`**: `@MainActor final class` recording which capabilities contributed to an explanation. Created at the start of each explanation flow.
+- **Subsystem registration**: each subsystem (Vision, Virtual Session, future capabilities) marks its contribution at the exact point of injection — not before, not after.
+- **HUD rendering**: the explanation header renders `executionContext.displayText` (e.g., "Selection · General · Vision · Virtual Session"). No prompt string inspection.
+- **Extensible**: to add a future capability, add a `Bool` property and append its label in `labels`. One file, no coordinator changes.
+- **File**: `Decode/Domain/Models/ExplanationExecutionContext.swift`.
 
 **Backend**: FastAPI + PostgreSQL on Railway. Full analytics pipeline, admin dashboard, invite management.
 
@@ -110,8 +130,8 @@ Protocols for cross-layer communication (dependency inversion). No layer imports
 ### Key Services by Layer
 
 **App**: `AppDependencies` — root DI container, deferred startup, hotkey fan-out.
-**Application**: `SelectionModeCoordinator`, `ScreenshotModeCoordinator`, `SessionQuestionCoordinator`, `WorkspaceManager`, `WorkspaceResolver`, `IndexingCoordinator`, `NavigationState`, `SessionState`, `SessionStatePersistence`, `SessionManager`, `SessionResolver`, `ContextBuilderService`, `ExplanationFramework`, `RepresentationGuidance`, `SnippetHealthClassifier`, `ImprovementService`, `SemanticEnrichmentService`, `FilePurposeDeriver`, `FileIdentityClassifier`, `VirtualSessionManager`, `VisualContextExtractor`.
-**Domain**: Models (`Workspace`, `WorkspaceKind`, `Session`, `CodeEntity`, `SessionContext`, `AILimits`, `FileIntelligence`, `Relationship`, `SemanticEnrichment`, `ImportDeclaration`, `VirtualSession`, `Investigation`, `Insight`, `InsightContext`, `WorkingMemory`, `InvestigationAnchor`, `VisualContext`, `VisualContextCaptureConfiguration`), Protocols (`AIProviderProtocol`, `DatabaseProtocol`, `DirectoryWatcherProtocol`, `VisualContextExtracting`).
+**Application**: `SelectionModeCoordinator`, `ScreenshotModeCoordinator`, `SessionQuestionCoordinator`, `WorkspaceManager`, `WorkspaceResolver`, `IndexingCoordinator`, `NavigationState`, `SessionState`, `SessionStatePersistence`, `SessionManager`, `SessionResolver`, `ExplanationFramework`, `RepresentationGuidance`, `ImprovementService`, `SemanticEnrichmentService`, `FilePurposeDeriver`, `FileIdentityClassifier`, `VirtualSessionManager`, `VisualContextExtractor`.
+**Domain**: Models (`Workspace`, `WorkspaceKind`, `Session`, `CodeEntity`, `AILimits`, `FileIntelligence`, `Relationship`, `SemanticEnrichment`, `ImportDeclaration`, `VirtualSession`, `Investigation`, `Insight`, `InsightContext`, `WorkingMemory`, `InvestigationAnchor`, `VisualContext`, `VisualContextCaptureConfiguration`, `ExplanationExecutionContext`), Protocols (`AIProviderProtocol`, `DatabaseProtocol`, `DirectoryWatcherProtocol`, `VisualContextExtracting`).
 **Infrastructure**: `DecodeGatewayProvider`, `GroqProvider`, `AIConfiguration`, `AIProviderRegistry`, `AccessibilityCapture`, `HotkeyService`, `SwiftSyntaxParser`, `TreeSitterParser`, `DatabaseService`, `KeychainService`, `FileWatcherService`, `DirectoryWatcherService`, `ScreenCaptureService`, `VisionOCRService`, `TextReplacementService`, `AnalyticsEventService`, `WindowSelector`.
 **Presentation**: `FloatingExplanationHUD`, `ExplanationHUDViewModel`, `ExplanationTagParser`, `ImprovementSectionView`, `FloatingSessionDock`, `SessionView`, `ProjectExplorerView`, `VirtualSessionInspectorView`.
 
@@ -128,10 +148,10 @@ Decode/Application/    → Coordinators, managers, context/explanation logic, en
 Decode/Domain/         → Models, Protocols
 Decode/Infrastructure/ → AI/, AST/, Capture/, Database/, FileSystem/, Hotkey/, Keychain/, OCR/
 Decode/Presentation/   → Overlay/, Session/, Onboarding/, Settings/
-Decode/Understanding/  → Understanding pipeline modules (IAG-001 §5 — created during implementation)
+Decode/Understanding/  → Understanding pipeline modules
 backend/app/           → routers/, models/, static/, gateway_service.py, auth.py, config.py
 backend/alembic/       → Database migrations
-architecture/          → Frozen specifications: das/, dds/, iag/, rfc/, glossary/, VAS-001 (Virtual Session), CRL-001 (Context Resolution Layer)
+architecture/          → Frozen specifications: das/, dds/, glossary/, VAS-001, VISUAL_CONTEXT; archived: iag/archive/, rfc/archive/
 docs/                  → VISION.md (product vision and philosophy)
 ```
 
@@ -213,20 +233,7 @@ Scans manifest of supported files, excludes `.git`/`node_modules`/`build`/etc., 
 FSEvents on root directory FD. 500ms debounce. Mod-date snapshot comparison detects modified/new/deleted files. Reuses `IndexingCoordinator.supportedExtensions` and `excludedDirectories`.
 
 ### Multi-File Question Handling
-`SessionQuestionCoordinator` derives `effectiveFilePath`/`effectiveFileName`/`effectiveEntities` from the resolved file within a directory workspace. Pipeline, context builder, health classifier, and analytics all use these effective values.
-
-### Context Tiers (`ContextBuilderService`)
-Token reduction of ~63–97% vs sending the full file.
-
-| Tier | Condition | What's sent |
-|------|-----------|-------------|
-| tier1 | Snippet matches a parsed entity | Entity source + outline |
-| tier2 | File ≤200 lines | Full file content |
-| tier2.5 | Large file, snippet found by text search | ±30 surrounding lines + outline |
-| tier3 | Large file, no match | Outline only |
-
-### Code Health (`SnippetHealthClassifier`)
-Tree-sitter parses the snippet. Edge errors = partial-selection artifacts. Interior errors = real issues. Tiers: silent → observe → surface → diagnose, injected into system prompt.
+`SessionQuestionCoordinator` derives `effectiveFilePath`/`effectiveFileName`/`effectiveEntities` from the resolved file within a directory workspace. The understanding pipeline uses these effective values for evidence retrieval and context assembly.
 
 ### Session Dock
 Non-activating `NSPanel` on right screen edge. Capsule pills with magnification. Pin workspace via context menu. Directory workspaces show folder icon, indexing progress, file counts.
@@ -235,13 +242,12 @@ Non-activating `NSPanel` on right screen edge. Capsule pills with magnification.
 
 ## Explanation Engine
 
-- Two profiles: General (V7) and DSA. Toggled via `dsaModeEnabled` UserDefaults key.
-- V7 is the active general prompt (`ExplanationFramework.swift`). Currently frozen.
-- DSA prompt in `ExplanationFramework+DSA.swift`. Independently evolvable.
+- **Session Mode**: explanations produced by the understanding pipeline (`ExplainReasoningEngine`, `FollowUpReasoningEngine`, `ImproveReasoningEngine`). Reasoning engines receive structured facts from the DIR, not raw source code.
+- **Selection/Screenshot Mode**: direct AI calls with prompts built by coordinators. Two profiles: General (V7) and DSA. Toggled via `dsaModeEnabled` UserDefaults key.
+- V7 prompt in `ExplanationFramework.swift`, DSA in `ExplanationFramework+DSA.swift`. Both used by Selection/Screenshot only.
 - 7 custom tags: `<hl>`, `<critical>`, `<tip>`, `<note>`, `<analogy>` (inline); `<tldr>`, `<flow>` (block).
 - Renderer uses `.inlineOnlyPreservingWhitespace` — block-level headings (`##`) are NOT supported.
-- Follow-ups: 3-message conversation with dedicated `followUpSystemPrompt`, NOT the explanation prompt.
-- Do not redesign V7 without evidence from real-world usage.
+- Session follow-ups route through `FollowUpReasoningEngine` with `ConversationState` continuity. Selection/Screenshot follow-ups use 3-message conversation with `followUpSystemPrompt`.
 
 ---
 
@@ -249,8 +255,8 @@ Non-activating `NSPanel` on right screen edge. Capsule pills with magnification.
 
 Post-explanation code improvement. Available in Selection and Session modes (not Screenshot).
 
-- `ImprovementService`: prompt construction, response parsing. Uses `<improvement_summary>` and `<improved_code>` XML-like tags.
-- Session Improve reuses the `SessionContext` from the original explanation via `FollowUpContext.sessionContext`.
+- **Session Mode**: improvement routed through `ImproveReasoningEngine` via the understanding pipeline.
+- **Selection Mode**: improvement via `ImprovementService` direct AI call. Uses `<improvement_summary>` and `<improved_code>` XML-like tags.
 - No-improvement path: when code is already clean, model returns summary-only. This is a successful outcome.
 - `TextReplacementService`: clipboard backup → write → simulated ⌘V → clipboard restore.
 
@@ -296,7 +302,7 @@ Admin generates invite code → user activates → access token stored as SHA-25
 
 ## Architecture Specifications (Frozen)
 
-The architecture is fully specified and frozen. Implementation conforms to these documents — they do not conform to implementation. Changing a frozen specification requires an RFC (see `architecture/iag/IAG-004-Implementation-Sequence.md` §21).
+The architecture is fully specified and frozen. Implementation conforms to these documents — they do not conform to implementation. Changing a frozen specification requires an RFC (see `architecture/README.md` § Architectural Modification Process).
 
 ### Document Layers
 
@@ -305,10 +311,12 @@ DAS (frozen) — Architectural principles, invariants, the DIR definition
   ↓
 DDS (frozen) — Runtime subsystem contracts, state models, failure modes
   ↓
-IAG (frozen) — Module boundaries, technology decisions, runtime architecture, implementation sequence
+Feature Architecture (frozen) — VAS-001 (Virtual Session), VISUAL_CONTEXT (Visual Context)
   ↓
 Implementation — Source code that realizes all of the above
 ```
+
+IAG-001 through IAG-004 are archived in `architecture/iag/archive/` — they guided pipeline construction (now complete) and are historical reference only.
 
 ### Specification Inventory
 
@@ -316,11 +324,9 @@ Implementation — Source code that realizes all of the above
 |-------|-----------|-------|
 | DAS | DAS-000 through DAS-012 | Architecture: principles, DIR, tiers, entities, relationships, passes, indexes, retrieval, context assembly, incremental update, consumers, storage |
 | DDS | DDS-000 through DDS-009 | Design: authoring standard, producer runtime, DIR runtime, pass runtime, index runtime, retrieval runtime, context assembly, update engine, storage engine, consumer runtime |
-| IAG | IAG-001 through IAG-004 | Implementation: module architecture, technology decisions, runtime architecture, implementation sequence |
-| VAS | VAS-001 | Virtual Session: cross-platform architecture specification for investigation memory, Working Memory, topic switching, compression |
-| CRL | CRL-001 | Context Resolution Layer: signal-demand resolver for unified context assembly across all capabilities |
+| Feature | VAS-001, VISUAL_CONTEXT | Virtual Session architecture, Visual Context architecture |
 
-### Understanding Pipeline Modules (IAG-001)
+### Understanding Pipeline Modules
 
 8 framework targets building the intelligence pipeline:
 
@@ -335,7 +341,7 @@ Implementation — Source code that realizes all of the above
 | UpdateEngine (M7) | DDS-007 + DDS-002 runtime | DIR runtime + synchronous/deferred pipeline coordination |
 | StorageEngine (M8) | DDS-008 | Snapshots, GC, grounding map, content hashing |
 
-### Implementation Phases (IAG-004)
+### Implementation Phases
 
 | Phase | Name | Modules | Status |
 |-------|------|---------|--------|
@@ -346,7 +352,7 @@ Implementation — Source code that realizes all of the above
 | 5 | System Integration | UnderstandingSystem composition root + integration tests | Complete |
 | 6 | Application Integration | AppDependencies wiring, file monitoring bridge | Complete |
 
-All six phases are complete. Phases are sequential with verification gates (G1–G6) between them. See IAG-004 for entry/exit criteria, parallel work opportunities, and rollback policy.
+All six phases are complete.
 
 ---
 
@@ -355,19 +361,18 @@ All six phases are complete. Phases are sequential with verification gates (G1�
 ### Implement, Do Not Redesign
 
 The architecture is specified. Implementation realizes the specifications. Do not:
-- Redesign module boundaries (IAG-001 is frozen)
+- Redesign module boundaries
 - Change the dependency graph between modules
 - Add or remove modules
-- Change actor placement (IAG-003 is frozen)
-- Change technology selections (IAG-002 is frozen)
-- Skip verification gates or phase ordering (IAG-004 is frozen)
+- Change actor placement
+- Change technology selections
 
 ### Before Implementing
 
-1. Read only the DDS/IAG sections relevant to the current capability.
+1. Read only the DDS sections relevant to the current capability.
 2. Inspect only the affected repository files — do not assume.
 3. Implement the capability in production-quality code. No scaffolding, no stubs, no "we'll fix it later."
-4. Verify DDS/DAS/IAG compliance.
+4. Verify DDS/DAS compliance.
 5. Add focused tests.
 6. Verify builds and tests.
 7. Update the active implementation status document.
@@ -390,34 +395,32 @@ Optimize for production quality, maintainability, correctness, scalability, and 
 
 ### When the Spec Seems Wrong
 
-If implementation reveals a genuine contradiction with DAS/DDS/IAG — not inconvenience, but an actual invariant violation, contract contradiction, or impossibility — **stop and explain why an RFC is required**. Do not silently deviate from the specification. Do not work around it. Document the finding and the evidence.
+If implementation reveals a genuine contradiction with DAS/DDS — not inconvenience, but an actual invariant violation, contract contradiction, or impossibility — **stop and explain why an RFC is required**. Do not silently deviate from the specification. Do not work around it. Document the finding and the evidence.
 
-The RFC must include: which document and section, what it currently says, what's proposed, why it's incorrect (with evidence), and downstream impact. See IAG-004 §21.3.
+The RFC must include: which document and section, what it currently says, what's proposed, why it's incorrect (with evidence), and downstream impact. See `architecture/README.md` § Architectural Modification Process.
 
 ### Verification
 
-Each phase has objective exit criteria (IAG-004 §3–§8). Verification is binary: builds succeed or fail, tests pass or fail, strict concurrency reports or doesn't. No subjective assessment.
+Verification is binary: builds succeed or fail, tests pass or fail, strict concurrency reports or doesn't. No subjective assessment.
 
 ---
 
 ## Roadmap
 
 1. ~~**File Intelligence**~~ — **Complete.** All four semantic understanding layers implemented, validated, and shipped.
-2. ~~**Architecture**~~ — **Complete.** DAS-000–012, DDS-000–009, IAG-001–004 all frozen.
+2. ~~**Architecture**~~ — **Complete.** DAS-000–012, DDS-000–009 all frozen. IAG-001–004 archived.
 3. ~~**Understanding Pipeline Implementation (Session Mode)**~~ — **Complete.** All 6 phases, all 8 modules, application integration, pipeline-first execution for Explain/Follow-Up/Improve, production hardening, and comprehensive test coverage.
 4. ~~**Workspace Mode**~~ — **Complete.** All 8 milestones (W0–W7). Workspace-first architecture, directory support, indexing, watching, multi-file resolution.
 5. ~~**Product Validation Sprint**~~ — **Complete.** Engineering health cleanup (E1-01, E2-00, E3-01 findings), folder upload UI completion, SessionState architecture (workspace history vs application session separation).
 6. ~~**Virtual Session**~~ — **Complete.** Cross-mode investigation memory with Working Memory, Investigations, topic switching, compression, and Memory Inspector. Architecture specification: `architecture/VAS-001-VirtualSessionArchitecture.md`.
 7. **Project Intelligence** — **In progress.** Phase 1 (Module Intelligence, M1–M7) complete. Phase 2 (Project Intelligence, M8–M11) complete. M12 (Validation) not started. Cross-cutting: KGR Phase 2 (proactive File Understanding) and Multi-Provider AI Platform complete. See `PROJECT_INTELLIGENCE_IMPLEMENTATION_STATUS.md`.
-8. ~~**Enhanced Explanation**~~ — **Complete.** Visual context extraction for Selection Mode. WindowSelector for reliable content window selection. Edge cropping for image token optimization. Backend vision gateway integration. Latency instrumentation. Architecture: `architecture/VISUAL_CONTEXT_ARCHITECTURE.md`.
-9. **Context Resolution Layer** — **Architecture complete, not implemented.** Signal-demand resolver for unified context assembly. Will replace per-coordinator bespoke context paths. Specification: `architecture/CRL-001-ContextResolutionLayer.md`.
+8. ~~**Enhanced Explanation**~~ — **Complete.** Visual context extraction for Selection Mode. WindowSelector for reliable content window selection. Edge cropping for image token optimization. Backend vision gateway integration. Vision prompt redesigned for downstream explanation quality. Architecture: `architecture/VISUAL_CONTEXT_ARCHITECTURE.md`.
+9. ~~**Screenshot Mode Investigation**~~ — **Complete (researched and closed).** Product validation concluded insufficient explanation improvement for the latency and complexity cost. No further work planned.
 
 ### Implementation Status Tracking
 
-Session Mode implementation is tracked in `SESSION_MODE_IMPLEMENTATION_STATUS.md` (complete, read-only reference).
-Workspace Mode implementation is tracked in `WORKSPACE_IMPLEMENTATION_STATUS.md` (complete, read-only reference).
 Virtual Session architecture is specified in `architecture/VAS-001-VirtualSessionArchitecture.md` (canonical cross-platform specification).
-Context Resolution Layer architecture is specified in `architecture/CRL-001-ContextResolutionLayer.md` (canonical, not yet implemented).
+Visual Context architecture is specified in `architecture/VISUAL_CONTEXT_ARCHITECTURE.md` (canonical feature architecture).
 
 ---
 
@@ -450,7 +453,7 @@ These architectural decisions are validated. Do not redesign without strong evid
 ### Frozen Specifications
 13. **DAS-000 through DAS-012** — canonical architecture. Changes require a DAS amendment process.
 14. **DDS-000 through DDS-009** — canonical design specifications. Changes require a DDS amendment process.
-15. **IAG-001 through IAG-004** — canonical implementation architecture. Changes require an explicit RFC with evidence of incorrectness (IAG-004 §21.3).
+15. **IAG-001 through IAG-004** — implementation architecture (archived in `architecture/iag/archive/`). Historical reference only. Changes to DAS/DDS require an RFC per `architecture/README.md`.
 16. **DIR as canonical asset** — all capabilities are consumers of the DIR. Do not build features that bypass the intelligence architecture.
 
 ### Completed Platform (Frozen)
@@ -465,11 +468,11 @@ These architectural decisions are validated. Do not redesign without strong evid
 2. **File Intelligence architecture** — layered understanding model (Identity → Purpose → Behavior → Safety → Design). All layers implemented and validated.
 3. **Lazy Semantic Enrichment** — triggered by user question, not by parsing. Cached by file hash. In-memory cache. Single LLM call for all four layers.
 4. **Structured facts prompt design** — send entity signatures/relationships to LLM, not raw source code. Methods grouped under owning types, external calls included.
-5. **Context tier system** — 4 tiers (tier1→tier3) with ContextBuilderService. Stable.
+5. **Understanding pipeline** — Session Mode uses pipeline-first architecture (retrieve → assemble → reason). No legacy context tiers.
 6. **Manual DI** — `AppDependencies` as root container. No framework.
 7. **Deferred startup** — `performDeferredStartup()` via `didBecomeActiveNotification`.
 8. **Generation-counter request replacement** — coordinators use `requestGeneration` + cancellation. No mutex needed.
-9. **V7 explanation prompt** — frozen until real-user evidence justifies changes.
+9. **V7 explanation prompt** — used by Selection/Screenshot modes. Frozen until real-user evidence justifies changes.
 10. **DSA as separate prompt** — not an overlay on V7. Lives in `ExplanationFramework+DSA.swift`.
 11. **Analytics pipeline** — server-side token extraction, compound mode values, orthogonal `mode` and `explanation_profile`.
 12. **Incremental milestone-based development** — File → Architecture → Session Mode → Workspace Mode → Project Intelligence progression.
@@ -542,14 +545,13 @@ Do not build these unless explicitly requested.
 - **Update `_MODEL_PRICING_PER_MTOK` in admin.py** when switching AI models.
 
 ### Understanding Pipeline
-- **Never add imports between pipeline modules beyond IAG-001 §3.** The dependency graph is frozen.
-- **Never use `@MainActor` in any understanding pipeline module.** Pipeline runs off the main thread (IAG-003 §6.3).
-- **Never use `@unchecked Sendable` without documented justification.** Strict concurrency must be clean (IAG-003 §10.3).
-- **Never skip a verification gate.** Phase N+1 does not begin until Phase N exit criteria pass (IAG-004 §12).
-- **Never patch downstream to fix upstream.** Fix defects at the earliest phase that introduced them (IAG-004 §20).
-- **Never import GRDB in any understanding pipeline module.** Storage uses Codable + atomic file I/O (IAG-002:TI-3).
-- **Never redesign a DDS contract during implementation.** If it seems wrong, file an RFC (IAG-004 §21).
-- **Never produce File → Entity containment in composition passes.** DAS-004 CONT-3 assigns below-file containment exclusively to source parsers (T0, deterministic). `FrontendOutputConversion` handles this natively.
+- **Never add imports between pipeline modules.** The dependency graph is frozen.
+- **Never use `@MainActor` in any understanding pipeline module.** Pipeline runs off the main thread.
+- **Never use `@unchecked Sendable` without documented justification.** Strict concurrency must be clean.
+- **Never patch downstream to fix upstream.** Fix defects at the earliest point that introduced them.
+- **Never import GRDB in any understanding pipeline module.** Storage uses Codable + atomic file I/O.
+- **Never redesign a DDS contract during implementation.** If it seems wrong, file an RFC (see `architecture/README.md`).
+- **Never produce File → Entity containment in composition passes.** DAS-004 CONT-3 assigns below-file containment exclusively to source parsers (T0, deterministic).
 
 ---
 
@@ -575,54 +577,63 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
 Main branch: `main`. Build must pass before committing. Run `xcodegen generate` after adding/removing Swift files.
 
 ### Tests
-42 test files in `DecodeTests/`. Key coverage: `WorkspaceManager`, `WorkspaceResolver`, `WorkspaceResolverMultiFile`, `IndexingCoordinator`, `DirectoryWatcherService`, `NavigationState`, `ProjectExplorerTree`, `SessionState`, `SessionViewModelDirectory`, `SessionResolver`, `ContextBuilderService`, `SnippetHealthClassifier`, `ExplanationTagParser`, `ExplainReasoningEngine`, `ImproveReasoningEngine`, `FollowUpReasoningEngine`, `SelectionModeCoordinator`, `SwiftSyntaxFrontend`, `TreeSitterFrontend`, `ModuleBoundaryPass`, `CrossFileResolutionPass`, `ModuleEmergentProperties`, `ModuleContextStrategy`, `ModuleObservation`, `ModuleIntelligenceValidation`, `VirtualSessionManager`.
+40 test files in `DecodeTests/`. Key coverage: `WorkspaceManager`, `WorkspaceResolver`, `WorkspaceResolverMultiFile`, `IndexingCoordinator`, `DirectoryWatcherService`, `NavigationState`, `ProjectExplorerTree`, `SessionState`, `SessionViewModelDirectory`, `SessionResolver`, `ExplanationTagParser`, `ExplainReasoningEngine`, `ImproveReasoningEngine`, `FollowUpReasoningEngine`, `SelectionModeCoordinator`, `SwiftSyntaxFrontend`, `TreeSitterFrontend`, `ModuleBoundaryPass`, `CrossFileResolutionPass`, `ModuleEmergentProperties`, `ModuleContextStrategy`, `ModuleObservation`, `ModuleIntelligenceValidation`, `VirtualSessionManager`.
 
 4 pre-existing test failures (see Known Limitations).
 
 ---
 
-## Session Handoff (2026-08-02)
+## Session Handoff (2026-08-03)
 
-### What Was Completed This Session
+### What Was Completed
 
-**Enhanced Explanation** — complete visual context pipeline for Selection Mode:
+**Intent Bar** — universal pre-explanation interaction layer:
+- `onEditingStarted` callback added to `ExplanationHUDViewModel` and `FloatingExplanationHUD.collectIntent()`.
+- One-shot callback pattern (nil before call) prevents double-firing.
+- Keyboard interaction is immediate via local+global NSEvent monitors — no click required.
 
-1. **Backend Vision Gateway**: `ANTHROPIC_VISION_API_KEY` with fallback to `ANTHROPIC_API_KEY`. Vision-specific `resolve_vision_anthropic_key()` method. Provider-agnostic dispatch via `VISION_PROVIDER` env var.
+**Conditional Vision** — intent-driven visual context:
+- Screenshot captured immediately on hotkey (cheap, local only).
+- Vision starts only when user types a custom question (`onEditingStarted` fires).
+- Default explanations (Enter/Space) never invoke Vision — zero AI cost.
+- Vision executes concurrently while user types; coordinator awaits only if still running at submit.
+- `pendingVisionTask` lifecycle: cancelled on cancel, staleness, default explanation, re-invocation, `stopListening()`.
+- Custom questions always enable Vision regardless of the `enhancedExplanationEnabled` toggle.
+- Vision pipeline verified end-to-end: screenshot → JPEG → gateway → Claude Haiku → sanitize → inject → explanation.
 
-2. **Image Pipeline Investigation**: SHA-256 instrumentation proved image bytes identical from capture to Anthropic API. Root cause of "none" responses identified: `SelectionModeCoordinator` was selecting a toolbar window (1470x44) instead of the editor window (1470x920) because `.first(where:)` returned the first PID match.
+**ExplanationExecutionContext** — canonical runtime model for explanation composition:
+- `@MainActor final class` recording which capabilities contributed to each explanation.
+- Each subsystem marks its contribution at the exact point of injection.
+- HUD header renders from `executionContext.displayText` (e.g., "Selection · General · Vision").
+- Replaces the old `modeDisplayName` static function for the primary rendering path.
 
-3. **WindowSelector**: Dedicated window selection with weighted scoring — title (1000), normalLayer (500), active (100), onScreen (50), normalizedArea (0-200). Deterministically selects the correct content window. DEBUG logging shows all candidates with scores.
-
-4. **Vision Prompt Rewrite (v4)**: Focuses on information OUTSIDE the highlighted code. Concrete negative examples prevent parroting. Prioritizes consistently-available information (file name, containing function, surrounding code, compiler errors).
-
-5. **Latency Instrumentation**: Complete timing for every pipeline stage — selection capture, screen capture (enumeration, selection, SCK), vision pipeline (crop, JPEG, API, sanitize), prompt assembly, explain stream setup. Budget printout in console.
-
-6. **Edge Cropping**: `VisualContextCaptureConfiguration` with configurable padding (default 10% per edge, ~36% pixel reduction). Reduces image tokens and cost. Applied after screenshot capture, before JPEG conversion.
-
-7. **Context Resolution Layer Architecture**: Three-iteration design process: Smart Vision Gate (rejected — too narrow) → Policy-Based Resolver (rejected — couples policy to providers) → Signal-Demand Resolver (adopted). Canonical specification: `architecture/CRL-001-ContextResolutionLayer.md`.
+**Previous session (2026-08-02):**
+- Backend vision gateway with provider-agnostic dispatch.
+- WindowSelector with weighted scoring for reliable content window selection.
+- Edge cropping for image token optimization (~36% pixel reduction).
+- Vision prompt redesigned (v1→v2→v3) for downstream explanation quality.
+- Screenshot Mode Investigation researched and closed.
+- CRL-001 Architecture abandoned and deleted.
 
 ### Current Implementation Status
 
 | Component | Status | Location |
 |-----------|--------|----------|
+| Intent Bar (onEditingStarted) | Complete | `ExplanationHUDViewModel.swift`, `FloatingExplanationHUD.swift` |
+| Conditional Vision (SelectionMode) | Complete | `Decode/Application/SelectionModeCoordinator.swift` |
+| ExplanationExecutionContext | Complete | `Decode/Domain/Models/ExplanationExecutionContext.swift` |
 | VisualContextExtractor | Complete | `Decode/Application/VisualContextExtractor.swift` |
 | WindowSelector | Complete | `Decode/Infrastructure/Capture/WindowSelector.swift` |
 | VisualContext model | Complete | `Decode/Domain/Models/VisualContext.swift` |
-| VisualContextCaptureConfiguration | Complete | `Decode/Domain/Models/VisualContext.swift` |
-| SelectionModeCoordinator (enhanced) | Complete | `Decode/Application/SelectionModeCoordinator.swift` |
 | DecodeGatewayProvider (vision) | Complete | `Decode/Infrastructure/AI/DecodeGatewayProvider.swift` |
 | Backend vision config | Complete | `backend/app/config.py`, `backend/app/gateway_service.py` |
 | Visual Context Architecture | Complete | `architecture/VISUAL_CONTEXT_ARCHITECTURE.md` |
-| CRL-001 Architecture Spec | Complete | `architecture/CRL-001-ContextResolutionLayer.md` |
 
 ### Repository State
 
 - Branch: `main`.
-- Working tree: clean (committed as `d255f8c` + architecture doc uncommitted).
-- All new code builds successfully. 4 pre-existing test failures unchanged.
+- All code builds successfully. 4 pre-existing test failures unchanged.
 
-### Immediate Next Recommended Tasks
+### Immediate Next Recommended Task
 
 1. **Project Intelligence M12 — Validation**: End-to-end validation of the complete Project Intelligence stack (M8–M11). See `PROJECT_INTELLIGENCE_IMPLEMENTATION_STATUS.md`.
-
-2. **Context Resolution Layer Implementation**: After M12 closes the Project Intelligence epic. Follow `architecture/CRL-001-ContextResolutionLayer.md`. Recommended implementation order: domain types → WorkingMemoryProvider → WorkspaceProvider → ContextResolver → wire SelectionModeCoordinator → remaining providers → wire SessionQuestionCoordinator.

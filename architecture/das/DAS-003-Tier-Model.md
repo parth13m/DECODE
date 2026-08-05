@@ -3,7 +3,7 @@
 ```
 Chapter:       DAS-003
 Title:         Tier Model
-Status:        Draft
+Status:        Frozen
 Version:       1.0
 Author:        Principal Architect
 Reviewers:     —

@@ -245,38 +245,52 @@ final class ScreenshotModeCoordinator {
             return
         }
 
-        // 7. Build prompt and stream response.
+        // 7. Collect user intent before building the prompt.
         let sourceAppName = event.sourceAppName
         let dsaMode = UserDefaults.standard.bool(forKey: "dsaModeEnabled")
         let explanationProfile = dsaMode ? "dsa" : "general"
+        let executionContext = ExplanationExecutionContext(mode: "screenshot", explanationProfile: explanationProfile)
+        guard let intentText = await hud.collectIntent(
+            sourceApp: sourceAppName,
+            mode: "screenshot",
+            explanationProfile: explanationProfile
+        ) else {
+            return // User cancelled
+        }
+        // Staleness check after intent collection await.
+        guard generation == requestGeneration else { return }
+
+        // 8. Build prompt and stream response.
         var systemPrompt = buildSystemPrompt(sourceApp: sourceAppName, ocrContent: ocrText, dsaMode: dsaMode)
 
         // Virtual Session: inject working memory into system prompt.
         if virtualSessionManager.isEnabled,
            let wmBlock = virtualSessionManager.workingMemoryBlock() {
             systemPrompt += "\n\n\(wmBlock)"
+            executionContext.virtualSession = true
         }
 
         let detectedFramework = ExplanationFramework.detect(fromContent: ocrText)
 
-        // Assemble user message with visual context evidence.
-        let userMessage: String
-        if let vc = visualContext, !vc.isEmpty {
-            userMessage = "[Visual Context]\n\(vc.formatted())\n[/Visual Context]\n\n\(ocrText)"
-            #if DEBUG
-            print("[EnhancedExplanation] final prompt contains Visual Context: YES (\(vc.formatted().count) chars)")
-            #endif
+        // Assemble user message — uses shared prompt composition.
+        let formattedVC = visualContext.flatMap { $0.isEmpty ? nil : $0.formatted() }
+        if formattedVC != nil { executionContext.vision = true }
+        let userMessage = ExplanationFramework.userMessage(
+            intent: intentText,
+            code: ocrText,
+            visualContext: formattedVC
+        )
+        #if DEBUG
+        if formattedVC != nil {
+            print("[EnhancedExplanation] final prompt contains Visual Context: YES")
         } else {
-            userMessage = ocrText
-            #if DEBUG
             print("[EnhancedExplanation] final prompt contains Visual Context: NO")
-            #endif
         }
+        #endif
         let messages = [AIMessage(role: .user, content: userMessage)]
 
-        // Show HUD immediately so the user sees loading state while
-        // the AI request is in flight.
-        hud.showLoading(sourceApp: sourceAppName, mode: "screenshot", explanationProfile: explanationProfile)
+        // Show HUD loading state while the AI request is in flight.
+        hud.showLoading(sourceApp: sourceAppName, mode: "screenshot", explanationProfile: explanationProfile, executionContext: executionContext)
 
         do {
             let stream = try await provider.streamChat(
@@ -305,7 +319,6 @@ final class ScreenshotModeCoordinator {
                 originalCode: nil,
                 explanationProfile: explanationProfile,
                 language: nil,
-                sessionContext: nil,
                 pipelineQueryService: nil,
                 pipelineConversationState: nil,
                 pipelineFilePath: nil,

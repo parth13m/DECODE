@@ -3,7 +3,7 @@
 ```
 Document:      DDS-009
 Title:         Consumer Runtime
-Status:        Draft
+Status:        Frozen
 Version:       0.2
 Author:        Principal Engineer
 Reviewers:     —

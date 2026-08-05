@@ -3,7 +3,7 @@
 ```
 Chapter:       DAS-000
 Title:         Architecture Authoring Standard
-Status:        Draft
+Status:        Frozen
 Version:       0.1
 Author:        Principal Architect
 Reviewers:     —

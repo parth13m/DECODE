@@ -551,278 +551,1135 @@ App.pages.executive = {
 };
 
 
-/* ── Product Intelligence ── */
+/* ═══════════════════════════════════════════════════════════
+   PRODUCT INTELLIGENCE — Live Data
+   ═══════════════════════════════════════════════════════════ */
 
 App.pages.product = {
-  render() {
+  _lastData: null,
+
+  async render() {
     const el = document.getElementById('page-product');
+    el.innerHTML = `
+      ${D.globalFilterBar()}
+      ${D.sectionHeader('Feature Adoption')}
+      ${D.kpiLoading(4, 4)}
+      <div class="d-mt-6">${D.kpiLoading(4, 4)}</div>
+      <div class="d-section d-mt-6">
+        ${D.sectionHeader('Mode Distribution')}
+        ${D.chartLoading(2, 2)}
+      </div>`;
+
+    try {
+      const [product, exec] = await Promise.all([
+        D.api.fetch(D.api.url('/api/v2/analytics/product')),
+        D.api.fetch(D.api.url('/api/v2/analytics/executive')),
+      ]);
+      this._lastData = { product, exec };
+      this._renderLive(el, product, exec);
+    } catch (err) {
+      el.innerHTML = `${D.globalFilterBar()}${D.error('Failed to load product data', err.message, "App.pages.product.render()")}`;
+    }
+  },
+
+  _renderLive(el, product, exec) {
+    const modes = product.by_mode || [];
+    const types = product.by_request_type || [];
+    const profiles = product.by_profile || [];
+    const languages = product.by_language || [];
+    const totalReqs = exec.total_requests || 0;
+
+    // Find mode counts
+    const modeMap = {};
+    modes.forEach(m => modeMap[m.mode] = m);
+    const sel = modeMap['selection'] || { count: 0, users: 0 };
+    const ses = modeMap['session'] || { count: 0, users: 0 };
+    const scr = modeMap['screenshot'] || { count: 0, users: 0 };
+
+    // Find type counts
+    const typeMap = {};
+    types.forEach(t => typeMap[t.request_type] = t);
+    const explains = (typeMap['explain'] || { count: 0 }).count;
+    const followups = (typeMap['followup'] || { count: 0 }).count;
+    const improves = (typeMap['improve'] || { count: 0 }).count;
+    const visions = (typeMap['vision'] || { count: 0 }).count;
+
+    const followupRate = explains > 0 ? (followups / explains * 100) : 0;
+    const improveRate = explains > 0 ? (improves / explains * 100) : 0;
+    const visionRate = totalReqs > 0 ? (visions / totalReqs * 100) : 0;
+
+    // Colors for modes/types
+    const modeColors = { selection: '#e87830', session: '#3b82f6', screenshot: '#8b5cf6', unknown: '#6b7280' };
+    const typeColors = { explain: '#e87830', followup: '#3b82f6', improve: '#10b981', vision: '#8b5cf6', enrichment: '#f59e0b', unknown: '#6b7280' };
+
+    const modeSegments = modes.map(m => ({ label: m.mode, value: m.count, color: modeColors[m.mode] || '#6b7280' }));
+    const typeSegments = types.map(t => ({ label: t.request_type, value: t.count, color: typeColors[t.request_type] || '#6b7280' }));
+
     el.innerHTML = `
       ${D.globalFilterBar()}
 
       ${D.sectionHeader('Feature Adoption')}
       ${D.kpiGrid([
-        D.kpi({ label: 'Selection Mode', value: '—', accent: 'brand' }),
-        D.kpi({ label: 'Session Mode', value: '—', accent: 'info' }),
-        D.kpi({ label: 'Screenshot Mode', value: '—' }),
-        D.kpi({ label: 'Follow-up Rate', value: '—', accent: 'purple' }),
+        D.kpi({ label: 'Selection Mode', value: D.fmt.num(sel.count), sub: `${D.fmt.num(sel.users)} users`, accent: 'brand' }),
+        D.kpi({ label: 'Session Mode', value: D.fmt.num(ses.count), sub: `${D.fmt.num(ses.users)} users`, accent: 'info' }),
+        D.kpi({ label: 'Screenshot Mode', value: D.fmt.num(scr.count), sub: `${D.fmt.num(scr.users)} users`, accent: 'purple' }),
+        D.kpi({ label: 'Follow-up Rate', value: D.fmt.pct(followupRate), sub: `${D.fmt.num(followups)} follow-ups`, accent: followupRate > 20 ? 'success' : 'warning' }),
       ], 4)}
 
       <div class="d-mt-6">
         ${D.kpiGrid([
-          D.kpi({ label: 'Improve Adoption', value: '—', sub: 'of explanations' }),
-          D.kpi({ label: 'Improve Acceptance', value: '—', sub: 'copy + replace' }),
-          D.kpi({ label: 'Vision Trigger Rate', value: '—', sub: 'custom questions / total' }),
-          D.kpi({ label: 'Virtual Session Adoption', value: '—', sub: 'users with VS enabled' }),
+          D.kpi({ label: 'Explanations', value: D.fmt.num(explains), sub: 'Total explain requests', accent: 'brand' }),
+          D.kpi({ label: 'Improve Rate', value: D.fmt.pct(improveRate), sub: `${D.fmt.num(improves)} improvements`, accent: 'success' }),
+          D.kpi({ label: 'Vision Requests', value: D.fmt.num(visions), sub: D.fmt.pct(visionRate) + ' of total', accent: 'purple' }),
+          D.kpi({ label: 'Active Users', value: D.fmt.num(exec.unique_users), sub: 'Across all modes', accent: 'info' }),
         ], 4)}
       </div>
 
       <div class="d-section d-mt-6">
-        ${D.sectionHeader('Engagement')}
+        ${D.sectionHeader('Mode Distribution')}
         ${D.chartGrid([
-          D.chartCard({ title: 'Feature Adoption Waterfall', placeholder: 'Coming in Phase 2' }),
-          D.chartCard({ title: 'Default vs Custom Questions', placeholder: 'Coming in Phase 2' }),
-          D.chartCard({ title: 'Follow-up Depth Distribution', placeholder: 'Coming in Phase 2' }),
-          D.chartCard({ title: 'Engagement Distribution', placeholder: 'Coming in Phase 2' }),
+          D.chartCard({ title: 'Requests by Mode', canvasId: 'product-donut-mode', height: 260, placeholder: false }),
+          D.chartCard({ title: 'Requests by Type', canvasId: 'product-donut-type', height: 260, placeholder: false }),
         ], 2)}
       </div>
 
       <div class="d-section d-mt-6">
-        ${D.sectionHeader('Improve Code')}
-        ${D.kpiGrid([
-          D.kpi({ label: 'Improve Requests', value: '—' }),
-          D.kpi({ label: 'Copies', value: '—', accent: 'info' }),
-          D.kpi({ label: 'Replaces', value: '—', accent: 'success' }),
-          D.kpi({ label: 'No Changes', value: '—' }),
-          D.kpi({ label: 'Dismissals', value: '—' }),
-          D.kpi({ label: 'Replace Failures', value: '—', accent: 'danger' }),
-        ], 3)}
+        ${D.sectionHeader('Mode Adoption', `<button class="d-btn d-btn-sm d-btn-ghost" onclick="App.pages.product._drillDownModes()">View details</button>`)}
+        <div class="d-chart-card" style="padding:var(--d-sp-5)">
+          ${D.horizontalBars(modes.map(m => ({
+            label: m.mode,
+            value: m.count,
+            color: modeColors[m.mode] || '#6b7280',
+          })))}
+        </div>
+      </div>
+
+      ${profiles.length > 0 ? `
+        <div class="d-section d-mt-6">
+          ${D.sectionHeader('Explanation Profiles')}
+          ${D.table({
+            title: 'Profile Comparison',
+            headers: ['Profile', { label: 'Requests', align: 'right' }, { label: '% of Total', align: 'right' }],
+            rows: profiles.map(p => ({
+              cells: [
+                `<strong>${D.fmt.escapeHtml(p.profile)}</strong>`,
+                D.fmt.num(p.count),
+                D.fmt.pct(totalReqs > 0 ? (p.count / totalReqs * 100) : 0),
+              ],
+            })),
+          })}
+        </div>
+      ` : ''}
+
+      ${languages.length > 0 ? `
+        <div class="d-section d-mt-6">
+          ${D.sectionHeader('Language Distribution')}
+          <div class="d-chart-card" style="padding:var(--d-sp-5)">
+            ${D.horizontalBars(languages.slice(0, 10).map((l, i) => ({
+              label: l.language,
+              value: l.count,
+              color: ['#e87830','#3b82f6','#10b981','#8b5cf6','#f59e0b','#ef4444','#06b6d4','#f97316','#84cc16','#ec4899'][i % 10],
+            })))}
+          </div>
+        </div>
+      ` : ''}
+
+      <div class="d-section d-mt-6" style="text-align:center;padding:var(--d-sp-4)">
+        <button class="d-btn d-btn-ghost" onclick="App.navigate('executive')">&#x2190; Executive Overview</button>
+        <button class="d-btn d-btn-ghost" onclick="App.navigate('ai')">AI Platform &#x2192;</button>
       </div>
     `;
+
+    requestAnimationFrame(() => {
+      const modeTotal = modeSegments.reduce((s, x) => s + x.value, 0);
+      const modeCanvas = document.getElementById('product-donut-mode');
+      if (modeCanvas && modeSegments.length) {
+        const body = modeCanvas.closest('.d-chart-body');
+        body.innerHTML = `<div class="d-donut-wrap"><canvas id="product-donut-mode" style="width:180px;height:180px"></canvas>${D.donutLegend(modeSegments, modeTotal)}</div>`;
+        D.renderDonutChart('product-donut-mode', modeSegments, { height: 180, centerLabel: D.fmt.num(modeTotal), centerSub: 'requests' });
+      }
+      const typeTotal = typeSegments.reduce((s, x) => s + x.value, 0);
+      const typeCanvas = document.getElementById('product-donut-type');
+      if (typeCanvas && typeSegments.length) {
+        const body = typeCanvas.closest('.d-chart-body');
+        body.innerHTML = `<div class="d-donut-wrap"><canvas id="product-donut-type" style="width:180px;height:180px"></canvas>${D.donutLegend(typeSegments, typeTotal)}</div>`;
+        D.renderDonutChart('product-donut-type', typeSegments, { height: 180, centerLabel: D.fmt.num(typeTotal), centerSub: 'requests' });
+      }
+    });
+  },
+
+  _drillDownModes() {
+    if (!this._lastData) return;
+    const modes = this._lastData.product.by_mode || [];
+    D.drillDown.open('Mode Details', `
+      <div style="margin-bottom:16px">
+        <button class="d-btn d-btn-sm" onclick="D.drillDown.exportData(${JSON.stringify(JSON.stringify(modes))}, 'modes.json')">Export JSON</button>
+        <button class="d-btn d-btn-sm" style="margin-left:8px" onclick="D.drillDown.exportData(JSON.parse('${JSON.stringify(JSON.stringify(modes))}'), 'modes.csv', 'csv')">Export CSV</button>
+      </div>
+      ${D.table({
+        headers: ['Mode', { label: 'Requests', align: 'right' }, { label: 'Users', align: 'right' }, { label: 'Avg Latency', align: 'right' }],
+        rows: modes.map(m => ({ cells: [m.mode, D.fmt.num(m.count), D.fmt.num(m.users), D.fmt.latency(m.avg_latency_ms)] })),
+      })}
+    `);
   },
 };
 
 
-/* ── AI Platform ── */
+/* ═══════════════════════════════════════════════════════════
+   AI PLATFORM — Live Data
+   ═══════════════════════════════════════════════════════════ */
 
 App.pages.ai = {
-  render() {
+  _lastData: null,
+
+  async render() {
     const el = document.getElementById('page-ai');
+    el.innerHTML = `
+      ${D.globalFilterBar()}
+      ${D.sectionHeader('Platform Health')}
+      ${D.kpiLoading(4, 4)}
+      <div class="d-section d-mt-6">${D.sectionHeader('Providers')}${D.chartLoading(2, 2)}</div>
+      <div class="d-section d-mt-6">${D.sectionHeader('Models')}${D.tableLoading(6)}</div>`;
+
+    try {
+      const [ai, quality, live] = await Promise.all([
+        D.api.fetch(D.api.url('/api/v2/analytics/ai-platform')),
+        D.api.fetch(D.api.url('/api/v2/analytics/quality')),
+        D.api.fetch(D.api.url('/api/v2/analytics/live', { minutes: 60 })),
+      ]);
+      this._lastData = { ai, quality, live };
+      this._renderLive(el, ai, quality, live);
+    } catch (err) {
+      el.innerHTML = `${D.globalFilterBar()}${D.error('Failed to load AI platform data', err.message, "App.pages.ai.render()")}`;
+    }
+  },
+
+  _renderLive(el, ai, quality, live) {
+    const providers = ai.by_provider || [];
+    const models = ai.by_model || [];
+    const errors = ai.errors || [];
+    const lat = quality.latency || {};
+
+    const totalReqs = providers.reduce((s, p) => s + p.count, 0);
+    const totalSuccess = providers.reduce((s, p) => s + p.successful, 0);
+    const successRate = totalReqs > 0 ? (totalSuccess / totalReqs * 100) : 0;
+
+    const provColors = p => {
+      if (p.includes('anthropic')) return '#e87830';
+      if (p.includes('groq')) return '#3b82f6';
+      if (p.includes('openai')) return '#10b981';
+      return '#8b5cf6';
+    };
+
+    const provSegments = providers.map(p => ({ label: p.provider, value: p.count, color: provColors(p.provider) }));
+
+    // Daily quality trend for stacked chart
+    const dailyTrend = quality.daily_trend || [];
+    const dailyLabels = dailyTrend.map(d => D.fmt.dateShort(d.date));
+    const dailySuccess = dailyTrend.map(d => d.successful);
+    const dailyFailed = dailyTrend.map(d => d.total - d.successful);
+
     el.innerHTML = `
       ${D.globalFilterBar()}
 
       ${D.sectionHeader('Platform Health')}
       ${D.kpiGrid([
-        D.kpi({ label: 'Requests (24h)', value: '—', accent: 'brand' }),
-        D.kpi({ label: 'Success Rate', value: '—', accent: 'success' }),
-        D.kpi({ label: 'p50 Latency', value: '—' }),
-        D.kpi({ label: 'p95 Latency', value: '—', accent: 'warning' }),
+        D.kpi({ label: 'Total Requests', value: D.fmt.num(totalReqs), accent: 'brand' }),
+        D.kpi({ label: 'Success Rate', value: D.fmt.pct(successRate), accent: successRate >= 95 ? 'success' : 'warning' }),
+        D.kpi({ label: 'p50 Latency', value: D.fmt.latency(lat.p50_ms), sub: 'Median response time' }),
+        D.kpi({ label: 'p95 Latency', value: D.fmt.latency(lat.p95_ms), sub: 'p99: ' + D.fmt.latency(lat.p99_ms), accent: lat.p95_ms > 5000 ? 'danger' : 'warning' }),
       ], 4)}
 
-      <div class="d-section d-mt-6">
-        ${D.sectionHeader('Provider Performance')}
-        ${D.chartGrid([
-          D.chartCard({ title: 'Provider Latency', placeholder: 'Coming in Phase 2' }),
-          D.chartCard({ title: 'Provider Error Rate', placeholder: 'Coming in Phase 2' }),
-        ], 2)}
-
-        <div class="d-mt-4">
-          ${D.table({
-            title: 'Provider Analytics',
-            headers: ['Provider', 'Model', {label: 'Requests', align: 'right'}, {label: 'Success %', align: 'right'}, {label: 'Avg Latency', align: 'right'}, {label: 'Avg Tokens', align: 'right'}, {label: 'Est. Cost', align: 'right'}],
-            rows: [],
-            emptyText: 'Coming in Phase 2',
-          })}
-        </div>
+      <div class="d-mt-6">
+        ${D.kpiGrid([
+          D.kpi({ label: 'Min Latency', value: D.fmt.latency(lat.min_ms), accent: 'success' }),
+          D.kpi({ label: 'Max Latency', value: D.fmt.latency(lat.max_ms), accent: 'danger' }),
+          D.kpi({ label: 'Avg Latency', value: D.fmt.latency(lat.avg_ms) }),
+          D.kpi({ label: 'Live (1h)', value: D.fmt.num(live.stats?.total_requests || 0), sub: D.fmt.pct(live.stats?.success_rate) + ' success', accent: 'info' }),
+        ], 4)}
       </div>
 
       <div class="d-section d-mt-6">
-        ${D.sectionHeader('Error Breakdown')}
+        ${D.sectionHeader('Provider Distribution')}
+        ${D.chartGrid([
+          D.chartCard({ title: 'Requests by Provider', canvasId: 'ai-donut-provider', height: 260, placeholder: false }),
+          D.chartCard({ title: 'Success vs Failure Trend', canvasId: 'ai-stacked-trend', height: 220 }),
+        ], 2)}
+      </div>
+
+      <div class="d-section d-mt-6">
+        ${D.sectionHeader('Provider Performance', `<button class="d-btn d-btn-sm d-btn-ghost" onclick="App.pages.ai._drillDownProviders()">Export</button>`)}
         ${D.table({
-          title: 'Errors by Type',
-          headers: ['Error Type', {label: 'Count', align: 'right'}, {label: '% of Errors', align: 'right'}],
-          rows: [],
-          emptyText: 'Coming in Phase 2',
+          headers: [
+            'Provider',
+            { label: 'Requests', align: 'right' },
+            { label: 'Success %', align: 'right' },
+            { label: 'Avg Latency', align: 'right' },
+            { label: 'Prompt Tokens', align: 'right' },
+            { label: 'Compl. Tokens', align: 'right' },
+            { label: 'Cost', align: 'right' },
+          ],
+          rows: providers.map(p => ({
+            cells: [
+              `<strong style="color:${provColors(p.provider)}">${D.fmt.escapeHtml(p.provider)}</strong>`,
+              D.fmt.num(p.count),
+              D.badge(D.fmt.pct(p.success_rate), p.success_rate >= 95 ? 'success' : p.success_rate >= 80 ? 'warning' : 'danger'),
+              D.fmt.latency(p.avg_latency_ms),
+              D.fmt.num(p.prompt_tokens),
+              D.fmt.num(p.completion_tokens),
+              D.fmt.usd(p.total_cost_usd),
+            ],
+          })),
+          emptyText: 'No provider data',
         })}
       </div>
+
+      ${models.length > 0 ? `
+        <div class="d-section d-mt-6">
+          ${D.sectionHeader('Model Analytics')}
+          ${D.table({
+            headers: [
+              'Model', 'Provider',
+              { label: 'Requests', align: 'right' },
+              { label: 'Success %', align: 'right' },
+              { label: 'Avg Latency', align: 'right' },
+              { label: 'Cost', align: 'right' },
+            ],
+            rows: models.map(m => ({
+              clickable: true,
+              onclick: `App.pages.ai._drillDownModel('${D.fmt.escapeHtml(m.model)}')`,
+              cells: [
+                `<span class="d-text-mono">${D.fmt.escapeHtml(m.model)}</span>`,
+                D.fmt.escapeHtml(m.provider),
+                D.fmt.num(m.count),
+                D.badge(D.fmt.pct(m.success_rate), m.success_rate >= 95 ? 'success' : 'danger'),
+                D.fmt.latency(m.avg_latency_ms),
+                D.fmt.usd(m.total_cost_usd),
+              ],
+            })),
+          })}
+        </div>
+      ` : ''}
+
+      ${errors.length > 0 ? `
+        <div class="d-section d-mt-6">
+          ${D.sectionHeader('Error Breakdown')}
+          <div class="d-chart-card" style="padding:var(--d-sp-5)">
+            ${D.horizontalBars(errors.map(e => ({
+              label: e.error_type + ' (' + e.provider + ')',
+              value: e.count,
+              color: '#ef4444',
+            })))}
+          </div>
+        </div>
+      ` : ''}
+
+      <div class="d-section d-mt-6" style="text-align:center;padding:var(--d-sp-4)">
+        <button class="d-btn d-btn-ghost" onclick="App.navigate('product')">&#x2190; Product</button>
+        <button class="d-btn d-btn-ghost" onclick="App.navigate('quality')">Quality &#x2192;</button>
+      </div>
     `;
+
+    requestAnimationFrame(() => {
+      const provTotal = provSegments.reduce((s, x) => s + x.value, 0);
+      const pCanvas = document.getElementById('ai-donut-provider');
+      if (pCanvas && provSegments.length) {
+        const body = pCanvas.closest('.d-chart-body');
+        body.innerHTML = `<div class="d-donut-wrap"><canvas id="ai-donut-provider" style="width:180px;height:180px"></canvas>${D.donutLegend(provSegments, provTotal)}</div>`;
+        D.renderDonutChart('ai-donut-provider', provSegments, { height: 180, centerLabel: D.fmt.num(provTotal), centerSub: 'requests' });
+      }
+      if (dailySuccess.length) {
+        D.renderStackedAreaChart('ai-stacked-trend', [
+          { data: dailySuccess, color: '#10b981', label: 'Success' },
+          { data: dailyFailed, color: '#ef4444', label: 'Failed' },
+        ], { labels: dailyLabels, height: 220 });
+        // Add legend below chart
+        const stackCanvas = document.getElementById('ai-stacked-trend');
+        if (stackCanvas) {
+          stackCanvas.parentElement.insertAdjacentHTML('afterend',
+            D.chartLegend([{ color: '#10b981', label: 'Success' }, { color: '#ef4444', label: 'Failed' }])
+          );
+        }
+      }
+    });
+  },
+
+  _drillDownProviders() {
+    if (!this._lastData) return;
+    D.drillDown.exportData(this._lastData.ai.by_provider, 'ai-providers.json');
+  },
+
+  _drillDownModel(model) {
+    if (!this._lastData) return;
+    const m = this._lastData.ai.by_model?.find(x => x.model === model);
+    if (!m) return;
+    D.drillDown.open(`Model: ${model}`, `
+      ${D.statRow([
+        { label: 'Requests', value: D.fmt.num(m.count) },
+        { label: 'Success', value: D.fmt.pct(m.success_rate), color: m.success_rate >= 95 ? 'var(--d-success)' : 'var(--d-danger)' },
+        { label: 'Latency', value: D.fmt.latency(m.avg_latency_ms) },
+        { label: 'Cost', value: D.fmt.usd(m.total_cost_usd) },
+      ])}
+      <div class="d-mt-6">
+        ${D.sectionHeader('Token Usage')}
+        ${D.statRow([
+          { label: 'Prompt', value: D.fmt.num(m.prompt_tokens) },
+          { label: 'Completion', value: D.fmt.num(m.completion_tokens) },
+          { label: 'Total', value: D.fmt.num(m.prompt_tokens + m.completion_tokens) },
+        ])}
+      </div>
+      <div class="d-mt-6">
+        <button class="d-btn d-btn-sm" onclick="D.drillDown.exportData(${JSON.stringify(JSON.stringify(m))}, '${model}.json')">Export JSON</button>
+      </div>
+    `);
   },
 };
 
 
-/* ── Users ── */
+/* ═══════════════════════════════════════════════════════════
+   USERS — Live Data
+   ═══════════════════════════════════════════════════════════ */
 
 App.pages.users = {
-  render() {
+  _lastData: null,
+  _page: 0,
+  _limit: 25,
+
+  async render() {
     const el = document.getElementById('page-users');
     el.innerHTML = `
       ${D.globalFilterBar()}
+      ${D.sectionHeader('Users')}
+      ${D.kpiLoading(4, 4)}
+      <div class="d-section d-mt-6">${D.tableLoading(6, 5)}</div>`;
 
-      <div class="d-flex d-items-center d-justify-between d-mb-6">
-        <div class="d-filters" style="margin-bottom:0">
-          <button class="d-filter-btn active">All Users</button>
-          <button class="d-filter-btn">Active</button>
-          <button class="d-filter-btn">Power</button>
-          <button class="d-filter-btn">Dormant</button>
-        </div>
-        <button class="d-btn d-btn-primary" onclick="App.pages.users.showInvite()">+ Generate Invite</button>
-      </div>
-
-      ${D.sectionHeader('User Lifecycle')}
-      ${D.kpiGrid([
-        D.kpi({ label: 'Total Users', value: '—', accent: 'brand' }),
-        D.kpi({ label: 'Active', value: '—', accent: 'success' }),
-        D.kpi({ label: 'Power Users', value: '—', accent: 'purple' }),
-        D.kpi({ label: 'Dormant', value: '—', accent: 'warning' }),
-      ], 4)}
-
-      <div class="d-section d-mt-6">
-        ${D.table({
-          title: 'All Users',
-          headers: [
-            'User', 'Status', {label: 'Requests', align: 'right'},
-            {label: 'Avg Latency', align: 'right'}, {label: 'Est. Cost', align: 'right'},
-            'Last Active',
-          ],
-          rows: [],
-          emptyText: 'Coming in Phase 2',
-        })}
-      </div>
-    `;
+    try {
+      const [users, settings] = await Promise.all([
+        D.api.fetch(D.api.url('/api/v2/analytics/users', { limit: this._limit, offset: this._page * this._limit })),
+        D.api.fetch('/api/v2/analytics/settings'),
+      ]);
+      this._lastData = { users, settings };
+      this._renderLive(el, users, settings);
+    } catch (err) {
+      el.innerHTML = `${D.globalFilterBar()}${D.error('Failed to load user data', err.message, "App.pages.users.render()")}`;
+    }
   },
 
-  showInvite() {
-    alert('Invite generation will be connected in a future milestone.');
-  },
-};
+  _renderLive(el, users, settings) {
+    const userList = users.users || [];
+    const totalCount = users.total_count || 0;
+    const totalUsers = settings.users?.total || 0;
+    const activeUsers = settings.users?.active || 0;
 
+    // Classify users by request volume
+    const powerUsers = userList.filter(u => u.total_requests >= 20).length;
+    const dormantUsers = userList.filter(u => u.total_requests <= 2).length;
 
-/* ── Workspaces ── */
+    const avatarColors = ['#e87830', '#3b82f6', '#10b981', '#8b5cf6', '#f59e0b', '#ef4444', '#06b6d4', '#ec4899'];
 
-App.pages.workspaces = {
-  render() {
-    const el = document.getElementById('page-workspaces');
     el.innerHTML = `
       ${D.globalFilterBar()}
 
-      ${D.sectionHeader('Overview')}
+      ${D.sectionHeader('User Overview')}
       ${D.kpiGrid([
-        D.kpi({ label: 'Total Workspaces', value: '—', accent: 'brand' }),
-        D.kpi({ label: 'File Workspaces', value: '—' }),
-        D.kpi({ label: 'Directory Workspaces', value: '—', accent: 'info' }),
-        D.kpi({ label: 'Active (7d)', value: '—', accent: 'success' }),
+        D.kpi({ label: 'Total Users', value: D.fmt.num(totalUsers), accent: 'brand' }),
+        D.kpi({ label: 'Active Users', value: D.fmt.num(activeUsers), accent: 'success' }),
+        D.kpi({ label: 'Users in Period', value: D.fmt.num(totalCount), sub: 'With requests', accent: 'info' }),
+        D.kpi({ label: 'Avg Req/User', value: totalCount > 0 ? D.fmt.num(Math.round(userList.reduce((s, u) => s + u.total_requests, 0) / userList.length)) : '—' }),
       ], 4)}
 
       <div class="d-section d-mt-6">
-        ${D.sectionHeader('Project Intelligence')}
+        ${D.sectionHeader('User Activity Distribution')}
         ${D.chartGrid([
-          D.chartCard({ title: 'Workspace Growth', placeholder: 'Coming in Phase 2' }),
-          D.chartCard({ title: 'Workspace Kind Distribution', placeholder: 'Coming in Phase 2' }),
+          D.chartCard({ title: 'Requests per User', canvasId: 'users-bar-requests', height: 220 }),
+          D.chartCard({ title: 'Cost per User', canvasId: 'users-bar-cost', height: 220 }),
         ], 2)}
       </div>
+
+      <div class="d-section d-mt-6">
+        ${D.sectionHeader('All Users', `
+          <span class="d-text-dim" style="font-size:11px">${D.fmt.num(totalCount)} total</span>
+          <button class="d-btn d-btn-sm d-btn-ghost" onclick="App.pages.users._exportUsers()">Export</button>
+        `)}
+        ${userList.length > 0 ? D.table({
+          headers: [
+            'User',
+            { label: 'Requests', align: 'right' },
+            { label: 'Success', align: 'right' },
+            { label: 'Avg Latency', align: 'right' },
+            { label: 'Cost', align: 'right' },
+            'Last Active',
+          ],
+          rows: userList.map((u, i) => ({
+            clickable: true,
+            onclick: `App.pages.users._drillDownUser('${u.user_id}')`,
+            cells: [
+              `<div class="d-user-cell">
+                <div class="d-avatar" style="background:${avatarColors[i % avatarColors.length]}">${D.fmt.initials(u.name, u.email)}</div>
+                <div><div class="d-user-name">${D.fmt.escapeHtml(u.name || 'Unknown')}</div><div class="d-user-email">${D.fmt.escapeHtml(u.email || u.user_id.substring(0, 8))}</div></div>
+              </div>`,
+              D.fmt.num(u.total_requests),
+              D.badge(D.fmt.num(u.successful_requests), u.successful_requests === u.total_requests ? 'success' : 'warning'),
+              D.fmt.latency(u.avg_latency_ms),
+              D.fmt.usd(u.total_cost_usd),
+              D.fmt.timeAgo(u.last_active),
+            ],
+          })),
+        }) : D.empty(null, 'No users found', 'Adjust the date range to find users')}
+
+        ${totalCount > this._limit ? `
+          <div class="d-flex d-items-center d-justify-between" style="padding:12px 16px;border-top:1px solid var(--d-border)">
+            <button class="d-btn d-btn-sm" ${this._page === 0 ? 'disabled' : ''} onclick="App.pages.users._page--;App.pages.users.render()">&#x2190; Previous</button>
+            <span class="d-text-dim" style="font-size:12px">Page ${this._page + 1} of ${Math.ceil(totalCount / this._limit)}</span>
+            <button class="d-btn d-btn-sm" ${(this._page + 1) * this._limit >= totalCount ? 'disabled' : ''} onclick="App.pages.users._page++;App.pages.users.render()">Next &#x2192;</button>
+          </div>
+        ` : ''}
+      </div>
+
+      <div class="d-section d-mt-6" style="text-align:center;padding:var(--d-sp-4)">
+        <button class="d-btn d-btn-ghost" onclick="App.navigate('executive')">&#x2190; Executive</button>
+        <button class="d-btn d-btn-ghost" onclick="App.navigate('cost')">Cost &#x2192;</button>
+      </div>
     `;
+
+    requestAnimationFrame(() => {
+      if (userList.length) {
+        const sorted = [...userList].sort((a, b) => b.total_requests - a.total_requests).slice(0, 12);
+        D.renderBarChart('users-bar-requests', sorted.map(u => u.total_requests), {
+          labels: sorted.map(u => (u.name || u.email || '').substring(0, 10) || u.user_id.substring(0, 6)),
+          colors: '#e87830',
+          height: 220,
+          yFormat: v => D.fmt.num(Math.round(v)),
+        });
+        const costSorted = [...userList].sort((a, b) => (b.total_cost_usd || 0) - (a.total_cost_usd || 0)).slice(0, 12);
+        D.renderBarChart('users-bar-cost', costSorted.map(u => u.total_cost_usd || 0), {
+          labels: costSorted.map(u => (u.name || u.email || '').substring(0, 10) || u.user_id.substring(0, 6)),
+          colors: '#f59e0b',
+          height: 220,
+          yFormat: v => D.fmt.usdCompact(v),
+        });
+      }
+    });
+  },
+
+  async _drillDownUser(userId) {
+    D.drillDown.open('Loading user...', D.loading());
+    try {
+      const detail = await D.api.fetch(D.api.url(`/api/v2/analytics/users/${userId}`, { recent_limit: 30 }));
+      const u = detail.user || {};
+      const recentReqs = detail.recent_requests || [];
+      const dailyTrend = detail.daily_trend || [];
+
+      D.drillDown.open(`${u.name || u.email || 'User'}`, `
+        ${D.statRow([
+          { label: 'Requests', value: D.fmt.num(detail.total_requests) },
+          { label: 'Success Rate', value: D.fmt.pct(detail.success_rate), color: detail.success_rate >= 95 ? 'var(--d-success)' : 'var(--d-danger)' },
+          { label: 'Status', value: u.status || '—' },
+        ])}
+
+        <div class="d-mt-6">
+          ${D.sectionHeader('Activity Trend')}
+          <div style="height:120px"><canvas id="user-drill-trend" style="width:100%;height:120px"></canvas></div>
+        </div>
+
+        ${detail.by_mode?.length ? `
+          <div class="d-mt-6">
+            ${D.sectionHeader('Mode Usage')}
+            ${D.horizontalBars(detail.by_mode.map(m => ({ label: m.mode, value: m.count, color: '#e87830' })))}
+          </div>
+        ` : ''}
+
+        ${recentReqs.length ? `
+          <div class="d-mt-6">
+            ${D.sectionHeader('Recent Requests')}
+            ${D.table({
+              headers: ['Type', 'Status', { label: 'Latency', align: 'right' }, 'Time'],
+              rows: recentReqs.slice(0, 15).map(r => ({
+                cells: [
+                  r.request_type,
+                  r.success ? D.badge('OK', 'success') : D.badge(r.error_type || 'FAIL', 'danger'),
+                  D.fmt.latency(r.latency_ms),
+                  D.fmt.timeAgo(r.created_at),
+                ],
+              })),
+            })}
+          </div>
+        ` : ''}
+
+        <div class="d-mt-6">
+          <button class="d-btn d-btn-sm" onclick="D.drillDown.exportData(JSON.parse('${JSON.stringify(JSON.stringify(detail))}'), 'user-${userId}.json')">Export JSON</button>
+        </div>
+      `);
+
+      requestAnimationFrame(() => {
+        if (dailyTrend.length) {
+          D.renderAreaChart('user-drill-trend', dailyTrend.map(d => d.requests), {
+            labels: dailyTrend.map(d => D.fmt.dateShort(d.date)),
+            height: 120,
+            color: '#3b82f6',
+            yFormat: v => D.fmt.num(Math.round(v)),
+          });
+        }
+      });
+    } catch (err) {
+      D.drillDown.open('Error', D.error('Failed to load user', err.message));
+    }
+  },
+
+  _exportUsers() {
+    if (!this._lastData) return;
+    D.drillDown.exportData(this._lastData.users.users, 'users.csv', 'csv');
   },
 };
 
 
-/* ── Quality & Errors ── */
+/* ═══════════════════════════════════════════════════════════
+   WORKSPACES — Data-driven from API
+   ═══════════════════════════════════════════════════════════ */
+
+App.pages.workspaces = {
+  _lastData: null,
+
+  async render() {
+    const el = document.getElementById('page-workspaces');
+    el.innerHTML = `
+      ${D.globalFilterBar()}
+      ${D.sectionHeader('Overview')}
+      ${D.kpiLoading(4, 4)}`;
+
+    try {
+      // Workspaces use product data (mode=session → workspace context)
+      const [product, exec] = await Promise.all([
+        D.api.fetch(D.api.url('/api/v2/analytics/product')),
+        D.api.fetch(D.api.url('/api/v2/analytics/executive')),
+      ]);
+      this._lastData = { product, exec };
+      this._renderLive(el, product, exec);
+    } catch (err) {
+      el.innerHTML = `${D.globalFilterBar()}${D.error('Failed to load workspace data', err.message, "App.pages.workspaces.render()")}`;
+    }
+  },
+
+  _renderLive(el, product, exec) {
+    const modes = product.by_mode || [];
+    const sessionMode = modes.find(m => m.mode === 'session') || { count: 0, users: 0 };
+    const languages = product.by_language || [];
+    const types = product.by_request_type || [];
+
+    // Session mode represents workspace usage
+    const enrichments = types.find(t => t.request_type === 'enrichment') || { count: 0 };
+
+    el.innerHTML = `
+      ${D.globalFilterBar()}
+
+      ${D.sectionHeader('Workspace Activity')}
+      ${D.kpiGrid([
+        D.kpi({ label: 'Session Requests', value: D.fmt.num(sessionMode.count), sub: 'Workspace-based queries', accent: 'brand' }),
+        D.kpi({ label: 'Session Users', value: D.fmt.num(sessionMode.users), sub: 'Active workspace users', accent: 'info' }),
+        D.kpi({ label: 'Enrichment Jobs', value: D.fmt.num(enrichments.count), sub: 'Background knowledge gen', accent: 'purple' }),
+        D.kpi({ label: 'Languages', value: D.fmt.num(languages.length), sub: 'Distinct languages', accent: 'success' }),
+      ], 4)}
+
+      ${languages.length > 0 ? `
+        <div class="d-section d-mt-6">
+          ${D.sectionHeader('Language Distribution')}
+          ${D.chartGrid([
+            D.chartCard({ title: 'Top Languages', canvasId: 'ws-donut-lang', height: 260, placeholder: false }),
+            D.chartCard({ title: 'Language Volume', canvasId: 'ws-bar-lang', height: 220 }),
+          ], 2)}
+        </div>
+      ` : ''}
+
+      <div class="d-section d-mt-6">
+        ${D.sectionHeader('Session Mode Performance')}
+        <div class="d-chart-card" style="padding:var(--d-sp-5)">
+          ${D.horizontalBars(modes.filter(m => m.count > 0).map(m => ({
+            label: m.mode,
+            value: m.count,
+            color: m.mode === 'session' ? '#3b82f6' : m.mode === 'selection' ? '#e87830' : '#8b5cf6',
+          })))}
+        </div>
+      </div>
+
+      <div class="d-section d-mt-6">
+        ${D.sectionHeader('Note')}
+        <div class="d-chart-card" style="padding:var(--d-sp-5)">
+          <p style="font-size:13px;color:var(--d-text-2)">
+            Workspace-level analytics (file counts, indexing health, per-workspace metrics) require client-side telemetry.
+            Current data shows server-side Session Mode and language usage as proxies for workspace activity.
+          </p>
+        </div>
+      </div>
+
+      <div class="d-section d-mt-6" style="text-align:center;padding:var(--d-sp-4)">
+        <button class="d-btn d-btn-ghost" onclick="App.navigate('product')">&#x2190; Product</button>
+        <button class="d-btn d-btn-ghost" onclick="App.navigate('quality')">Quality &#x2192;</button>
+      </div>
+    `;
+
+    requestAnimationFrame(() => {
+      if (languages.length) {
+        const langColors = ['#e87830','#3b82f6','#10b981','#8b5cf6','#f59e0b','#ef4444','#06b6d4','#ec4899','#84cc16','#f97316'];
+        const langSegs = languages.slice(0, 8).map((l, i) => ({ label: l.language, value: l.count, color: langColors[i % langColors.length] }));
+        const langTotal = langSegs.reduce((s, x) => s + x.value, 0);
+        const lCanvas = document.getElementById('ws-donut-lang');
+        if (lCanvas) {
+          const body = lCanvas.closest('.d-chart-body');
+          body.innerHTML = `<div class="d-donut-wrap"><canvas id="ws-donut-lang" style="width:180px;height:180px"></canvas>${D.donutLegend(langSegs, langTotal)}</div>`;
+          D.renderDonutChart('ws-donut-lang', langSegs, { height: 180, centerLabel: D.fmt.num(langTotal), centerSub: 'files' });
+        }
+        D.renderBarChart('ws-bar-lang', languages.slice(0, 10).map(l => l.count), {
+          labels: languages.slice(0, 10).map(l => l.language),
+          colors: langColors,
+          height: 220,
+          yFormat: v => D.fmt.num(Math.round(v)),
+        });
+      }
+    });
+  },
+};
+
+
+/* ═══════════════════════════════════════════════════════════
+   QUALITY & ERRORS — Live Data
+   ═══════════════════════════════════════════════════════════ */
 
 App.pages.quality = {
-  render() {
+  _lastData: null,
+
+  async render() {
     const el = document.getElementById('page-quality');
+    el.innerHTML = `
+      ${D.globalFilterBar()}
+      ${D.sectionHeader('Reliability')}
+      ${D.kpiLoading(4, 4)}
+      <div class="d-section d-mt-6">${D.sectionHeader('Trends')}${D.chartLoading(2, 2)}</div>`;
+
+    try {
+      const [quality, live] = await Promise.all([
+        D.api.fetch(D.api.url('/api/v2/analytics/quality')),
+        D.api.fetch(D.api.url('/api/v2/analytics/live', { minutes: 60, limit: 50 })),
+      ]);
+      this._lastData = { quality, live };
+      this._renderLive(el, quality, live);
+    } catch (err) {
+      el.innerHTML = `${D.globalFilterBar()}${D.error('Failed to load quality data', err.message, "App.pages.quality.render()")}`;
+    }
+  },
+
+  _renderLive(el, quality, live) {
+    const rel = quality.reliability || {};
+    const lat = quality.latency || {};
+    const errors = quality.errors || [];
+    const dailyTrend = quality.daily_trend || [];
+    const totalErrors = rel.failed || 0;
+
+    const dailyLabels = dailyTrend.map(d => D.fmt.dateShort(d.date));
+    const dailySuccessRate = dailyTrend.map(d => d.success_rate);
+    const dailyLatency = dailyTrend.map(d => d.avg_latency_ms);
+
+    // Recent failed requests from live
+    const failedReqs = (live.requests || []).filter(r => !r.success).slice(0, 10);
+
     el.innerHTML = `
       ${D.globalFilterBar()}
 
       ${D.sectionHeader('Reliability')}
       ${D.kpiGrid([
-        D.kpi({ label: 'Success Rate', value: '—', accent: 'success' }),
-        D.kpi({ label: 'Total Errors', value: '—', accent: 'danger' }),
-        D.kpi({ label: 'Client Errors', value: '—', accent: 'warning' }),
-        D.kpi({ label: 'Avg Latency', value: '—' }),
+        D.kpi({ label: 'Success Rate', value: D.fmt.pct(rel.success_rate), accent: rel.success_rate >= 95 ? 'success' : rel.success_rate >= 80 ? 'warning' : 'danger' }),
+        D.kpi({ label: 'Total Requests', value: D.fmt.num(rel.total_requests), accent: 'brand' }),
+        D.kpi({ label: 'Failed Requests', value: D.fmt.num(totalErrors), accent: totalErrors === 0 ? 'success' : 'danger' }),
+        D.kpi({ label: 'Avg Latency', value: D.fmt.latency(lat.avg_ms) }),
       ], 4)}
 
+      <div class="d-mt-6">
+        ${D.kpiGrid([
+          D.kpi({ label: 'p50 Latency', value: D.fmt.latency(lat.p50_ms), sub: 'Median', accent: 'success' }),
+          D.kpi({ label: 'p95 Latency', value: D.fmt.latency(lat.p95_ms), sub: '95th percentile', accent: lat.p95_ms > 5000 ? 'danger' : 'warning' }),
+          D.kpi({ label: 'p99 Latency', value: D.fmt.latency(lat.p99_ms), sub: '99th percentile', accent: 'danger' }),
+          D.kpi({ label: 'Range', value: D.fmt.latency(lat.min_ms) + ' – ' + D.fmt.latency(lat.max_ms), sub: 'Min – Max' }),
+        ], 4)}
+      </div>
+
       <div class="d-section d-mt-6">
-        ${D.sectionHeader('Error Analysis')}
+        ${D.sectionHeader('Trends')}
         ${D.chartGrid([
-          D.chartCard({ title: 'Error Trend', placeholder: 'Coming in Phase 2' }),
-          D.chartCard({ title: 'Error Type Distribution', placeholder: 'Coming in Phase 2' }),
+          D.chartCard({ title: 'Success Rate over Time', canvasId: 'quality-line-success', height: 220 }),
+          D.chartCard({ title: 'Avg Latency over Time', canvasId: 'quality-line-latency', height: 220 }),
         ], 2)}
       </div>
 
-      <div class="d-section d-mt-6">
-        ${D.table({
-          title: 'Error Breakdown',
-          headers: ['Error Type', {label: 'Count', align: 'right'}, {label: '% of Errors', align: 'right'}],
-          rows: [],
-          emptyText: 'Coming in Phase 2',
-        })}
+      ${errors.length > 0 ? `
+        <div class="d-section d-mt-6">
+          ${D.sectionHeader('Error Distribution', `<button class="d-btn d-btn-sm d-btn-ghost" onclick="App.pages.quality._exportErrors()">Export</button>`)}
+          ${D.chartGrid([
+            D.chartCard({ title: 'Error Types', canvasId: 'quality-donut-errors', height: 260, placeholder: false }),
+            D.chartCard({ title: 'Error Volume', canvasId: 'quality-bar-errors', height: 220 }),
+          ], 2)}
+        </div>
+      ` : ''}
+
+      ${failedReqs.length > 0 ? `
+        <div class="d-section d-mt-6">
+          ${D.sectionHeader('Recent Failures (Last Hour)')}
+          ${D.table({
+            headers: [
+              'Error', 'Mode', 'Provider',
+              { label: 'Latency', align: 'right' }, 'Time',
+            ],
+            rows: failedReqs.map(r => ({
+              cells: [
+                `<span class="d-text-danger">${D.fmt.escapeHtml(r.error_type || 'unknown')}</span>`,
+                r.origin_mode || '—',
+                `<span class="d-text-mono">${D.fmt.escapeHtml(r.ai_provider)}</span>`,
+                D.fmt.latency(r.latency_ms),
+                D.fmt.timeAgo(r.created_at),
+              ],
+            })),
+          })}
+        </div>
+      ` : ''}
+
+      <div class="d-section d-mt-6" style="text-align:center;padding:var(--d-sp-4)">
+        <button class="d-btn d-btn-ghost" onclick="App.navigate('ai')">&#x2190; AI Platform</button>
+        <button class="d-btn d-btn-ghost" onclick="App.navigate('cost')">Cost &#x2192;</button>
       </div>
     `;
+
+    requestAnimationFrame(() => {
+      if (dailySuccessRate.length) {
+        D.renderAreaChart('quality-line-success', dailySuccessRate, {
+          labels: dailyLabels,
+          height: 220,
+          color: '#10b981',
+          min: Math.max(0, Math.min(...dailySuccessRate) - 5),
+          yFormat: v => D.fmt.pct(v, 0),
+        });
+      }
+      if (dailyLatency.length) {
+        D.renderAreaChart('quality-line-latency', dailyLatency, {
+          labels: dailyLabels,
+          height: 220,
+          color: '#f59e0b',
+          yFormat: v => D.fmt.latency(v),
+        });
+      }
+      if (errors.length) {
+        const errorColors = ['#ef4444','#f97316','#f59e0b','#84cc16','#8b5cf6','#ec4899','#06b6d4'];
+        const errSegs = errors.map((e, i) => ({ label: e.error_type, value: e.count, color: errorColors[i % errorColors.length] }));
+        const errCanvas = document.getElementById('quality-donut-errors');
+        if (errCanvas) {
+          const body = errCanvas.closest('.d-chart-body');
+          body.innerHTML = `<div class="d-donut-wrap"><canvas id="quality-donut-errors" style="width:180px;height:180px"></canvas>${D.donutLegend(errSegs, totalErrors)}</div>`;
+          D.renderDonutChart('quality-donut-errors', errSegs, { height: 180, centerLabel: D.fmt.num(totalErrors), centerSub: 'errors' });
+        }
+        D.renderBarChart('quality-bar-errors', errors.map(e => e.count), {
+          labels: errors.map(e => e.error_type.substring(0, 14)),
+          colors: '#ef4444',
+          height: 220,
+          yFormat: v => D.fmt.num(Math.round(v)),
+        });
+      }
+    });
+  },
+
+  _exportErrors() {
+    if (!this._lastData) return;
+    D.drillDown.exportData(this._lastData.quality.errors, 'errors.csv', 'csv');
   },
 };
 
 
-/* ── Cost Intelligence ── */
+/* ═══════════════════════════════════════════════════════════
+   COST INTELLIGENCE — Live Data
+   ═══════════════════════════════════════════════════════════ */
 
 App.pages.cost = {
-  render() {
+  _lastData: null,
+
+  async render() {
     const el = document.getElementById('page-cost');
     el.innerHTML = `
       ${D.globalFilterBar()}
+      ${D.sectionHeader('Cost Overview')}
+      ${D.kpiLoading(4, 4)}
+      <div class="d-section d-mt-6">${D.sectionHeader('Trends')}${D.chartLoading(2, 2)}</div>`;
 
-      ${D.sectionHeader('Overview')}
+    try {
+      const [cost, exec] = await Promise.all([
+        D.api.fetch(D.api.url('/api/v2/analytics/cost')),
+        D.api.fetch(D.api.url('/api/v2/analytics/executive')),
+      ]);
+      this._lastData = { cost, exec };
+      this._renderLive(el, cost, exec);
+    } catch (err) {
+      el.innerHTML = `${D.globalFilterBar()}${D.error('Failed to load cost data', err.message, "App.pages.cost.render()")}`;
+    }
+  },
+
+  _renderLive(el, cost, exec) {
+    const totalCost = cost.total_cost_usd || 0;
+    const providers = cost.by_provider || [];
+    const models = cost.by_model || [];
+    const byType = cost.by_request_type || [];
+    const dailyTrend = cost.daily_trend || [];
+
+    const costPerReq = exec.total_requests > 0 ? totalCost / exec.total_requests : 0;
+    const costPerUser = exec.unique_users > 0 ? totalCost / exec.unique_users : 0;
+    const todayCost = dailyTrend.length > 0 ? dailyTrend[dailyTrend.length - 1].cost_usd : 0;
+
+    const dailyLabels = dailyTrend.map(d => D.fmt.dateShort(d.date));
+    const dailyCostData = dailyTrend.map(d => d.cost_usd);
+    // Cost per request trend
+    const dailyCPR = dailyTrend.map(d => d.requests > 0 ? d.cost_usd / d.requests : 0);
+
+    const provColors = ['#e87830','#3b82f6','#10b981','#8b5cf6','#f59e0b','#ef4444'];
+    const typeColors = { explain: '#e87830', followup: '#3b82f6', improve: '#10b981', vision: '#8b5cf6', enrichment: '#f59e0b', unknown: '#6b7280' };
+
+    el.innerHTML = `
+      ${D.globalFilterBar()}
+
+      ${D.sectionHeader('Cost Overview')}
       ${D.kpiGrid([
-        D.kpi({ label: 'Total Cost', value: '—', accent: 'brand' }),
-        D.kpi({ label: 'Cost Today', value: '—', accent: 'warning' }),
-        D.kpi({ label: 'Cost per Explanation', value: '—' }),
-        D.kpi({ label: 'Cost per Active User', value: '—', accent: 'info' }),
+        D.kpi({ label: 'Total Cost', value: D.fmt.usdCompact(totalCost), accent: 'brand', sparkData: dailyCostData }),
+        D.kpi({ label: 'Today\'s Cost', value: D.fmt.usd(todayCost), accent: 'warning' }),
+        D.kpi({ label: 'Cost / Request', value: D.fmt.usd(costPerReq, 4), sub: `${D.fmt.num(exec.total_requests)} requests` }),
+        D.kpi({ label: 'Cost / User', value: D.fmt.usd(costPerUser, 2), sub: `${D.fmt.num(exec.unique_users)} users`, accent: 'info' }),
       ], 4)}
 
       <div class="d-section d-mt-6">
         ${D.sectionHeader('Cost Trends')}
         ${D.chartGrid([
-          D.chartCard({ title: 'Daily Cost', placeholder: 'Coming in Phase 2' }),
-          D.chartCard({ title: 'Cost per Explanation Trend', placeholder: 'Coming in Phase 2' }),
+          D.chartCard({ title: 'Daily Cost', canvasId: 'cost-chart-daily', height: 220 }),
+          D.chartCard({ title: 'Cost per Request Trend', canvasId: 'cost-chart-cpr', height: 220 }),
         ], 2)}
       </div>
 
       <div class="d-section d-mt-6">
-        ${D.table({
-          title: 'Cost by Provider',
-          headers: ['Provider', {label: 'Total Cost', align: 'right'}, {label: 'Requests', align: 'right'}, {label: 'Cost/Request', align: 'right'}],
-          rows: [],
-          emptyText: 'Coming in Phase 2',
-        })}
+        ${D.sectionHeader('Cost Breakdown')}
+        ${D.chartGrid([
+          D.chartCard({ title: 'Cost by Provider', canvasId: 'cost-donut-provider', height: 260, placeholder: false }),
+          D.chartCard({ title: 'Cost by Request Type', canvasId: 'cost-donut-type', height: 260, placeholder: false }),
+        ], 2)}
+      </div>
+
+      ${providers.length > 0 ? `
+        <div class="d-section d-mt-6">
+          ${D.sectionHeader('Provider Economics', `<button class="d-btn d-btn-sm d-btn-ghost" onclick="App.pages.cost._exportProviders()">Export</button>`)}
+          ${D.table({
+            headers: [
+              'Provider',
+              { label: 'Cost', align: 'right' },
+              { label: 'Requests', align: 'right' },
+              { label: 'Cost/Req', align: 'right' },
+              { label: 'Prompt Tokens', align: 'right' },
+              { label: 'Compl. Tokens', align: 'right' },
+              { label: '% of Spend', align: 'right' },
+            ],
+            rows: providers.map(p => ({
+              cells: [
+                `<strong>${D.fmt.escapeHtml(p.provider)}</strong>`,
+                D.fmt.usd(p.cost_usd),
+                D.fmt.num(p.requests),
+                D.fmt.usd(p.requests > 0 ? p.cost_usd / p.requests : 0, 4),
+                D.fmt.num(p.prompt_tokens),
+                D.fmt.num(p.completion_tokens),
+                D.fmt.pct(totalCost > 0 ? (p.cost_usd / totalCost * 100) : 0),
+              ],
+            })),
+          })}
+        </div>
+      ` : ''}
+
+      ${models.length > 0 ? `
+        <div class="d-section d-mt-6">
+          ${D.sectionHeader('Model Economics')}
+          ${D.table({
+            headers: [
+              'Model',
+              { label: 'Cost', align: 'right' },
+              { label: 'Requests', align: 'right' },
+              { label: 'Cost/Req', align: 'right' },
+              { label: '% of Spend', align: 'right' },
+            ],
+            rows: models.map(m => ({
+              cells: [
+                `<span class="d-text-mono">${D.fmt.escapeHtml(m.model)}</span>`,
+                D.fmt.usd(m.cost_usd),
+                D.fmt.num(m.requests),
+                D.fmt.usd(m.requests > 0 ? m.cost_usd / m.requests : 0, 4),
+                D.fmt.pct(totalCost > 0 ? (m.cost_usd / totalCost * 100) : 0),
+              ],
+            })),
+          })}
+        </div>
+      ` : ''}
+
+      ${byType.length > 0 ? `
+        <div class="d-section d-mt-6">
+          ${D.sectionHeader('Cost by Request Type')}
+          <div class="d-chart-card" style="padding:var(--d-sp-5)">
+            ${D.horizontalBars(byType.map(t => ({
+              label: t.request_type,
+              value: t.cost_usd,
+              color: typeColors[t.request_type] || '#6b7280',
+            })), { valueFormat: v => D.fmt.usd(v) })}
+          </div>
+        </div>
+      ` : ''}
+
+      <div class="d-section d-mt-6" style="text-align:center;padding:var(--d-sp-4)">
+        <button class="d-btn d-btn-ghost" onclick="App.navigate('quality')">&#x2190; Quality</button>
+        <button class="d-btn d-btn-ghost" onclick="App.navigate('settings')">Settings &#x2192;</button>
       </div>
     `;
+
+    requestAnimationFrame(() => {
+      D.renderAreaChart('cost-chart-daily', dailyCostData, {
+        labels: dailyLabels,
+        height: 220,
+        color: '#f59e0b',
+        yFormat: v => D.fmt.usdCompact(v),
+      });
+      D.renderAreaChart('cost-chart-cpr', dailyCPR, {
+        labels: dailyLabels,
+        height: 220,
+        color: '#8b5cf6',
+        yFormat: v => D.fmt.usd(v, 4),
+      });
+
+      // Provider donut
+      if (providers.length) {
+        const provSegs = providers.map((p, i) => ({ label: p.provider, value: p.cost_usd, color: provColors[i % provColors.length] }));
+        const pCanvas = document.getElementById('cost-donut-provider');
+        if (pCanvas) {
+          const body = pCanvas.closest('.d-chart-body');
+          body.innerHTML = `<div class="d-donut-wrap"><canvas id="cost-donut-provider" style="width:180px;height:180px"></canvas>${D.donutLegend(provSegs, totalCost)}</div>`;
+          D.renderDonutChart('cost-donut-provider', provSegs, { height: 180, centerLabel: D.fmt.usdCompact(totalCost), centerSub: 'total' });
+        }
+      }
+      // Type donut
+      if (byType.length) {
+        const typeTot = byType.reduce((s, t) => s + t.cost_usd, 0);
+        const typeSegs = byType.map(t => ({ label: t.request_type, value: t.cost_usd, color: typeColors[t.request_type] || '#6b7280' }));
+        const tCanvas = document.getElementById('cost-donut-type');
+        if (tCanvas) {
+          const body = tCanvas.closest('.d-chart-body');
+          body.innerHTML = `<div class="d-donut-wrap"><canvas id="cost-donut-type" style="width:180px;height:180px"></canvas>${D.donutLegend(typeSegs, typeTot)}</div>`;
+          D.renderDonutChart('cost-donut-type', typeSegs, { height: 180, centerLabel: D.fmt.usdCompact(typeTot), centerSub: 'by type' });
+        }
+      }
+
+      D.renderSparklines(el);
+    });
+  },
+
+  _exportProviders() {
+    if (!this._lastData) return;
+    D.drillDown.exportData(this._lastData.cost.by_provider, 'cost-providers.csv', 'csv');
   },
 };
 
 
-/* ── Settings ── */
+/* ═══════════════════════════════════════════════════════════
+   SETTINGS — Live Data
+   ═══════════════════════════════════════════════════════════ */
 
 App.pages.settings = {
-  render() {
-    const el = document.getElementById('page-settings');
-    el.innerHTML = `
-      ${D.sectionHeader('Dashboard')}
-      <div class="d-chart-card">
-        <div style="padding: var(--d-sp-6)">
-          <h3 style="font-size:14px; font-weight:600; margin-bottom:var(--d-sp-4); color:var(--d-text-0)">Dashboard Settings</h3>
-          <p style="font-size:13px; color:var(--d-text-2); margin-bottom:var(--d-sp-6)">
-            Configuration options will be available in a future milestone.
-          </p>
+  _lastData: null,
 
-          <div style="margin-bottom:var(--d-sp-5)">
-            <label style="display:block; font-size:12px; font-weight:600; color:var(--d-text-2); margin-bottom:var(--d-sp-2)">API Connection</label>
-            <div class="d-flex d-items-center" style="gap:var(--d-sp-2)">
-              ${D.badge('Connected', 'success', true)}
-              <span style="font-size:12px; color:var(--d-text-3)">Reading from Analytics v2 API</span>
+  async render() {
+    const el = document.getElementById('page-settings');
+    el.innerHTML = `${D.sectionHeader('System Configuration')}${D.loading()}`;
+
+    try {
+      const settings = await D.api.fetch('/api/v2/analytics/settings');
+      this._lastData = settings;
+      this._renderLive(el, settings);
+    } catch (err) {
+      el.innerHTML = D.error('Failed to load settings', err.message, "App.pages.settings.render()");
+    }
+  },
+
+  _renderLive(el, s) {
+    const aiConfig = s.ai_config || {};
+    const data = s.data || {};
+    const users = s.users || {};
+
+    el.innerHTML = `
+      ${D.sectionHeader('System Configuration')}
+
+      ${D.kpiGrid([
+        D.kpi({ label: 'Total Users', value: D.fmt.num(users.total), accent: 'brand' }),
+        D.kpi({ label: 'Active Users', value: D.fmt.num(users.active), accent: 'success' }),
+        D.kpi({ label: 'V2 Requests', value: D.fmt.num(data.v2_ai_requests), accent: 'info' }),
+        D.kpi({ label: 'Legacy Requests', value: D.fmt.num(data.legacy_request_logs), accent: 'warning' }),
+      ], 4)}
+
+      <div class="d-section d-mt-6">
+        ${D.sectionHeader('Data Health')}
+        <div class="d-chart-card" style="padding:var(--d-sp-5)">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
+            <div>
+              <div style="font-size:12px;font-weight:600;color:var(--d-text-2);margin-bottom:8px">V2 Migration</div>
+              ${D.progressBar(data.v2_ai_requests, data.v2_ai_requests + data.legacy_request_logs, {
+                color: data.v2_ai_requests > 0 ? 'var(--d-success)' : 'var(--d-warning)',
+                label: data.v2_ai_requests > 0 ? D.fmt.pct(data.v2_ai_requests / (data.v2_ai_requests + data.legacy_request_logs) * 100) + ' migrated' : 'No v2 data yet',
+              })}
+              <div style="font-size:11px;color:var(--d-text-3);margin-top:8px">
+                ${D.fmt.num(data.v2_ai_requests)} v2 + ${D.fmt.num(data.legacy_request_logs)} legacy = ${D.fmt.num(data.v2_ai_requests + data.legacy_request_logs)} total
+              </div>
+            </div>
+            <div>
+              <div style="font-size:12px;font-weight:600;color:var(--d-text-2);margin-bottom:8px">Aggregation</div>
+              <div style="font-size:13px;color:var(--d-text-1)">
+                ${D.fmt.num(data.daily_summaries)} daily summaries
+              </div>
+              <div style="font-size:11px;color:var(--d-text-3);margin-top:4px">
+                Latest: ${data.latest_summary_date || 'None'}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="d-section d-mt-6">
+        ${D.sectionHeader('AI Configuration')}
+        <div class="d-chart-card">
+          ${D.table({
+            headers: ['Setting', 'Value'],
+            rows: [
+              { cells: ['<strong>Adapter</strong>', `<span class="d-text-mono">${D.fmt.escapeHtml(aiConfig.adapter || '—')}</span>`] },
+              { cells: ['<strong>Anthropic Model</strong>', `<span class="d-text-mono">${D.fmt.escapeHtml(aiConfig.anthropic_model || '—')}</span>`] },
+              { cells: ['<strong>Groq Model</strong>', `<span class="d-text-mono">${D.fmt.escapeHtml(aiConfig.groq_model || '—')}</span>`] },
+              { cells: ['<strong>Vision Provider</strong>', `<span class="d-text-mono">${D.fmt.escapeHtml(aiConfig.vision_provider || '—')}</span>`] },
+            ],
+          })}
+        </div>
+      </div>
+
+      <div class="d-section d-mt-6">
+        ${D.sectionHeader('Dashboard')}
+        <div class="d-chart-card" style="padding:var(--d-sp-6)">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
+            <div>
+              <div style="font-size:12px;font-weight:600;color:var(--d-text-2);margin-bottom:8px">API Connection</div>
+              <div class="d-flex d-items-center" style="gap:8px">
+                ${D.badge('Connected', 'success', true)}
+                <span style="font-size:12px;color:var(--d-text-3)">Analytics v2 API</span>
+              </div>
+            </div>
+            <div>
+              <div style="font-size:12px;font-weight:600;color:var(--d-text-2);margin-bottom:8px">Data Source</div>
+              <div class="d-flex d-items-center" style="gap:8px">
+                ${D.badge(s._source || 'v2', s._source === 'legacy' ? 'warning' : 'info', true)}
+              </div>
             </div>
           </div>
 
-          <div style="margin-bottom:var(--d-sp-5)">
-            <label style="display:block; font-size:12px; font-weight:600; color:var(--d-text-2); margin-bottom:var(--d-sp-2)">Keyboard Shortcuts</label>
-            <div style="font-size:12px; color:var(--d-text-3); line-height:2">
+          <div style="margin-top:20px">
+            <div style="font-size:12px;font-weight:600;color:var(--d-text-2);margin-bottom:8px">Keyboard Shortcuts</div>
+            <div style="font-size:12px;color:var(--d-text-3);line-height:2.2">
               <kbd class="d-kbd">&#x2318;K</kbd> Search &nbsp;&nbsp;
               <kbd class="d-kbd">R</kbd> Refresh &nbsp;&nbsp;
               <kbd class="d-kbd">1-4</kbd> Date presets &nbsp;&nbsp;
@@ -830,14 +1687,10 @@ App.pages.settings = {
             </div>
           </div>
 
-          <div style="margin-bottom:var(--d-sp-5)">
-            <label style="display:block; font-size:12px; font-weight:600; color:var(--d-text-2); margin-bottom:var(--d-sp-2)">Old Dashboard</label>
-            <a href="/admin" style="font-size:12px; color:var(--d-brand); text-decoration:none">Open v1 Dashboard &#x2197;</a>
-          </div>
-
-          <div>
-            <label style="display:block; font-size:12px; font-weight:600; color:var(--d-text-2); margin-bottom:var(--d-sp-2)">Session</label>
+          <div style="margin-top:20px;display:flex;gap:12px;flex-wrap:wrap">
+            <a href="/admin" class="d-btn d-btn-sm">v1 Dashboard &#x2197;</a>
             <button class="d-btn d-btn-sm" onclick="App.logout()">Sign Out</button>
+            <button class="d-btn d-btn-sm d-btn-ghost" onclick="D.api.clearCache();App.refreshPage()">Clear Cache</button>
           </div>
         </div>
       </div>

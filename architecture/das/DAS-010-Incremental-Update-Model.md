@@ -3,7 +3,7 @@
 ```
 Chapter:       DAS-010
 Title:         Incremental Update Model
-Status:        Draft
+Status:        Frozen
 Version:       1.0
 Author:        Principal Architect
 Reviewers:     —

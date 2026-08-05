@@ -3,7 +3,7 @@
 ```
 Chapter:       DAS-012
 Title:         Storage Realization
-Status:        Draft
+Status:        Frozen
 Version:       0.1
 Author:        Principal Architect
 Reviewers:     —
