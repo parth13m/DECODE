@@ -331,10 +331,11 @@ def _resolve_adapter(adapter_name: str):
 async def call_llm(
     messages: list[dict[str, str]],
     system_prompt: str | None = None,
-) -> tuple[str, int, dict[str, int | None]]:
+) -> tuple[str, int, dict[str, int | None], str, str]:
     """Call the configured AI provider.
 
-    Returns (content, latency_ms, token_usage).  Raises GatewayError on failure.
+    Returns (content, latency_ms, token_usage, adapter_name, model).
+    Raises GatewayError on failure.
 
     ``token_usage`` contains provider-reported token counts with normalized keys:
     ``prompt_tokens``, ``completion_tokens``, ``total_tokens``.
@@ -373,7 +374,7 @@ async def call_llm(
     # Attach prompt character count for analytics persistence.
     token_usage["prompt_character_count"] = total_chars
 
-    return content, latency_ms, token_usage
+    return content, latency_ms, token_usage, adapter_name, model
 
 
 # ── Vision: provider-agnostic visual context extraction ──────────────
@@ -723,6 +724,12 @@ async def stream_llm(
       ("token", "text")           — a content chunk
       ("done", {token_usage})     — final usage stats
 
+    The "done" event's data dict includes ``_resolved_provider`` and
+    ``_resolved_model`` so the caller can log the actual provider/model
+    used (not the raw config value).  An initial ``("meta", {...})``
+    event is also yielded before any tokens, carrying the same fields
+    for use in error paths where "done" is never reached.
+
     If the current adapter does not support streaming, falls back to
     ``call_llm()`` and yields the complete response as a single token
     followed by done.
@@ -743,6 +750,10 @@ async def stream_llm(
         settings.AI_ADAPTER, model, len(messages), total_chars,
     )
 
+    # Emit resolved provider/model before any tokens so the caller can
+    # use them for error-path logging even if the stream never completes.
+    yield ("meta", {"_resolved_provider": adapter_name, "_resolved_model": model})
+
     stream_fn = _STREAM_ADAPTERS.get(adapter_name)
 
     if stream_fn is not None:
@@ -750,9 +761,13 @@ async def stream_llm(
         async for event_type, data in stream_fn(messages, system_prompt, api_key, model, api_url):
             if event_type == "done" and isinstance(data, dict):
                 data["prompt_character_count"] = total_chars
+                data["_resolved_provider"] = adapter_name
+                data["_resolved_model"] = model
             yield (event_type, data)
     else:
         # Fallback: non-streaming adapter — yield complete response as one token.
-        content, _latency_ms, token_usage = await call_llm(messages, system_prompt)
+        content, _latency_ms, token_usage, _, _ = await call_llm(messages, system_prompt)
         yield ("token", content)
+        token_usage["_resolved_provider"] = adapter_name
+        token_usage["_resolved_model"] = model
         yield ("done", token_usage)

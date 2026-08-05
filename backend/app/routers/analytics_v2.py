@@ -1,0 +1,961 @@
+"""Analytics API v2 — structured endpoints for the Founder Dashboard.
+
+All endpoints require ADMIN_TOKEN authentication (same as /api/admin).
+Data is read from the new v2 tables (``ai_requests``, ``events``,
+``daily_summaries``) with automatic fallback to legacy ``request_logs``
+when v2 data is insufficient.
+"""
+
+import logging
+from datetime import date, datetime, timedelta, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import Date, cast, func as sa_func
+from sqlalchemy.orm import Session
+
+from app.auth import require_admin
+from app.database import get_db
+from app.models.ai_request import AIRequest
+from app.models.daily_summary import DailySummary
+from app.models.event import Event
+from app.models.request_log import RequestLog
+from app.models.user import User, UserStatus
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(
+    prefix="/api/v2/analytics",
+    tags=["analytics-v2"],
+    dependencies=[Depends(require_admin)],
+)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _parse_date_range(
+    days: int | None,
+    start: date | None,
+    end: date | None,
+) -> tuple[date, date]:
+    """Resolve date range from query params.
+
+    Accepts any combination:
+    - ``start`` + ``end``: explicit range
+    - ``start`` only: start to today
+    - ``end`` only: end - days (default 30) to end
+    - ``days`` only: last N days ending today
+    - nothing: last 30 days ending today
+    """
+    if start and end:
+        return start, end
+    d = days or 30
+    if start and not end:
+        return start, date.today()
+    if end and not start:
+        return end - timedelta(days=d), end
+    end_date = date.today()
+    return end_date - timedelta(days=d), end_date
+
+
+def _date_filter(model, start_date: date, end_date: date):
+    """Return a date-range filter for a model with created_at column."""
+    return (
+        cast(model.created_at, Date) >= start_date,
+        cast(model.created_at, Date) <= end_date,
+    )
+
+
+def _data_source(db: Session, start_date: date, end_date: date) -> str:
+    """Determine whether v2 data exists for the given range."""
+    v2_count = db.query(sa_func.count(AIRequest.id)).filter(
+        *_date_filter(AIRequest, start_date, end_date)
+    ).scalar() or 0
+    return "v2" if v2_count > 0 else "legacy"
+
+
+def _format_request(r) -> dict:
+    """Serialise an AIRequest row into a consistent dict shape.
+
+    Used by every endpoint that returns a list of individual requests
+    so the response shape is identical everywhere.
+    """
+    return {
+        "id": r.id,
+        "created_at": str(r.created_at),
+        "user_id": r.user_id,
+        "origin_mode": r.origin_mode,
+        "request_type": r.request_type,
+        "ai_provider": r.ai_provider,
+        "ai_model": r.ai_model,
+        "success": r.success,
+        "error_type": r.error_type,
+        "latency_ms": r.latency_ms,
+        "estimated_cost_usd": r.estimated_cost_usd,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Executive Summary
+# ---------------------------------------------------------------------------
+
+@router.get("/executive")
+def get_executive_summary(
+    days: int | None = Query(None, ge=1, le=365),
+    start: date | None = None,
+    end: date | None = None,
+    db: Session = Depends(get_db),
+):
+    """High-level KPIs for the founder: total requests, users, cost, reliability."""
+    start_date, end_date = _parse_date_range(days, start, end)
+    source = _data_source(db, start_date, end_date)
+
+    if source == "v2":
+        result = _executive_from_v2(db, start_date, end_date)
+    else:
+        result = _executive_from_legacy(db, start_date, end_date)
+
+    result["_source"] = source
+    return result
+
+
+def _executive_from_v2(db: Session, start_date: date, end_date: date) -> dict:
+    filters = _date_filter(AIRequest, start_date, end_date)
+
+    total = db.query(sa_func.count(AIRequest.id)).filter(*filters).scalar() or 0
+    successful = db.query(sa_func.count(AIRequest.id)).filter(
+        *filters, AIRequest.success.is_(True)
+    ).scalar() or 0
+    unique_users = db.query(
+        sa_func.count(sa_func.distinct(AIRequest.user_id))
+    ).filter(*filters).scalar() or 0
+    total_cost = db.query(
+        sa_func.sum(AIRequest.estimated_cost_usd)
+    ).filter(*filters).scalar()
+    avg_latency = db.query(
+        sa_func.avg(AIRequest.latency_ms)
+    ).filter(*filters, AIRequest.success.is_(True)).scalar()
+
+    daily = db.query(
+        cast(AIRequest.created_at, Date).label("day"),
+        sa_func.count().label("requests"),
+        sa_func.count(sa_func.distinct(AIRequest.user_id)).label("users"),
+    ).filter(*filters).group_by("day").order_by("day").all()
+
+    return {
+        "period": {"start": str(start_date), "end": str(end_date)},
+        "total_requests": total,
+        "successful_requests": successful,
+        "failed_requests": total - successful,
+        "success_rate": round(successful / total * 100, 1) if total else 0,
+        "unique_users": unique_users,
+        "total_cost_usd": round(total_cost, 4) if total_cost else 0,
+        "avg_latency_ms": round(avg_latency) if avg_latency else 0,
+        "daily_trend": [
+            {"date": str(r.day), "requests": r.requests, "users": r.users}
+            for r in daily
+        ],
+    }
+
+
+def _executive_from_legacy(db: Session, start_date: date, end_date: date) -> dict:
+    filters = _date_filter(RequestLog, start_date, end_date)
+
+    total = db.query(sa_func.count(RequestLog.id)).filter(*filters).scalar() or 0
+    successful = db.query(sa_func.count(RequestLog.id)).filter(
+        *filters, RequestLog.success.is_(True)
+    ).scalar() or 0
+    unique_users = db.query(
+        sa_func.count(sa_func.distinct(RequestLog.user_id))
+    ).filter(*filters).scalar() or 0
+    avg_latency = db.query(
+        sa_func.avg(RequestLog.latency_ms)
+    ).filter(*filters, RequestLog.success.is_(True)).scalar()
+
+    daily = db.query(
+        cast(RequestLog.created_at, Date).label("day"),
+        sa_func.count().label("requests"),
+        sa_func.count(sa_func.distinct(RequestLog.user_id)).label("users"),
+    ).filter(*filters).group_by("day").order_by("day").all()
+
+    return {
+        "period": {"start": str(start_date), "end": str(end_date)},
+        "total_requests": total,
+        "successful_requests": successful,
+        "failed_requests": total - successful,
+        "success_rate": round(successful / total * 100, 1) if total else 0,
+        "unique_users": unique_users,
+        "total_cost_usd": 0,
+        "avg_latency_ms": round(avg_latency) if avg_latency else 0,
+        "daily_trend": [
+            {"date": str(r.day), "requests": r.requests, "users": r.users}
+            for r in daily
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Product Analytics
+# ---------------------------------------------------------------------------
+
+@router.get("/product")
+def get_product_analytics(
+    days: int | None = Query(None, ge=1, le=365),
+    start: date | None = None,
+    end: date | None = None,
+    db: Session = Depends(get_db),
+):
+    """Product usage breakdown: modes, request types, profiles."""
+    start_date, end_date = _parse_date_range(days, start, end)
+    filters = _date_filter(AIRequest, start_date, end_date)
+
+    mode_rows = db.query(
+        sa_func.coalesce(AIRequest.origin_mode, "unknown").label("mode"),
+        sa_func.count().label("count"),
+        sa_func.count(sa_func.distinct(AIRequest.user_id)).label("users"),
+        sa_func.avg(AIRequest.latency_ms).label("avg_latency"),
+    ).filter(*filters).group_by("mode").all()
+
+    type_rows = db.query(
+        AIRequest.request_type.label("type"),
+        sa_func.count().label("count"),
+        sa_func.count(sa_func.distinct(AIRequest.user_id)).label("users"),
+    ).filter(*filters).group_by("type").all()
+
+    profile_rows = db.query(
+        sa_func.coalesce(AIRequest.explanation_profile, "none").label("profile"),
+        sa_func.count().label("count"),
+    ).filter(*filters).group_by("profile").all()
+
+    lang_rows = db.query(
+        sa_func.coalesce(AIRequest.language, "unknown").label("language"),
+        sa_func.count().label("count"),
+    ).filter(*filters).group_by("language").order_by(sa_func.count().desc()).limit(20).all()
+
+    return {
+        "period": {"start": str(start_date), "end": str(end_date)},
+        "_source": "v2",
+        "by_mode": [
+            {
+                "mode": r.mode,
+                "count": r.count,
+                "users": r.users,
+                "avg_latency_ms": round(r.avg_latency) if r.avg_latency else 0,
+            }
+            for r in mode_rows
+        ],
+        "by_request_type": [
+            {"request_type": r.type, "count": r.count, "users": r.users}
+            for r in type_rows
+        ],
+        "by_profile": [
+            {"profile": r.profile, "count": r.count}
+            for r in profile_rows
+        ],
+        "by_language": [
+            {"language": r.language, "count": r.count}
+            for r in lang_rows
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Users
+# ---------------------------------------------------------------------------
+
+@router.get("/users")
+def get_users_analytics(
+    days: int | None = Query(None, ge=1, le=365),
+    start: date | None = None,
+    end: date | None = None,
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+):
+    """Per-user usage summary with pagination."""
+    start_date, end_date = _parse_date_range(days, start, end)
+    filters = _date_filter(AIRequest, start_date, end_date)
+
+    # Total count for pagination
+    total_count = db.query(
+        sa_func.count(sa_func.distinct(AIRequest.user_id))
+    ).filter(*filters).scalar() or 0
+
+    rows = db.query(
+        AIRequest.user_id,
+        sa_func.count().label("total_requests"),
+        sa_func.count().filter(AIRequest.success.is_(True)).label("successful"),
+        sa_func.avg(AIRequest.latency_ms).label("avg_latency"),
+        sa_func.sum(AIRequest.estimated_cost_usd).label("total_cost"),
+        sa_func.max(AIRequest.created_at).label("last_active"),
+    ).filter(*filters).group_by(AIRequest.user_id).order_by(
+        sa_func.count().desc()
+    ).offset(offset).limit(limit).all()
+
+    # Fetch user names
+    user_ids = [r.user_id for r in rows]
+    users_by_id = {}
+    if user_ids:
+        user_records = db.query(User.id, User.name, User.email).filter(
+            User.id.in_(user_ids)
+        ).all()
+        users_by_id = {str(u.id): (u.name, u.email) for u in user_records}
+
+    return {
+        "period": {"start": str(start_date), "end": str(end_date)},
+        "_source": "v2",
+        "total_count": total_count,
+        "limit": limit,
+        "offset": offset,
+        "users": [
+            {
+                "user_id": r.user_id,
+                "name": users_by_id.get(r.user_id, (None, None))[0],
+                "email": users_by_id.get(r.user_id, (None, None))[1],
+                "total_requests": r.total_requests,
+                "successful_requests": r.successful,
+                "avg_latency_ms": round(r.avg_latency) if r.avg_latency else 0,
+                "total_cost_usd": round(r.total_cost, 4) if r.total_cost else 0,
+                "last_active": str(r.last_active) if r.last_active else None,
+            }
+            for r in rows
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# User Detail
+# ---------------------------------------------------------------------------
+
+@router.get("/users/{user_id}")
+def get_user_detail(
+    user_id: str,
+    days: int | None = Query(None, ge=1, le=365),
+    start: date | None = None,
+    end: date | None = None,
+    recent_limit: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    """Detailed analytics for a single user."""
+    start_date, end_date = _parse_date_range(days, start, end)
+    filters = (*_date_filter(AIRequest, start_date, end_date), AIRequest.user_id == user_id)
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    total = db.query(sa_func.count(AIRequest.id)).filter(*filters).scalar() or 0
+    successful = db.query(sa_func.count(AIRequest.id)).filter(
+        *filters, AIRequest.success.is_(True)
+    ).scalar() or 0
+
+    mode_rows = db.query(
+        sa_func.coalesce(AIRequest.origin_mode, "unknown").label("mode"),
+        sa_func.count().label("count"),
+    ).filter(*filters).group_by("mode").all()
+
+    type_rows = db.query(
+        AIRequest.request_type.label("type"),
+        sa_func.count().label("count"),
+    ).filter(*filters).group_by("type").all()
+
+    daily = db.query(
+        cast(AIRequest.created_at, Date).label("day"),
+        sa_func.count().label("requests"),
+    ).filter(*filters).group_by("day").order_by("day").all()
+
+    recent = db.query(AIRequest).filter(
+        AIRequest.user_id == user_id
+    ).order_by(AIRequest.created_at.desc()).limit(recent_limit).all()
+
+    return {
+        "user": {
+            "id": str(user.id),
+            "name": user.name,
+            "email": user.email,
+            "status": user.status.value if hasattr(user.status, "value") else str(user.status),
+        },
+        "period": {"start": str(start_date), "end": str(end_date)},
+        "_source": "v2",
+        "total_requests": total,
+        "successful_requests": successful,
+        "success_rate": round(successful / total * 100, 1) if total else 0,
+        "by_mode": [{"mode": r.mode, "count": r.count} for r in mode_rows],
+        "by_request_type": [{"request_type": r.type, "count": r.count} for r in type_rows],
+        "daily_trend": [
+            {"date": str(r.day), "requests": r.requests}
+            for r in daily
+        ],
+        "recent_requests": [_format_request(r) for r in recent],
+    }
+
+
+# ---------------------------------------------------------------------------
+# AI Platform
+# ---------------------------------------------------------------------------
+
+@router.get("/ai-platform")
+def get_ai_platform_analytics(
+    days: int | None = Query(None, ge=1, le=365),
+    start: date | None = None,
+    end: date | None = None,
+    db: Session = Depends(get_db),
+):
+    """AI provider and model analytics: usage, cost, latency by provider/model."""
+    start_date, end_date = _parse_date_range(days, start, end)
+    filters = _date_filter(AIRequest, start_date, end_date)
+
+    provider_rows = db.query(
+        AIRequest.ai_provider.label("provider"),
+        sa_func.count().label("count"),
+        sa_func.count().filter(AIRequest.success.is_(True)).label("successful"),
+        sa_func.avg(AIRequest.latency_ms).label("avg_latency"),
+        sa_func.sum(AIRequest.estimated_cost_usd).label("total_cost"),
+        sa_func.sum(AIRequest.prompt_tokens).label("prompt_tokens"),
+        sa_func.sum(AIRequest.completion_tokens).label("completion_tokens"),
+    ).filter(*filters).group_by("provider").all()
+
+    model_rows = db.query(
+        AIRequest.ai_model.label("model"),
+        AIRequest.ai_provider.label("provider"),
+        sa_func.count().label("count"),
+        sa_func.count().filter(AIRequest.success.is_(True)).label("successful"),
+        sa_func.avg(AIRequest.latency_ms).label("avg_latency"),
+        sa_func.sum(AIRequest.estimated_cost_usd).label("total_cost"),
+        sa_func.sum(AIRequest.prompt_tokens).label("prompt_tokens"),
+        sa_func.sum(AIRequest.completion_tokens).label("completion_tokens"),
+    ).filter(*filters).group_by("model", "provider").all()
+
+    error_rows = db.query(
+        sa_func.coalesce(AIRequest.error_type, "unknown").label("error_type"),
+        AIRequest.ai_provider.label("provider"),
+        sa_func.count().label("count"),
+    ).filter(*filters, AIRequest.success.is_(False)).group_by(
+        "error_type", "provider"
+    ).order_by(sa_func.count().desc()).limit(20).all()
+
+    return {
+        "period": {"start": str(start_date), "end": str(end_date)},
+        "_source": "v2",
+        "by_provider": [
+            {
+                "provider": r.provider,
+                "count": r.count,
+                "successful": r.successful,
+                "success_rate": round(r.successful / r.count * 100, 1) if r.count else 0,
+                "avg_latency_ms": round(r.avg_latency) if r.avg_latency else 0,
+                "total_cost_usd": round(r.total_cost, 4) if r.total_cost else 0,
+                "prompt_tokens": r.prompt_tokens or 0,
+                "completion_tokens": r.completion_tokens or 0,
+            }
+            for r in provider_rows
+        ],
+        "by_model": [
+            {
+                "model": r.model,
+                "provider": r.provider,
+                "count": r.count,
+                "successful": r.successful,
+                "success_rate": round(r.successful / r.count * 100, 1) if r.count else 0,
+                "avg_latency_ms": round(r.avg_latency) if r.avg_latency else 0,
+                "total_cost_usd": round(r.total_cost, 4) if r.total_cost else 0,
+                "prompt_tokens": r.prompt_tokens or 0,
+                "completion_tokens": r.completion_tokens or 0,
+            }
+            for r in model_rows
+        ],
+        "errors": [
+            {"error_type": r.error_type, "provider": r.provider, "count": r.count}
+            for r in error_rows
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Quality
+# ---------------------------------------------------------------------------
+
+@router.get("/quality")
+def get_quality_analytics(
+    days: int | None = Query(None, ge=1, le=365),
+    start: date | None = None,
+    end: date | None = None,
+    db: Session = Depends(get_db),
+):
+    """Quality metrics: success rates, latency distributions, error rates."""
+    start_date, end_date = _parse_date_range(days, start, end)
+    filters = _date_filter(AIRequest, start_date, end_date)
+
+    total = db.query(sa_func.count(AIRequest.id)).filter(*filters).scalar() or 0
+    successful = db.query(sa_func.count(AIRequest.id)).filter(
+        *filters, AIRequest.success.is_(True)
+    ).scalar() or 0
+
+    success_filters = (*filters, AIRequest.success.is_(True))
+    latency = db.query(
+        sa_func.avg(AIRequest.latency_ms).label("avg"),
+        sa_func.percentile_cont(0.5).within_group(AIRequest.latency_ms).label("p50"),
+        sa_func.percentile_cont(0.95).within_group(AIRequest.latency_ms).label("p95"),
+        sa_func.percentile_cont(0.99).within_group(AIRequest.latency_ms).label("p99"),
+        sa_func.min(AIRequest.latency_ms).label("min"),
+        sa_func.max(AIRequest.latency_ms).label("max"),
+    ).filter(*success_filters).first()
+
+    daily = db.query(
+        cast(AIRequest.created_at, Date).label("day"),
+        sa_func.count().label("total"),
+        sa_func.count().filter(AIRequest.success.is_(True)).label("successful"),
+        sa_func.avg(AIRequest.latency_ms).label("avg_latency"),
+    ).filter(*filters).group_by("day").order_by("day").all()
+
+    error_rows = db.query(
+        sa_func.coalesce(AIRequest.error_type, "unknown").label("error_type"),
+        sa_func.count().label("count"),
+    ).filter(*filters, AIRequest.success.is_(False)).group_by("error_type").order_by(
+        sa_func.count().desc()
+    ).all()
+
+    return {
+        "period": {"start": str(start_date), "end": str(end_date)},
+        "_source": "v2",
+        "reliability": {
+            "total_requests": total,
+            "successful": successful,
+            "failed": total - successful,
+            "success_rate": round(successful / total * 100, 2) if total else 0,
+        },
+        "latency": {
+            "avg_ms": round(latency.avg) if latency and latency.avg else 0,
+            "p50_ms": round(latency.p50) if latency and latency.p50 else 0,
+            "p95_ms": round(latency.p95) if latency and latency.p95 else 0,
+            "p99_ms": round(latency.p99) if latency and latency.p99 else 0,
+            "min_ms": latency.min if latency else 0,
+            "max_ms": latency.max if latency else 0,
+        },
+        "daily_trend": [
+            {
+                "date": str(r.day),
+                "total": r.total,
+                "successful": r.successful,
+                "success_rate": round(r.successful / r.total * 100, 1) if r.total else 0,
+                "avg_latency_ms": round(r.avg_latency) if r.avg_latency else 0,
+            }
+            for r in daily
+        ],
+        "errors": [
+            {"error_type": r.error_type, "count": r.count}
+            for r in error_rows
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Cost
+# ---------------------------------------------------------------------------
+
+@router.get("/cost")
+def get_cost_analytics(
+    days: int | None = Query(None, ge=1, le=365),
+    start: date | None = None,
+    end: date | None = None,
+    db: Session = Depends(get_db),
+):
+    """Cost analytics: total spend, by provider, by model, daily trend."""
+    start_date, end_date = _parse_date_range(days, start, end)
+    filters = _date_filter(AIRequest, start_date, end_date)
+
+    total_cost = db.query(
+        sa_func.sum(AIRequest.estimated_cost_usd)
+    ).filter(*filters).scalar()
+
+    provider_rows = db.query(
+        AIRequest.ai_provider.label("provider"),
+        sa_func.sum(AIRequest.estimated_cost_usd).label("cost"),
+        sa_func.count().label("requests"),
+        sa_func.sum(AIRequest.prompt_tokens).label("prompt_tokens"),
+        sa_func.sum(AIRequest.completion_tokens).label("completion_tokens"),
+    ).filter(*filters).group_by("provider").order_by(
+        sa_func.sum(AIRequest.estimated_cost_usd).desc()
+    ).all()
+
+    model_rows = db.query(
+        AIRequest.ai_model.label("model"),
+        sa_func.sum(AIRequest.estimated_cost_usd).label("cost"),
+        sa_func.count().label("requests"),
+        sa_func.sum(AIRequest.prompt_tokens).label("prompt_tokens"),
+        sa_func.sum(AIRequest.completion_tokens).label("completion_tokens"),
+    ).filter(*filters).group_by("model").order_by(
+        sa_func.sum(AIRequest.estimated_cost_usd).desc()
+    ).all()
+
+    type_rows = db.query(
+        AIRequest.request_type.label("type"),
+        sa_func.sum(AIRequest.estimated_cost_usd).label("cost"),
+        sa_func.count().label("requests"),
+    ).filter(*filters).group_by("type").order_by(
+        sa_func.sum(AIRequest.estimated_cost_usd).desc()
+    ).all()
+
+    daily = db.query(
+        cast(AIRequest.created_at, Date).label("day"),
+        sa_func.sum(AIRequest.estimated_cost_usd).label("cost"),
+        sa_func.count().label("requests"),
+    ).filter(*filters).group_by("day").order_by("day").all()
+
+    return {
+        "period": {"start": str(start_date), "end": str(end_date)},
+        "_source": "v2",
+        "total_cost_usd": round(total_cost, 4) if total_cost else 0,
+        "by_provider": [
+            {
+                "provider": r.provider,
+                "cost_usd": round(r.cost, 4) if r.cost else 0,
+                "requests": r.requests,
+                "prompt_tokens": r.prompt_tokens or 0,
+                "completion_tokens": r.completion_tokens or 0,
+            }
+            for r in provider_rows
+        ],
+        "by_model": [
+            {
+                "model": r.model,
+                "cost_usd": round(r.cost, 4) if r.cost else 0,
+                "requests": r.requests,
+                "prompt_tokens": r.prompt_tokens or 0,
+                "completion_tokens": r.completion_tokens or 0,
+            }
+            for r in model_rows
+        ],
+        "by_request_type": [
+            {
+                "request_type": r.type,
+                "cost_usd": round(r.cost, 4) if r.cost else 0,
+                "requests": r.requests,
+            }
+            for r in type_rows
+        ],
+        "daily_trend": [
+            {
+                "date": str(r.day),
+                "cost_usd": round(r.cost, 4) if r.cost else 0,
+                "requests": r.requests,
+            }
+            for r in daily
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Settings / Config
+# ---------------------------------------------------------------------------
+
+@router.get("/settings")
+def get_settings_info(db: Session = Depends(get_db)):
+    """System configuration and health info for the settings page."""
+    from app.config import settings as app_settings
+
+    total_users = db.query(sa_func.count(User.id)).scalar() or 0
+    active_users = db.query(sa_func.count(User.id)).filter(
+        User.status == UserStatus.active
+    ).scalar() or 0
+
+    total_v2_requests = db.query(sa_func.count(AIRequest.id)).scalar() or 0
+    total_legacy_requests = db.query(sa_func.count(RequestLog.id)).scalar() or 0
+    total_summaries = db.query(sa_func.count(DailySummary.id)).scalar() or 0
+
+    latest_summary_date = db.query(
+        sa_func.max(DailySummary.summary_date)
+    ).scalar()
+
+    return {
+        "_source": "v2",
+        "users": {
+            "total": total_users,
+            "active": active_users,
+        },
+        "data": {
+            "v2_ai_requests": total_v2_requests,
+            "legacy_request_logs": total_legacy_requests,
+            "daily_summaries": total_summaries,
+            "latest_summary_date": str(latest_summary_date) if latest_summary_date else None,
+        },
+        "ai_config": {
+            "adapter": app_settings.AI_ADAPTER,
+            "anthropic_model": app_settings.ANTHROPIC_MODEL,
+            "groq_model": app_settings.GROQ_MODEL,
+            "vision_provider": app_settings.VISION_PROVIDER,
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# Founder Timeline
+# ---------------------------------------------------------------------------
+
+@router.get("/timeline")
+def get_founder_timeline(
+    days: int | None = Query(None, ge=1, le=365),
+    start: date | None = None,
+    end: date | None = None,
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    """Chronological feed of significant events for the founder.
+
+    Synthesises milestones from raw data: user activations, daily
+    summaries, and recent errors.
+    """
+    start_date, end_date = _parse_date_range(days, start, end)
+    timeline: list[dict] = []
+
+    # Per-source limits to avoid loading unbounded data in memory
+    per_source_limit = max(limit, 20)
+
+    # --- New user activations ---
+    new_users = db.query(
+        User.id, User.name, User.email, User.activated_at,
+    ).filter(
+        User.activated_at.isnot(None),
+        cast(User.activated_at, Date) >= start_date,
+        cast(User.activated_at, Date) <= end_date,
+    ).order_by(User.activated_at.desc()).limit(per_source_limit).all()
+
+    for u in new_users:
+        timeline.append({
+            "timestamp": str(u.activated_at),
+            "type": "user_activation",
+            "title": f"New user: {u.name or u.email or 'Unknown'}",
+            "detail": {"user_id": str(u.id)},
+        })
+
+    # --- Daily usage summaries ---
+    daily_rows = db.query(DailySummary).filter(
+        DailySummary.dimension == "overall",
+        DailySummary.summary_date >= start_date,
+        DailySummary.summary_date <= end_date,
+    ).order_by(DailySummary.summary_date.desc()).limit(per_source_limit).all()
+
+    for ds in daily_rows:
+        if ds.total_requests > 0:
+            timeline.append({
+                "timestamp": str(datetime.combine(ds.summary_date, datetime.min.time())),
+                "type": "daily_summary",
+                "title": f"{ds.total_requests} requests on {ds.summary_date}",
+                "detail": {
+                    "requests": ds.total_requests,
+                    "successful": ds.successful_requests,
+                    "failed": ds.failed_requests,
+                    "unique_users": ds.unique_users,
+                    "cost_usd": round(ds.total_estimated_cost_usd, 4) if ds.total_estimated_cost_usd else 0,
+                },
+            })
+
+    # --- Recent errors ---
+    recent_errors = db.query(
+        AIRequest.created_at,
+        AIRequest.error_type,
+        AIRequest.ai_provider,
+        AIRequest.ai_model,
+        AIRequest.origin_mode,
+        AIRequest.request_type,
+        AIRequest.user_id,
+    ).filter(
+        *_date_filter(AIRequest, start_date, end_date),
+        AIRequest.success.is_(False),
+    ).order_by(AIRequest.created_at.desc()).limit(per_source_limit).all()
+
+    for e in recent_errors:
+        timeline.append({
+            "timestamp": str(e.created_at),
+            "type": "error",
+            "title": f"Error: {e.error_type or 'unknown'} ({e.ai_provider})",
+            "detail": {
+                "error_type": e.error_type,
+                "provider": e.ai_provider,
+                "model": e.ai_model,
+                "mode": e.origin_mode,
+                "request_type": e.request_type,
+            },
+        })
+
+    # Sort by timestamp descending, truncate to requested limit
+    timeline.sort(key=lambda e: e["timestamp"], reverse=True)
+    timeline = timeline[:limit]
+
+    return {
+        "period": {"start": str(start_date), "end": str(end_date)},
+        "_source": "v2",
+        "events": timeline,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Live Monitor
+# ---------------------------------------------------------------------------
+
+@router.get("/live")
+def get_live_monitor(
+    minutes: int = Query(60, ge=1, le=1440),
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    """Recent requests for live monitoring. Shows last N minutes of activity."""
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+
+    recent = db.query(AIRequest).filter(
+        AIRequest.created_at >= cutoff,
+    ).order_by(AIRequest.created_at.desc()).limit(limit).all()
+
+    total = db.query(sa_func.count(AIRequest.id)).filter(
+        AIRequest.created_at >= cutoff,
+    ).scalar() or 0
+    successful = db.query(sa_func.count(AIRequest.id)).filter(
+        AIRequest.created_at >= cutoff,
+        AIRequest.success.is_(True),
+    ).scalar() or 0
+    avg_latency = db.query(sa_func.avg(AIRequest.latency_ms)).filter(
+        AIRequest.created_at >= cutoff,
+        AIRequest.success.is_(True),
+    ).scalar()
+
+    return {
+        "period": {"window_minutes": minutes},
+        "_source": "v2",
+        "stats": {
+            "total_requests": total,
+            "successful": successful,
+            "failed": total - successful,
+            "success_rate": round(successful / total * 100, 1) if total else 0,
+            "avg_latency_ms": round(avg_latency) if avg_latency else 0,
+        },
+        "requests": [_format_request(r) for r in recent],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Global Search
+# ---------------------------------------------------------------------------
+
+@router.get("/search")
+def global_search(
+    q: str = Query(..., min_length=1, max_length=200),
+    limit: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    """Search across users, AI requests, and events.
+
+    Matches against user names/emails, AI model/provider names,
+    error types, event types, and mode names.
+    """
+    query = q.strip().lower()
+    results: list[dict] = []
+    per_type_limit = limit  # each type gets its own DB limit
+
+    # --- Search users ---
+    user_matches = db.query(User).filter(
+        sa_func.lower(sa_func.coalesce(User.name, "")).contains(query)
+        | sa_func.lower(sa_func.coalesce(User.email, "")).contains(query)
+    ).limit(per_type_limit).all()
+
+    for u in user_matches:
+        results.append({
+            "type": "user",
+            "id": str(u.id),
+            "title": u.name or u.email or "Unknown",
+            "subtitle": u.email,
+            "detail": {
+                "status": u.status.value if hasattr(u.status, "value") else str(u.status),
+            },
+        })
+
+    # --- Search AI requests by model, provider, error_type, mode ---
+    request_filters = (
+        sa_func.lower(AIRequest.ai_model).contains(query)
+        | sa_func.lower(AIRequest.ai_provider).contains(query)
+        | sa_func.lower(sa_func.coalesce(AIRequest.error_type, "")).contains(query)
+        | sa_func.lower(sa_func.coalesce(AIRequest.origin_mode, "")).contains(query)
+        | sa_func.lower(AIRequest.request_type).contains(query)
+    )
+    request_matches = db.query(AIRequest).filter(
+        request_filters
+    ).order_by(AIRequest.created_at.desc()).limit(per_type_limit).all()
+
+    for r in request_matches:
+        results.append({
+            "type": "ai_request",
+            "id": r.id,
+            "title": f"{r.request_type} via {r.ai_model}",
+            "subtitle": f"{'OK' if r.success else 'FAIL'} · {r.latency_ms}ms · {r.origin_mode or 'unknown'}",
+            "detail": {
+                "created_at": str(r.created_at),
+                "user_id": r.user_id,
+                "provider": r.ai_provider,
+                "cost_usd": r.estimated_cost_usd,
+            },
+        })
+
+    # --- Search events by type ---
+    event_matches = db.query(Event).filter(
+        sa_func.lower(Event.event_type).contains(query)
+        | sa_func.lower(sa_func.coalesce(Event.origin_mode, "")).contains(query)
+    ).order_by(Event.created_at.desc()).limit(per_type_limit).all()
+
+    for e in event_matches:
+        results.append({
+            "type": "event",
+            "id": e.id,
+            "title": e.event_type,
+            "subtitle": f"{e.origin_mode or 'unknown'} · {e.created_at}",
+            "detail": {
+                "user_id": e.user_id,
+                "request_type": e.request_type,
+            },
+        })
+
+    # Truncate to limit; signal if more exist
+    truncated = results[:limit]
+    return {
+        "query": q,
+        "_source": "v2",
+        "total_results": len(truncated),
+        "has_more": len(results) > limit,
+        "results": truncated,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Aggregation Admin
+# ---------------------------------------------------------------------------
+
+@router.post("/aggregate")
+def trigger_aggregation(
+    target_date: date | None = Query(None),
+    backfill: bool = Query(False),
+    backfill_start: date | None = Query(None),
+    backfill_end: date | None = Query(None),
+):
+    """Trigger daily aggregation or historical backfill.
+
+    - ``target_date``: aggregate a specific date (defaults to yesterday).
+    - ``backfill=true``: backfill from legacy ``request_logs``.
+    - ``backfill_start``/``backfill_end``: date range for backfill.
+    """
+    from app.aggregation_service import aggregate_date, backfill_range
+
+    if backfill:
+        rows = backfill_range(start_date=backfill_start, end_date=backfill_end)
+        return {
+            "action": "backfill",
+            "start": str(backfill_start) if backfill_start else "earliest",
+            "end": str(backfill_end) if backfill_end else "yesterday",
+            "rows_written": rows,
+        }
+
+    d = target_date or (date.today() - timedelta(days=1))
+    rows = aggregate_date(d)
+    return {
+        "action": "aggregate",
+        "date": str(d),
+        "rows_written": rows,
+    }

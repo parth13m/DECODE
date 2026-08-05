@@ -847,16 +847,6 @@
 
       <div class="section">
         <div class="section-header">
-          <h2>Session Tier Performance</h2>
-          <span class="section-desc">Context tier efficiency (Session mode only)</span>
-        </div>
-        <div class="table-wrap" id="tier-table">
-          <div class="loading">Loading...</div>
-        </div>
-      </div>
-
-      <div class="section">
-        <div class="section-header">
           <h2>Provider Analytics</h2>
           <span class="section-desc">AI provider reliability and cost</span>
         </div>
@@ -1104,13 +1094,6 @@
           <h2>Follow-Up Questions</h2>
         </div>
         <div class="stats" id="detail-followup"></div>
-      </div>
-
-      <div class="section">
-        <div class="section-header">
-          <h2>Session Tier Breakdown</h2>
-        </div>
-        <div class="stats" id="detail-tiers"></div>
       </div>
 
       <div class="section">
@@ -1498,42 +1481,6 @@ async function loadAnalytics() {
       }
       html += '</tbody></table>';
       modeContainer.innerHTML = html;
-    }
-
-    // ── Tier performance table ──
-    const tierContainer = document.getElementById('tier-table');
-    if (data.tier_analytics && data.tier_analytics.length > 0) {
-      let html = `<table>
-        <thead><tr>
-          <th>Tier</th>
-          <th style="text-align:right">Requests</th>
-          <th style="text-align:right">% of Total</th>
-          <th style="text-align:right">Success %</th>
-          <th style="text-align:right">Avg Latency</th>
-          <th style="text-align:right">Avg Prompt Tok</th>
-          <th style="text-align:right">Avg Compl Tok</th>
-          <th style="text-align:right">Avg Total Tok</th>
-          <th style="text-align:right">Avg Prompt Chars</th>
-          <th style="text-align:right">Est. Cost</th>
-        </tr></thead><tbody>`;
-      for (const t of data.tier_analytics) {
-        html += `<tr>
-          <td class="mono">${escapeHtml(t.context_tier)}</td>
-          <td style="text-align:right">${t.request_count}</td>
-          <td style="text-align:right">${t.pct_of_total}%</td>
-          <td style="text-align:right">${t.success_rate}%</td>
-          <td style="text-align:right">${t.avg_latency_ms !== null ? fmtNum(t.avg_latency_ms) + ' ms' : '\u2014'}</td>
-          <td style="text-align:right">${fmtNum(t.avg_prompt_tokens)}</td>
-          <td style="text-align:right">${fmtNum(t.avg_completion_tokens)}</td>
-          <td style="text-align:right">${fmtNum(t.avg_total_tokens)}</td>
-          <td style="text-align:right">${fmtNum(t.avg_prompt_character_count)}</td>
-          <td style="text-align:right">${t.estimated_cost_usd !== null ? '$' + t.estimated_cost_usd.toFixed(4) : '\u2014'}</td>
-        </tr>`;
-      }
-      html += '</tbody></table>';
-      tierContainer.innerHTML = html;
-    } else {
-      tierContainer.innerHTML = '<div class="empty-state"><div class="empty-icon">\u2014</div>No tier analytics data yet</div>';
     }
 
     // ── Provider analytics table ──
@@ -2005,15 +1952,6 @@ async function loadUserDetail(userId) {
       `;
     }
 
-    // Tier breakdown
-    const tb = data.tier_breakdown;
-    document.getElementById('detail-tiers').innerHTML = `
-      ${statCard('Tier 1', tb.tier1)}
-      ${statCard('Tier 2', tb.tier2)}
-      ${statCard('Tier 2.5', tb.tier2_5)}
-      ${statCard('Tier 3', tb.tier3)}
-    `;
-
     // Token breakdown
     const tk = data.token_breakdown;
     document.getElementById('detail-tokens').innerHTML = `
@@ -2133,10 +2071,6 @@ async function loadUserDetail(userId) {
           <th style="text-align:right">Selection</th>
           <th style="text-align:right">Screenshot</th>
           <th style="text-align:right">Session</th>
-          <th style="text-align:right">T1</th>
-          <th style="text-align:right">T2</th>
-          <th style="text-align:right">T2.5</th>
-          <th style="text-align:right">T3</th>
           <th style="text-align:right">Tokens</th>
           <th style="text-align:right">Cost</th>
           <th style="text-align:right">Success %</th>
@@ -2149,10 +2083,6 @@ async function loadUserDetail(userId) {
           <td style="text-align:right">${d.selection}</td>
           <td style="text-align:right">${d.screenshot}</td>
           <td style="text-align:right">${d.session}</td>
-          <td style="text-align:right">${d.tier1}</td>
-          <td style="text-align:right">${d.tier2}</td>
-          <td style="text-align:right">${d.tier2_5}</td>
-          <td style="text-align:right">${d.tier3}</td>
           <td style="text-align:right">${fmtNum(d.total_tokens)}</td>
           <td style="text-align:right">${d.estimated_cost !== null ? '$' + d.estimated_cost.toFixed(4) : '\u2014'}</td>
           <td style="text-align:right">${d.success_rate}%</td>

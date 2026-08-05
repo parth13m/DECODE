@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Decode — Dashboard</title>
+  <link rel="stylesheet" href="/static/v2/design.css">
+  <!-- Inter font for modern typography -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;550;600;650;700;800&display=swap" rel="stylesheet">
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════
+     AUTH SCREEN
+     ═══════════════════════════════════════════════════════ -->
+<div id="d-auth" class="d-auth">
+  <div class="d-auth-card">
+    <div style="margin-bottom:20px">
+      <div class="d-sidebar-logo-mark" style="width:36px;height:36px;font-size:18px;margin:0 auto 12px">D</div>
+      <h1>Decode Dashboard</h1>
+      <div class="subtitle">Enter your admin token to continue</div>
+    </div>
+    <input
+      type="password"
+      id="d-auth-token"
+      class="d-input"
+      placeholder="Admin token"
+      style="margin-bottom:12px"
+      onkeydown="if(event.key==='Enter') App.authenticate()"
+    >
+    <button class="d-btn d-btn-primary d-w-full" style="padding:10px;font-size:14px" onclick="App.authenticate()">
+      Sign In
+    </button>
+    <div id="d-auth-error" style="color:var(--d-danger);font-size:13px;margin-top:10px"></div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     APPLICATION SHELL
+     ═══════════════════════════════════════════════════════ -->
+<div id="d-shell" class="d-app d-hidden">
+
+  <!-- ── Sidebar ── -->
+  <nav class="d-sidebar">
+    <div class="d-sidebar-header">
+      <a class="d-sidebar-logo" href="/admin/v2">
+        <div class="d-sidebar-logo-mark">D</div>
+        <div class="d-sidebar-logo-text">Decode <span>v2</span></div>
+      </a>
+    </div>
+
+    <div class="d-sidebar-nav">
+      <!-- Overview -->
+      <div class="d-sidebar-section">
+        <div class="d-sidebar-section-label">Overview</div>
+        <a class="d-nav-item active" data-page="executive" onclick="App.navigate('executive')">
+          <span class="d-nav-icon">&#x1F3AF;</span> Executive
+        </a>
+        <a class="d-nav-item" data-page="product" onclick="App.navigate('product')">
+          <span class="d-nav-icon">&#x1F4E6;</span> Product
+        </a>
+        <a class="d-nav-item" data-page="cost" onclick="App.navigate('cost')">
+          <span class="d-nav-icon">&#x1F4B0;</span> Cost
+        </a>
+      </div>
+
+      <!-- Platform -->
+      <div class="d-sidebar-section">
+        <div class="d-sidebar-section-label">Platform</div>
+        <a class="d-nav-item" data-page="ai" onclick="App.navigate('ai')">
+          <span class="d-nav-icon">&#x26A1;</span> AI Platform
+        </a>
+        <a class="d-nav-item" data-page="workspaces" onclick="App.navigate('workspaces')">
+          <span class="d-nav-icon">&#x1F4C1;</span> Workspaces
+        </a>
+        <a class="d-nav-item" data-page="quality" onclick="App.navigate('quality')">
+          <span class="d-nav-icon">&#x1F6E1;</span> Quality
+        </a>
+      </div>
+
+      <!-- People -->
+      <div class="d-sidebar-section">
+        <div class="d-sidebar-section-label">People</div>
+        <a class="d-nav-item" data-page="users" onclick="App.navigate('users')">
+          <span class="d-nav-icon">&#x1F465;</span> Users
+        </a>
+      </div>
+
+      <!-- System -->
+      <div class="d-sidebar-section">
+        <div class="d-sidebar-section-label">System</div>
+        <a class="d-nav-item" data-page="settings" onclick="App.navigate('settings')">
+          <span class="d-nav-icon">&#x2699;</span> Settings
+        </a>
+      </div>
+    </div>
+
+    <div class="d-sidebar-footer">
+      <div class="d-sidebar-version">
+        <a href="/admin" style="color:var(--d-text-4);text-decoration:none;font-size:11px">v1 Dashboard &#x2197;</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- ── Main Content ── -->
+  <div class="d-main">
+    <header class="d-topbar">
+      <div class="d-topbar-left">
+        <div id="d-topbar-title" class="d-topbar-title">Executive Overview</div>
+        <div id="d-topbar-subtitle" class="d-topbar-subtitle">Platform health at a glance</div>
+      </div>
+      <div class="d-topbar-right">
+        <button class="d-btn d-btn-sm d-btn-ghost" onclick="App.logout()" title="Sign out">Sign out</button>
+      </div>
+    </header>
+
+    <main class="d-page">
+      <!-- Each page is a view that shows/hides -->
+      <div id="page-executive"  class="d-page-view active"></div>
+      <div id="page-product"    class="d-page-view"></div>
+      <div id="page-cost"       class="d-page-view"></div>
+      <div id="page-ai"         class="d-page-view"></div>
+      <div id="page-workspaces" class="d-page-view"></div>
+      <div id="page-quality"    class="d-page-view"></div>
+      <div id="page-users"      class="d-page-view"></div>
+      <div id="page-settings"   class="d-page-view"></div>
+    </main>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     SEARCH MODAL (Cmd+K)
+     ═══════════════════════════════════════════════════════ -->
+<div id="d-search-modal" class="d-search-overlay" onclick="if(event.target===this) App.toggleSearch()">
+  <div class="d-search-card">
+    <div class="d-search-input-wrap">
+      <span class="d-search-icon">&#x1F50D;</span>
+      <input
+        type="text"
+        class="d-search-input"
+        placeholder="Search users, requests, events..."
+        oninput="App.performSearch(this.value)"
+        onkeydown="if(event.key==='Escape') App.toggleSearch()"
+      >
+      <span class="d-search-kbd">esc</span>
+    </div>
+    <div class="d-search-results">
+      <div class="d-search-hint">Type to search users, requests, events...</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     DRILL-DOWN DRAWER
+     ═══════════════════════════════════════════════════════ -->
+<div id="d-drill-down" class="d-drawer-overlay" onclick="if(event.target===this) D.drillDown.close()">
+  <div class="d-drawer-backdrop"></div>
+  <div class="d-drawer">
+    <div class="d-drawer-header">
+      <div class="d-drawer-title"></div>
+      <button class="d-drawer-close" onclick="D.drillDown.close()">&times;</button>
+    </div>
+    <div class="d-drawer-body"></div>
+  </div>
+</div>
+
+<!-- ── Scripts ── -->
+<script src="/static/v2/components.js"></script>
+<script src="/static/v2/app.js"></script>
+
+</body>
+</html>

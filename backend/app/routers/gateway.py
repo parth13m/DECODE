@@ -10,9 +10,8 @@ from sqlalchemy.orm import Session
 from app.auth import get_current_user
 from app.config import settings
 from app.database import get_db
+from app.dual_write_service import log_ai_request, log_analytics_event
 from app.gateway_service import GatewayError, call_llm, call_vision_llm, stream_llm
-from app.models.analytics_event import AnalyticsEvent
-from app.models.request_log import RequestLog
 from app.models.user import User
 
 logger = logging.getLogger(__name__)
@@ -52,10 +51,10 @@ async def chat(
 
     start = time.monotonic()
 
-    ai_log = {"ai_provider": settings.AI_ADAPTER, "ai_model": settings.AI_MODEL}
-
     try:
-        content, latency_ms, token_usage = await call_llm(messages, system_prompt=body.system_prompt)
+        content, latency_ms, token_usage, ai_provider, ai_model = await call_llm(
+            messages, system_prompt=body.system_prompt,
+        )
     except GatewayError as exc:
         latency_ms = int((time.monotonic() - start) * 1000)
         _log_request(
@@ -63,7 +62,8 @@ async def chat(
             error_type=exc.error_type, mode=body.mode,
             context_tier=body.context_tier,
             explanation_profile=body.explanation_profile,
-            language=body.language, **ai_log,
+            language=body.language,
+            ai_provider=settings.AI_ADAPTER, ai_model=None,
         )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -79,7 +79,7 @@ async def chat(
         completion_tokens=token_usage.get("completion_tokens"),
         total_tokens=token_usage.get("total_tokens"),
         prompt_character_count=token_usage.get("prompt_character_count"),
-        **ai_log,
+        ai_provider=ai_provider, ai_model=ai_model,
     )
 
     return ChatResponse(content=content)
@@ -110,7 +110,10 @@ async def chat_stream(
     async def event_generator():
         logger.info("TRACE_STREAM_V2 generator_started user=%s", user_id)
         start = time.monotonic()
-        ai_log = {"ai_provider": settings.AI_ADAPTER, "ai_model": settings.AI_MODEL}
+        # Resolved provider/model — populated by the "meta" event from
+        # stream_llm() before any tokens are yielded.
+        ai_provider = settings.AI_ADAPTER  # fallback for pre-meta errors
+        ai_model: str | None = None
         token_usage = {}
 
         # ── DIAG: gateway SSE diagnostics ──
@@ -119,7 +122,11 @@ async def chat_stream(
 
         try:
             async for event_type, data in stream_llm(messages, system_prompt=body.system_prompt):
-                if event_type == "token":
+                if event_type == "meta":
+                    # Capture resolved provider/model for logging.
+                    ai_provider = data.get("_resolved_provider", ai_provider)
+                    ai_model = data.get("_resolved_model", ai_model)
+                elif event_type == "token":
                     _diag_sse_count += 1
                     if _diag_first_sse_time is None:
                         _diag_first_sse_time = time.monotonic()
@@ -130,6 +137,9 @@ async def chat_stream(
                     yield f"data: {json.dumps({'type': 'token', 'content': data})}\n\n"
                 elif event_type == "done":
                     token_usage = data if isinstance(data, dict) else {}
+                    # Extract resolved values (also attached to done event).
+                    ai_provider = token_usage.pop("_resolved_provider", ai_provider)
+                    ai_model = token_usage.pop("_resolved_model", ai_model)
                     latency_ms = int((time.monotonic() - start) * 1000)
                     logger.info(
                         "TRACE_STREAM_V2 done_received user=%s sse_events=%d latency_ms=%d",
@@ -147,7 +157,7 @@ async def chat_stream(
                         completion_tokens=token_usage.get("completion_tokens"),
                         total_tokens=token_usage.get("total_tokens"),
                         prompt_character_count=token_usage.get("prompt_character_count"),
-                        **ai_log,
+                        ai_provider=ai_provider, ai_model=ai_model,
                     )
                     logger.info("TRACE_STREAM_V2 log_committed user=%s", user_id)
                     yield f"data: {json.dumps({'type': 'done', 'usage': token_usage})}\n\n"
@@ -160,7 +170,8 @@ async def chat_stream(
                 error_type=exc.error_type, mode=body.mode,
                 context_tier=body.context_tier,
                 explanation_profile=body.explanation_profile,
-                language=body.language, **ai_log,
+                language=body.language,
+                ai_provider=ai_provider, ai_model=ai_model,
             )
             yield f"data: {json.dumps({'type': 'error', 'message': 'AI service unavailable'})}\n\n"
             return
@@ -255,42 +266,32 @@ def _log_request(
     total_tokens: int | None = None,
     prompt_character_count: int | None = None,
 ) -> None:
-    """Record a gateway request in the database.
+    """Record a gateway request via dual-write (legacy + v2 tables).
 
-    Uses a separate session so the log is committed even when the
-    outer request handler raises an exception (which would rollback
-    the main session via get_db).
+    Delegates to ``log_ai_request`` which writes to both ``request_logs``
+    (legacy) and ``ai_requests`` + ``events`` (v2) using independent sessions.
     """
-    from app.database import SessionLocal
+    if not ai_provider:
+        logger.warning("ANALYTICS_INTEGRITY ai_provider is empty for user=%s mode=%s", user_id, mode)
+    if not ai_model and success:
+        logger.warning("ANALYTICS_INTEGRITY ai_model is empty for successful request user=%s mode=%s", user_id, mode)
 
-    logger.info("TRACE_LOG_V1 entering _log_request user=%s success=%s mode=%s", user_id, success, mode)
-    log_db = SessionLocal()
-    try:
-        log = RequestLog(
-            user_id=user_id,
-            success=success,
-            latency_ms=latency_ms,
-            error_type=error_type,
-            mode=mode,
-            ai_provider=ai_provider,
-            ai_model=ai_model,
-            context_tier=context_tier,
-            explanation_profile=explanation_profile,
-            language=language,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=total_tokens,
-            prompt_character_count=prompt_character_count,
-        )
-        log_db.add(log)
-        logger.info("TRACE_LOG_V1 about_to_commit user=%s", user_id)
-        log_db.commit()
-        logger.info("TRACE_LOG_V1 commit_success user=%s id=%s", user_id, log.id)
-    except Exception:
-        logger.exception("DECODE_REQUEST_LOG_FAILURE_V1 user=%s", user_id)
-        log_db.rollback()
-    finally:
-        log_db.close()
+    log_ai_request(
+        user_id,
+        success=success,
+        latency_ms=latency_ms,
+        error_type=error_type,
+        mode=mode,
+        ai_provider=ai_provider,
+        ai_model=ai_model,
+        context_tier=context_tier,
+        explanation_profile=explanation_profile,
+        language=language,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=total_tokens,
+        prompt_character_count=prompt_character_count,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -324,11 +325,10 @@ async def record_analytics_event(
             detail=f"Unknown event_type: {body.event_type}",
         )
 
-    event = AnalyticsEvent(
-        user_id=user.id,
+    log_analytics_event(
+        db,
+        user.id,
         event_type=body.event_type,
         mode=body.mode,
-        metadata_=body.metadata,
+        metadata=body.metadata,
     )
-    db.add(event)
-    db.commit()

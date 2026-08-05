@@ -5,9 +5,10 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
-from app.routers import admin, auth, gateway
+from app.routers import admin, analytics_v2, auth, gateway
 
 logger = logging.getLogger(__name__)
 _STATIC_DIR = Path(__file__).parent / "static"
@@ -61,6 +62,7 @@ app = FastAPI(
 app.include_router(auth.router)
 app.include_router(gateway.router)
 app.include_router(admin.router)
+app.include_router(analytics_v2.router)
 
 
 @app.get("/health")
@@ -72,3 +74,13 @@ def health_check() -> dict[str, str]:
 def admin_dashboard() -> FileResponse:
     """Serve the founder admin dashboard."""
     return FileResponse(_STATIC_DIR / "admin.html")
+
+
+@app.get("/admin/v2")
+def admin_dashboard_v2() -> FileResponse:
+    """Serve the v2 operational intelligence dashboard."""
+    return FileResponse(_STATIC_DIR / "v2" / "index.html")
+
+
+# Serve v2 static assets (CSS, JS) under /static/v2/
+app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")

@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -10,6 +11,8 @@ from app.database import get_db
 from app.models.analytics_event import AnalyticsEvent
 from app.models.request_log import RequestLog
 from app.models.user import User, UserStatus
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/api/admin",
@@ -61,21 +64,6 @@ class UserUpdateRequest(BaseModel):
 class UserStatusResponse(BaseModel):
     user_id: str
     status: str
-
-
-class TierAnalytics(BaseModel):
-    context_tier: str
-    request_count: int
-    pct_of_total: float
-    success_count: int
-    failure_count: int
-    success_rate: float
-    avg_latency_ms: float | None
-    avg_prompt_tokens: float | None
-    avg_completion_tokens: float | None
-    avg_total_tokens: float | None
-    avg_prompt_character_count: float | None
-    estimated_cost_usd: float | None
 
 
 class ProviderAnalytics(BaseModel):
@@ -139,7 +127,6 @@ class AnalyticsResponse(BaseModel):
     followup_estimated_cost_usd: float | None = None
     analytics_coverage: float | None
     estimated_total_cost_usd: float | None
-    tier_analytics: list[TierAnalytics]
     provider_analytics: list[ProviderAnalytics]
     profile_analytics: list[ProfileAnalytics]
     error_breakdown: list[ErrorBreakdown]
@@ -208,8 +195,7 @@ def list_users(
             sa_func.count(
                 sa_func.distinct(cast(RequestLog.created_at, Date))
             ).label("active_days"),
-            sa_func.sum(RequestLog.prompt_tokens).label("sum_prompt"),
-            sa_func.sum(RequestLog.completion_tokens).label("sum_completion"),
+            sa_func.sum(_cost_sql_expr()).label("estimated_cost"),
         )
         .outerjoin(RequestLog, join_cond)
         .group_by(User.id)
@@ -217,12 +203,8 @@ def list_users(
         .all()
     )
 
-    # Resolve the current model for cost estimation.
-    from app.config import settings as _settings
-    current_model = _settings.AI_MODEL
-
     results: list[UserResponse] = []
-    for u, total, successful, selection, screenshot, session, last_active, active_days, sum_p, sum_c in rows:
+    for u, total, successful, selection, screenshot, session, last_active, active_days, est_cost in rows:
         success_rate: int | None = None
         if total > 0:
             success_rate = round(successful / total * 100)
@@ -242,7 +224,7 @@ def list_users(
                 successful_requests=successful,
                 success_rate=success_rate,
                 last_active=last_active,
-                estimated_cost_usd=_estimate_cost(current_model, sum_p, sum_c),
+                estimated_cost_usd=round(est_cost, 4) if est_cost is not None else None,
                 active_days=active_days or 0,
             )
         )
@@ -337,7 +319,8 @@ def delete_user(
             detail="User not found",
         )
 
-    # Cascade: delete all request logs for this user first.
+    # Cascade: delete all related records for this user first.
+    db.query(AnalyticsEvent).filter(AnalyticsEvent.user_id == user_id).delete()
     db.query(RequestLog).filter(RequestLog.user_id == user_id).delete()
     db.delete(user)
     db.flush()
@@ -346,14 +329,8 @@ def delete_user(
 # ---------------------------------------------------------------------------
 # Cost estimation
 # ---------------------------------------------------------------------------
-# Approximate pricing per million tokens (USD) as of early 2025.
-# Key = ai_model value stored in request_logs.
-# Value = (input_usd_per_mtok, output_usd_per_mtok).
-# Update when providers change rates or new models are added.
-_MODEL_PRICING_PER_MTOK: dict[str, tuple[float, float]] = {
-    "claude-haiku-4-5-20251001": (0.80, 4.00),
-    "llama-3.3-70b-versatile": (0.59, 0.79),
-}
+# Pricing is defined in app.pricing — single source of truth.
+from app.pricing import MODEL_PRICING_PER_MTOK as _MODEL_PRICING_PER_MTOK
 
 
 def _profile_filter(query, profile: str | None):
@@ -373,6 +350,10 @@ def _estimate_cost(
         return None
     pricing = _MODEL_PRICING_PER_MTOK.get(model)
     if pricing is None:
+        logger.warning(
+            "COST_ESTIMATION unknown model '%s' — add to app/pricing.py for accurate cost tracking",
+            model,
+        )
         return None
     input_rate, output_rate = pricing
     return round(
@@ -380,6 +361,24 @@ def _estimate_cost(
         / 1_000_000,
         4,
     )
+
+
+def _cost_sql_expr():
+    """Return a SQL expression that estimates cost per-row using ai_model.
+
+    Uses a CASE expression over known model pricing so that aggregate
+    queries (SUM, AVG) compute cost from each request's actual ai_model
+    rather than a single global config value.
+    """
+    whens = [
+        (
+            RequestLog.ai_model == model,
+            (RequestLog.prompt_tokens * input_rate
+             + RequestLog.completion_tokens * output_rate) / 1_000_000,
+        )
+        for model, (input_rate, output_rate) in _MODEL_PRICING_PER_MTOK.items()
+    ]
+    return case(*whens, else_=None)
 
 
 # ---------------------------------------------------------------------------
@@ -488,8 +487,7 @@ def get_analytics(
         sa_func.avg(RequestLog.prompt_tokens),
         sa_func.avg(RequestLog.completion_tokens),
         sa_func.avg(RequestLog.total_tokens),
-        sa_func.sum(RequestLog.prompt_tokens),
-        sa_func.sum(RequestLog.completion_tokens),
+        sa_func.sum(_cost_sql_expr()),
     ).filter(
         RequestLog.mode.in_(["selection_followup", "session_followup", "screenshot_followup"]),
         RequestLog.prompt_tokens.isnot(None),
@@ -498,13 +496,7 @@ def get_analytics(
     followup_avg_prompt_tokens = round(followup_tok_stats[0], 1) if followup_tok_stats[0] is not None else None
     followup_avg_completion_tokens = round(followup_tok_stats[1], 1) if followup_tok_stats[1] is not None else None
     followup_avg_total_tokens = round(followup_tok_stats[2], 1) if followup_tok_stats[2] is not None else None
-
-    from app.config import settings as _followup_settings
-    followup_estimated_cost = _estimate_cost(
-        _followup_settings.AI_MODEL,
-        followup_tok_stats[3],
-        followup_tok_stats[4],
-    )
+    followup_estimated_cost = round(followup_tok_stats[3], 4) if followup_tok_stats[3] is not None else None
 
     # ── Latency percentiles (PostgreSQL percentile_cont) ──
     lat_q = db.query(
@@ -530,74 +522,6 @@ def get_analytics(
     avg_total_tokens = round(token_stats[2], 1) if token_stats[2] is not None else None
     analytics_count = token_stats[3] or 0
     analytics_coverage = round(analytics_count / total_requests * 100, 1) if total_requests > 0 else None
-
-    # ── Per-tier performance ──
-    tier_q = (
-        db.query(
-            RequestLog.context_tier,
-            sa_func.count(RequestLog.id),
-            sa_func.count(case((RequestLog.success.is_(True), RequestLog.id))),
-            sa_func.count(case((RequestLog.success.is_(False), RequestLog.id))),
-            sa_func.avg(RequestLog.latency_ms),
-            sa_func.avg(RequestLog.prompt_tokens),
-            sa_func.avg(RequestLog.completion_tokens),
-            sa_func.avg(RequestLog.total_tokens),
-            sa_func.avg(RequestLog.prompt_character_count),
-        )
-        .filter(RequestLog.context_tier.isnot(None))
-    )
-    tier_rows = (
-        _profile_filter(tier_q, profile)
-        .group_by(RequestLog.context_tier)
-        .order_by(RequestLog.context_tier)
-        .all()
-    )
-
-    # Tier cost estimation: GROUP BY (ai_model, context_tier) for accurate
-    # per-model costing, then aggregate by tier.
-    tier_cost_q = (
-        db.query(
-            RequestLog.ai_model,
-            RequestLog.context_tier,
-            sa_func.sum(RequestLog.prompt_tokens),
-            sa_func.sum(RequestLog.completion_tokens),
-        )
-        .filter(RequestLog.prompt_tokens.isnot(None))
-        .filter(RequestLog.context_tier.isnot(None))
-    )
-    tier_cost_rows = (
-        _profile_filter(tier_cost_q, profile)
-        .group_by(RequestLog.ai_model, RequestLog.context_tier)
-        .all()
-    )
-    tier_cost_map: dict[str, float] = {}
-    estimated_total_cost = 0.0
-    has_any_cost = False
-    for model, tier, sp, sc in tier_cost_rows:
-        cost = _estimate_cost(model, sp, sc)
-        if cost is not None:
-            has_any_cost = True
-            estimated_total_cost += cost
-            tier_cost_map[tier] = tier_cost_map.get(tier, 0.0) + cost
-
-    tier_total_tracked = sum(row[1] for row in tier_rows)
-    tier_analytics = [
-        TierAnalytics(
-            context_tier=tier,
-            request_count=count,
-            pct_of_total=round(count / tier_total_tracked * 100, 1) if tier_total_tracked > 0 else 0.0,
-            success_count=sc,
-            failure_count=fc,
-            success_rate=round(sc / count * 100, 1) if count > 0 else 0.0,
-            avg_latency_ms=round(alat, 1) if alat is not None else None,
-            avg_prompt_tokens=round(apt, 1) if apt is not None else None,
-            avg_completion_tokens=round(act, 1) if act is not None else None,
-            avg_total_tokens=round(att, 1) if att is not None else None,
-            avg_prompt_character_count=round(apc, 1) if apc is not None else None,
-            estimated_cost_usd=round(tier_cost_map.get(tier, 0.0), 4) if tier in tier_cost_map else None,
-        )
-        for tier, count, sc, fc, alat, apt, act, att, apc in tier_rows
-    ]
 
     # ── Provider analytics ──
     prov_q = (
@@ -686,10 +610,9 @@ def get_analytics(
         for et, c in error_rows
     ]
 
-    # Also include cost from non-tier rows (e.g. selection/screenshot mode)
-    # in the total.  The tier_cost_rows only cover context_tier IS NOT NULL.
-    # Recompute total from provider_rows which covers everything.
+    # ── Total cost (computed from per-provider/model groups) ──
     estimated_total_cost = 0.0
+    has_any_cost = False
     for _, model, _, _, _, _, _, sp, scp in provider_rows:
         cost = _estimate_cost(model, sp, scp)
         if cost is not None:
@@ -732,7 +655,6 @@ def get_analytics(
         avg_total_tokens=avg_total_tokens,
         analytics_coverage=analytics_coverage,
         estimated_total_cost_usd=round(estimated_total_cost, 4) if has_any_cost else None,
-        tier_analytics=tier_analytics,
         provider_analytics=provider_analytics,
         profile_analytics=profile_analytics,
         error_breakdown=error_breakdown,
@@ -781,6 +703,7 @@ def get_timeseries(
         sa_func.sum(RequestLog.prompt_tokens),
         sa_func.sum(RequestLog.completion_tokens),
         sa_func.sum(RequestLog.total_tokens),
+        sa_func.sum(_cost_sql_expr()),
     )
     rows = (
         _profile_filter(ts_q, profile)
@@ -788,9 +711,6 @@ def get_timeseries(
         .order_by(day)
         .all()
     )
-
-    from app.config import settings as _settings
-    current_model = _settings.AI_MODEL
 
     return [
         DailyRecord(
@@ -806,9 +726,9 @@ def get_timeseries(
             prompt_tokens=sp,
             completion_tokens=sc,
             total_tokens=st,
-            estimated_cost_usd=_estimate_cost(current_model, sp, sc),
+            estimated_cost_usd=round(est_cost, 4) if est_cost is not None else None,
         )
-        for d, total, succ, fail, au, sel, scr, ses, alat, sp, sc, st in rows
+        for d, total, succ, fail, au, sel, scr, ses, alat, sp, sc, st, est_cost in rows
     ]
 
 
@@ -843,8 +763,7 @@ def get_mode_analytics(
             sa_func.avg(RequestLog.prompt_tokens),
             sa_func.avg(RequestLog.completion_tokens),
             sa_func.avg(RequestLog.total_tokens),
-            sa_func.sum(RequestLog.prompt_tokens),
-            sa_func.sum(RequestLog.completion_tokens),
+            sa_func.sum(_cost_sql_expr()),
         )
         .filter(RequestLog.mode.isnot(None))
     )
@@ -855,9 +774,6 @@ def get_mode_analytics(
         .all()
     )
 
-    from app.config import settings as _settings
-    current_model = _settings.AI_MODEL
-
     return [
         ModeAnalyticsItem(
             mode=mode,
@@ -867,9 +783,9 @@ def get_mode_analytics(
             avg_prompt_tokens=round(apt, 1) if apt is not None else None,
             avg_completion_tokens=round(act, 1) if act is not None else None,
             avg_total_tokens=round(att, 1) if att is not None else None,
-            estimated_cost_usd=_estimate_cost(current_model, sp, scp),
+            estimated_cost_usd=round(est_cost, 4) if est_cost is not None else None,
         )
-        for mode, count, sc, alat, apt, act, att, sp, scp in rows
+        for mode, count, sc, alat, apt, act, att, est_cost in rows
     ]
 
 
@@ -904,13 +820,6 @@ class UserModeBreakdown(BaseModel):
     session: int
 
 
-class UserTierBreakdown(BaseModel):
-    tier1: int
-    tier2: int
-    tier2_5: int
-    tier3: int
-
-
 class UserTokenBreakdown(BaseModel):
     avg_prompt_tokens: float | None
     avg_completion_tokens: float | None
@@ -929,10 +838,6 @@ class UserDailyRecord(BaseModel):
     selection: int
     screenshot: int
     session: int
-    tier1: int
-    tier2: int
-    tier2_5: int
-    tier3: int
     prompt_tokens: int | None
     completion_tokens: int | None
     total_tokens: int | None
@@ -955,7 +860,6 @@ class UserDetailResponse(BaseModel):
     mode_breakdown: UserModeBreakdown
     improve_breakdown: UserImproveBreakdown = UserImproveBreakdown()
     followup_breakdown: UserFollowUpBreakdown = UserFollowUpBreakdown()
-    tier_breakdown: UserTierBreakdown
     token_breakdown: UserTokenBreakdown
     cost_breakdown: UserCostBreakdown
     daily: list[UserDailyRecord]
@@ -1007,8 +911,7 @@ def _user_followup_breakdown(db: Session, user_id: str) -> UserFollowUpBreakdown
             sa_func.avg(RequestLog.prompt_tokens),
             sa_func.avg(RequestLog.completion_tokens),
             sa_func.avg(RequestLog.total_tokens),
-            sa_func.sum(RequestLog.prompt_tokens),
-            sa_func.sum(RequestLog.completion_tokens),
+            sa_func.sum(_cost_sql_expr()),
         )
         .filter(
             RequestLog.user_id == user_id,
@@ -1034,12 +937,7 @@ def _user_followup_breakdown(db: Session, user_id: str) -> UserFollowUpBreakdown
         if explain_count > 0 else None
     )
 
-    from app.config import settings as _settings
-    estimated_cost = _estimate_cost(
-        _settings.AI_MODEL,
-        followup_stats[4],
-        followup_stats[5],
-    )
+    estimated_cost = round(followup_stats[4], 4) if followup_stats[4] is not None else None
 
     return UserFollowUpBreakdown(
         followup_count=followup_count,
@@ -1092,17 +990,6 @@ def get_user_detail(
     )
     mode_map = {m: c for m, c in mode_rows}
 
-    # ── Tier breakdown (Session mode only) ──
-    tier_rows = (
-        _user_log_q(
-            db.query(RequestLog.context_tier, sa_func.count(RequestLog.id))
-            .filter(RequestLog.context_tier.isnot(None))
-        )
-        .group_by(RequestLog.context_tier)
-        .all()
-    )
-    tier_map = {t: c for t, c in tier_rows}
-
     # ── Token breakdown ──
     token_stats = _user_log_q(db.query(
         sa_func.avg(RequestLog.prompt_tokens),
@@ -1112,15 +999,12 @@ def get_user_detail(
 
     # ── Cost breakdown ──
     cost_stats = _user_log_q(db.query(
-        sa_func.sum(RequestLog.prompt_tokens),
-        sa_func.sum(RequestLog.completion_tokens),
+        sa_func.sum(_cost_sql_expr()),
         sa_func.count(RequestLog.id),
     ).filter(RequestLog.prompt_tokens.isnot(None))).one()
 
-    from app.config import settings as _settings
-    current_model = _settings.AI_MODEL
-    total_cost = _estimate_cost(current_model, cost_stats[0], cost_stats[1])
-    total_reqs = cost_stats[2] or 0
+    total_cost = round(cost_stats[0], 4) if cost_stats[0] is not None else None
+    total_reqs = cost_stats[1] or 0
 
     cost_per_request = round(total_cost / total_reqs, 4) if total_cost and total_reqs > 0 else None
     cost_per_active_day = round(total_cost / active_days, 4) if total_cost and active_days > 0 else None
@@ -1134,15 +1018,12 @@ def get_user_detail(
             sa_func.count(case((RequestLog.mode == "selection", RequestLog.id))),
             sa_func.count(case((RequestLog.mode == "screenshot", RequestLog.id))),
             sa_func.count(case((RequestLog.mode == "session", RequestLog.id))),
-            sa_func.count(case((RequestLog.context_tier == "tier1", RequestLog.id))),
-            sa_func.count(case((RequestLog.context_tier == "tier2", RequestLog.id))),
-            sa_func.count(case((RequestLog.context_tier == "tier2.5", RequestLog.id))),
-            sa_func.count(case((RequestLog.context_tier == "tier3", RequestLog.id))),
             sa_func.sum(RequestLog.prompt_tokens),
             sa_func.sum(RequestLog.completion_tokens),
             sa_func.sum(RequestLog.total_tokens),
             sa_func.count(case((RequestLog.success.is_(True), RequestLog.id))),
             sa_func.avg(RequestLog.latency_ms),
+            sa_func.sum(_cost_sql_expr()),
         ))
         .group_by(day)
         .order_by(day)
@@ -1156,18 +1037,14 @@ def get_user_detail(
             selection=sel,
             screenshot=scr,
             session=ses,
-            tier1=t1,
-            tier2=t2,
-            tier2_5=t25,
-            tier3=t3,
             prompt_tokens=sp,
             completion_tokens=sc,
             total_tokens=st,
-            estimated_cost=_estimate_cost(current_model, sp, sc),
+            estimated_cost=round(est_cost, 4) if est_cost is not None else None,
             success_rate=round(succ / total * 100, 1) if total > 0 else 0.0,
             avg_latency_ms=round(alat, 1) if alat is not None else None,
         )
-        for d, total, sel, scr, ses, t1, t2, t25, t3, sp, sc, st, succ, alat in daily_rows
+        for d, total, sel, scr, ses, sp, sc, st, succ, alat, est_cost in daily_rows
     ]
 
     return UserDetailResponse(
@@ -1190,12 +1067,6 @@ def get_user_detail(
         ),
         improve_breakdown=_user_improve_breakdown(db, user.id),
         followup_breakdown=_user_followup_breakdown(db, user.id),
-        tier_breakdown=UserTierBreakdown(
-            tier1=tier_map.get("tier1", 0),
-            tier2=tier_map.get("tier2", 0),
-            tier2_5=tier_map.get("tier2.5", 0),
-            tier3=tier_map.get("tier3", 0),
-        ),
         token_breakdown=UserTokenBreakdown(
             avg_prompt_tokens=round(token_stats[0], 1) if token_stats[0] is not None else None,
             avg_completion_tokens=round(token_stats[1], 1) if token_stats[1] is not None else None,
@@ -1286,8 +1157,6 @@ def get_founder_intelligence(
 ) -> FounderIntelligenceResponse:
     """Return founder-focused analytics: funnel, TTFV, cost, errors, language."""
 
-    from app.config import settings as _settings
-    current_model = _settings.AI_MODEL
     now = datetime.now(timezone.utc)
 
     # ── 1. Activation Funnel ──
@@ -1400,15 +1269,14 @@ def get_founder_intelligence(
         """Return (cost, active_user_count) for requests since `since`."""
         q = db.query(
             sa_func.count(sa_func.distinct(RequestLog.user_id)),
-            sa_func.sum(RequestLog.prompt_tokens),
-            sa_func.sum(RequestLog.completion_tokens),
+            sa_func.sum(_cost_sql_expr()),
         ).filter(RequestLog.prompt_tokens.isnot(None))
         q = _profile_filter(q, profile)
         if since:
             q = q.filter(RequestLog.created_at >= since)
         row = q.one()
         active_count = row[0] or 0
-        cost = _estimate_cost(current_model, row[1], row[2])
+        cost = row[1]
         if cost is not None and active_count > 0:
             return round(cost / active_count, 4), active_count
         return None, active_count
@@ -1485,8 +1353,7 @@ def get_founder_intelligence(
         sa_func.count(case((RequestLog.success.is_(True), RequestLog.id))),
         sa_func.avg(RequestLog.latency_ms),
         sa_func.avg(RequestLog.total_tokens),
-        sa_func.sum(RequestLog.prompt_tokens),
-        sa_func.sum(RequestLog.completion_tokens),
+        sa_func.sum(_cost_sql_expr()),
     ).filter(RequestLog.language.isnot(None))
     _lang_q = _profile_filter(_lang_q, profile)
     lang_rows = (
@@ -1502,9 +1369,9 @@ def get_founder_intelligence(
             success_rate=round(sc / count * 100, 1) if count > 0 else 0.0,
             avg_latency_ms=round(alat, 1) if alat is not None else None,
             avg_total_tokens=round(atot, 1) if atot is not None else None,
-            estimated_cost_usd=_estimate_cost(current_model, sp, scp),
+            estimated_cost_usd=round(est_cost, 4) if est_cost is not None else None,
         )
-        for lang, count, sc, alat, atot, sp, scp in lang_rows
+        for lang, count, sc, alat, atot, est_cost in lang_rows
     ]
 
     return FounderIntelligenceResponse(
@@ -1549,9 +1416,6 @@ def get_profile_comparison(
 ) -> ProfileComparisonResponse:
     """Side-by-side General vs DSA metrics + user-level breakdown."""
 
-    from app.config import settings as _settings
-    current_model = _settings.AI_MODEL
-
     # ── Product Mix ──
     general_count = (
         db.query(sa_func.count(RequestLog.id))
@@ -1581,8 +1445,7 @@ def get_profile_comparison(
                 sa_func.count(case((RequestLog.success.is_(True), RequestLog.id))),
                 sa_func.avg(RequestLog.latency_ms),
                 sa_func.avg(RequestLog.total_tokens),
-                sa_func.sum(RequestLog.prompt_tokens),
-                sa_func.sum(RequestLog.completion_tokens),
+                sa_func.sum(_cost_sql_expr()),
             )
             .filter(RequestLog.explanation_profile == prof)
             .one()
@@ -1594,7 +1457,7 @@ def get_profile_comparison(
             success_rate=round(row[1] / cnt * 100, 1) if cnt > 0 else 0.0,
             avg_latency_ms=round(row[2], 1) if row[2] is not None else None,
             avg_total_tokens=round(row[3], 1) if row[3] is not None else None,
-            estimated_cost_usd=_estimate_cost(current_model, row[4], row[5]),
+            estimated_cost_usd=round(row[4], 4) if row[4] is not None else None,
         ))
 
     # ── User-level breakdown ──

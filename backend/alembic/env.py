@@ -16,6 +16,9 @@ from app.database import Base
 from app.models import User  # noqa: F401 — ensure models are registered
 from app.models.request_log import RequestLog  # noqa: F401
 from app.models.analytics_event import AnalyticsEvent  # noqa: F401
+from app.models.event import Event  # noqa: F401
+from app.models.ai_request import AIRequest  # noqa: F401
+from app.models.daily_summary import DailySummary  # noqa: F401
 
 config = context.config
 
