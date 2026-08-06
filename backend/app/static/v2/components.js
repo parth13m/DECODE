@@ -1200,3 +1200,115 @@ D.statRow = function (items) {
       <div class="d-stat-label">${D.fmt.escapeHtml(i.label)}</div>
     </div>`).join('')}</div>`;
 };
+
+
+/* ══════════════════════════════════════════════════════════
+   TOKEN BREAKDOWN TABLE
+   ══════════════════════════════════════════════════════════ */
+
+/** Renders a full token analytics table from an array of row objects.
+ *  Each row: { key, requests, prompt_tokens, completion_tokens, total_tokens,
+ *              avg_prompt_tokens, avg_completion_tokens, avg_total_tokens,
+ *              total_cost_usd, avg_cost_usd, success_rate, avg_latency_ms }
+ */
+D.tokenBreakdownTable = function (rows, opts = {}) {
+  if (!rows || !rows.length) return D.empty(null, opts.emptyTitle || 'No token data', opts.emptySub || 'No requests found for this breakdown');
+  const labelHeader = opts.labelHeader || 'Category';
+  return D.table({
+    headers: [
+      labelHeader,
+      { label: 'Requests', align: 'right' },
+      { label: 'Input Tok', align: 'right' },
+      { label: 'Output Tok', align: 'right' },
+      { label: 'Total Tok', align: 'right' },
+      { label: 'Avg In', align: 'right' },
+      { label: 'Avg Out', align: 'right' },
+      { label: 'Avg Total', align: 'right' },
+      { label: 'Cost', align: 'right' },
+      { label: 'Avg Cost', align: 'right' },
+    ],
+    rows: rows.map(r => ({
+      cells: [
+        `<strong>${D.fmt.escapeHtml(r.key)}</strong>`,
+        D.fmt.num(r.requests),
+        D.fmt.num(r.prompt_tokens),
+        D.fmt.num(r.completion_tokens),
+        D.fmt.num(r.total_tokens),
+        D.fmt.num(r.avg_prompt_tokens),
+        D.fmt.num(r.avg_completion_tokens),
+        D.fmt.num(r.avg_total_tokens),
+        D.fmt.usd(r.total_cost_usd),
+        D.fmt.usd(r.avg_cost_usd, 4),
+      ],
+      clickable: opts.onRowClick ? true : false,
+      onclick: opts.onRowClick ? opts.onRowClick(r) : undefined,
+    })),
+    emptyText: opts.emptyTitle || 'No data',
+  });
+};
+
+
+/* ══════════════════════════════════════════════════════════
+   RATIO BAR — stacked horizontal bar showing input vs output
+   ══════════════════════════════════════════════════════════ */
+
+/** Renders a list of features with stacked input/output token bars.
+ *  items: [{ label, input, output }]
+ */
+D.ratioBarList = function (items, opts = {}) {
+  if (!items || !items.length) return '';
+  const inputColor = opts.inputColor || '#3b82f6';
+  const outputColor = opts.outputColor || '#10b981';
+  return `<div class="d-ratio-bar-list">
+    ${items.map(item => {
+      const total = (item.input || 0) + (item.output || 0);
+      const inputPct = total > 0 ? (item.input / total * 100) : 50;
+      const outputPct = total > 0 ? (item.output / total * 100) : 50;
+      const ratio = item.input > 0 ? (item.output / item.input).toFixed(2) : '—';
+      return `<div class="d-ratio-bar-item">
+        <div class="d-ratio-bar-header">
+          <span class="d-ratio-bar-label">${D.fmt.escapeHtml(item.label)}</span>
+          <span class="d-ratio-bar-meta">
+            <span style="color:${inputColor}">In: ${D.fmt.num(item.input)}</span>
+            <span style="color:${outputColor};margin-left:8px">Out: ${D.fmt.num(item.output)}</span>
+            <span style="color:var(--d-text-3);margin-left:8px">Ratio: ${ratio}</span>
+          </span>
+        </div>
+        <div class="d-ratio-bar-track">
+          <div class="d-ratio-bar-fill" style="width:${inputPct.toFixed(1)}%;background:${inputColor}" title="Input: ${inputPct.toFixed(1)}%"></div>
+          <div class="d-ratio-bar-fill" style="width:${outputPct.toFixed(1)}%;background:${outputColor}" title="Output: ${outputPct.toFixed(1)}%"></div>
+        </div>
+        <div class="d-ratio-bar-pcts">
+          <span style="color:${inputColor}">${inputPct.toFixed(1)}% input</span>
+          <span style="color:${outputColor}">${outputPct.toFixed(1)}% output</span>
+        </div>
+      </div>`;
+    }).join('')}
+  </div>`;
+};
+
+
+/** Percentile cards — side-by-side display for input/output distributions */
+D.percentileCard = function (label, data, opts = {}) {
+  if (!data) return '';
+  const color = opts.color || 'var(--d-text-1)';
+  const maxVal = data.max || 1;
+  const bars = [
+    { label: 'P50', value: data.p50, pct: data.p50 / maxVal * 100 },
+    { label: 'P95', value: data.p95, pct: data.p95 / maxVal * 100 },
+    { label: 'P99', value: data.p99, pct: data.p99 / maxVal * 100 },
+    { label: 'Max', value: data.max, pct: 100 },
+  ];
+  return `<div class="d-percentile-card">
+    <div class="d-percentile-title" style="color:${color}">${D.fmt.escapeHtml(label)}</div>
+    ${bars.map(b => `
+      <div class="d-percentile-row">
+        <span class="d-percentile-label">${b.label}</span>
+        <div class="d-percentile-track">
+          <div class="d-percentile-fill" style="width:${Math.min(b.pct, 100).toFixed(1)}%;background:${color};opacity:${b.label === 'Max' ? 0.3 : 0.6}"></div>
+        </div>
+        <span class="d-percentile-value">${D.fmt.num(b.value)}</span>
+      </div>
+    `).join('')}
+  </div>`;
+};

@@ -270,7 +270,16 @@ Post-explanation code improvement. Available in Selection and Session modes (not
 
 **Compound modes**: `selection_followup`, `session_followup`, `screenshot_followup`, `selection_improve`, `session_improve`.
 
-**Admin dashboard** at `GET /admin`: analytics, token stats, improve stats, follow-up stats, mode/tier/provider/profile tables, user management, invite generation.
+**Admin dashboard (legacy)** at `GET /admin`: analytics, token stats, improve stats, follow-up stats, mode/tier/provider/profile tables, user management, invite generation. Remains for backward compatibility.
+
+**Dashboard V2** at `GET /admin/v2`: Founder-grade operational intelligence dashboard. Feature-complete and frozen.
+- **8 pages**: Executive, Product, AI Platform, Users, Workspaces, Quality, Cost, Settings.
+- **Analytics V2 API** (`/api/v2/analytics/*`): 10 endpoints — executive, product, users, user detail, ai-platform, quality, cost, settings, timeline, live, search, token-breakdown, aggregate. All require ADMIN_TOKEN auth.
+- **Token analytics**: Per-feature efficiency (compound modes), daily trends, top consumers, percentile distributions (P50/P95/P99), input/output ratio analysis, forecast metrics, feature × provider/model cross-tabulations.
+- **Visualization**: 6 canvas-based chart types (area, bar, donut, stacked area, multi-line, heatmap), CSS-based components (ratio bars, percentile cards, horizontal bars), drill-down drawer with export (JSON/CSV).
+- **Infrastructure**: `D.*` component library, API client with 1-min cache + inflight dedup + retry, global date filter, Cmd+K search, keyboard shortcuts.
+- **Files**: `backend/app/routers/analytics_v2.py`, `backend/app/static/v2/{index.html,app.js,components.js,design.css}`.
+- **Status**: Feature-complete. Frozen except for bug fixes, UX polish, or product-driven enhancements.
 
 ---
 
@@ -416,6 +425,7 @@ Verification is binary: builds succeed or fail, tests pass or fail, strict concu
 7. **Project Intelligence** — **In progress.** Phase 1 (Module Intelligence, M1–M7) complete. Phase 2 (Project Intelligence, M8–M11) complete. M12 (Validation) not started. Cross-cutting: KGR Phase 2 (proactive File Understanding) and Multi-Provider AI Platform complete. See `PROJECT_INTELLIGENCE_IMPLEMENTATION_STATUS.md`.
 8. ~~**Enhanced Explanation**~~ — **Complete.** Visual context extraction for Selection Mode. WindowSelector for reliable content window selection. Edge cropping for image token optimization. Backend vision gateway integration. Vision prompt redesigned for downstream explanation quality. Architecture: `architecture/VISUAL_CONTEXT_ARCHITECTURE.md`.
 9. ~~**Screenshot Mode Investigation**~~ — **Complete (researched and closed).** Product validation concluded insufficient explanation improvement for the latency and complexity cost. No further work planned.
+10. ~~**Dashboard V2**~~ — **Complete (feature-frozen).** Founder-grade operational intelligence dashboard with 8 pages, Analytics V2 API (10 endpoints), comprehensive token analytics (per-feature efficiency, trends, percentiles, forecasts, cross-tabulations), 6 chart types, drill-down drawers, global search, keyboard shortcuts. Future work: bug fixes, UX polish, validation, browser compatibility.
 
 ### Implementation Status Tracking
 
@@ -500,6 +510,14 @@ Capability-based provider routing is complete and production-ready. Do not modif
 - Graceful fallback: missing GROQ_API_KEY → uniform resolver routes everything to Claude.
 - Backend `resolve_*()` methods with legacy `AI_API_KEY`/`AI_MODEL`/`AI_ADAPTER` fallback.
 
+### Dashboard V2 & Analytics V2 API (Frozen)
+Dashboard V2 is feature-complete. Analytics V2 API endpoints are stable. Do not modify:
+- Analytics V2 endpoint signatures or response shapes (additive extensions only).
+- Dashboard page structure (8 pages, `D.*` component library, `App.pages.*` modules).
+- Token-breakdown endpoint compound feature derivation logic.
+- Legacy dashboard at `/admin` (remains for backward compatibility).
+- Dual-write architecture (v2 `ai_requests` + legacy `request_logs` coexist).
+
 ### Session State Architecture
 13. **Workspace history vs session state separation** — `Workspace` (database) stores persistent history. `SessionState` (JSON file) stores transient runtime state. Do not add `isOpen` or similar state flags to the `Workspace` model. Do not conflate workspace history with application session state.
 14. **Incremental session state persistence** — `saveSessionState()` is called on every open/close/activate/pin mutation. Do not rely solely on `willTerminateNotification` for persistence — unexpected termination must not lose the current session.
@@ -583,57 +601,63 @@ Main branch: `main`. Build must pass before committing. Run `xcodegen generate` 
 
 ---
 
-## Session Handoff (2026-08-03)
+## Session Handoff (2026-08-05)
 
 ### What Was Completed
 
-**Intent Bar** — universal pre-explanation interaction layer:
-- `onEditingStarted` callback added to `ExplanationHUDViewModel` and `FloatingExplanationHUD.collectIntent()`.
-- One-shot callback pattern (nil before call) prevents double-firing.
-- Keyboard interaction is immediate via local+global NSEvent monitors — no click required.
+**Billing Engine Architecture** (design, not yet implemented):
+- Complete 9-part architecture delivered in conversation. Atomic metering model: each LLM call is independently billed. One formula: `credits = max(1, ceil((input_tokens × input_rate + output_tokens × output_rate) / 1M))`. 1 credit = $0.001.
+- 14 atomic LLM operations traced from all `generateCompletion`, `streamChat`, `generateVisionCompletion` call sites.
+- Weekly billing periods (Monday reset). Three tiers: Free (750 credits), Medium (1500), Higher (2500).
+- Server-authoritative, client-decorative (percentage bar only). Metering point: inside existing `_log_request()`.
+- Implementation requires: add `credits` column to `request_logs`, add `tier` to `users`, add `compute_credits()` function. No new tables needed at alpha scale.
+- Architecture survives 50+ future features, new models (one line in PricingTable), new tiers (two lines).
+- Key finding: client already receives token usage in SSE `done` events (`SSEUsage` struct in `DecodeGatewayProvider.swift:474`) but explicitly discards it. Server logs all token data to `request_logs`.
 
-**Conditional Vision** — intent-driven visual context:
-- Screenshot captured immediately on hotkey (cheap, local only).
-- Vision starts only when user types a custom question (`onEditingStarted` fires).
-- Default explanations (Enter/Space) never invoke Vision — zero AI cost.
-- Vision executes concurrently while user types; coordinator awaits only if still running at submit.
-- `pendingVisionTask` lifecycle: cancelled on cancel, staleness, default explanation, re-invocation, `stopListening()`.
-- Custom questions always enable Vision regardless of the `enhancedExplanationEnabled` toggle.
-- Vision pipeline verified end-to-end: screenshot → JPEG → gateway → Claude Haiku → sanitize → inject → explanation.
+**Token Economics Analysis** (analysis, not implementation):
+- Complete measurement of all prompt sizes, token counts, and costs across all three modes.
+- Production model: claude-haiku-4-5-20251001 ($0.80/$4.00 per Mtok input/output).
+- Session Mode 2-5x cheaper than Selection/Screenshot (structured facts vs raw code).
+- Output tokens dominate cost (66-84%) despite being minority of token volume.
 
-**ExplanationExecutionContext** — canonical runtime model for explanation composition:
-- `@MainActor final class` recording which capabilities contributed to each explanation.
-- Each subsystem marks its contribution at the exact point of injection.
-- HUD header renders from `executionContext.displayText` (e.g., "Selection · General · Vision").
-- Replaces the old `modeDisplayName` static function for the primary rendering path.
+**Credit System Design** (design, not implementation):
+- Invisible credit system. Users see percentage bar only.
+- Post-hoc metering of actual token consumption. No predictions.
+- Three tiers optimized for adoption (first 4-5 months), not profit.
 
-**Previous session (2026-08-02):**
+**Dashboard V2** (prior session, uncommitted):
+- 8-page operational intelligence dashboard. Analytics V2 API with 10 endpoints.
+- Files: `backend/app/routers/analytics_v2.py`, `backend/app/static/v2/{index.html,app.js,components.js,design.css}`.
+- Status: Feature-complete. Changes are uncommitted in working tree.
+
+**Previous sessions (2026-08-02 / 2026-08-03):**
+- Enhanced Explanation (Visual Context pipeline, Intent Bar, Conditional Vision, ExplanationExecutionContext).
 - Backend vision gateway with provider-agnostic dispatch.
-- WindowSelector with weighted scoring for reliable content window selection.
-- Edge cropping for image token optimization (~36% pixel reduction).
-- Vision prompt redesigned (v1→v2→v3) for downstream explanation quality.
 - Screenshot Mode Investigation researched and closed.
-- CRL-001 Architecture abandoned and deleted.
 
 ### Current Implementation Status
 
 | Component | Status | Location |
 |-----------|--------|----------|
+| Billing Engine Architecture | Designed (not implemented) | Conversation output |
+| Token Economics Analysis | Complete (reference) | Conversation output |
+| Dashboard V2 (8 pages) | Complete (uncommitted) | `backend/app/static/v2/` |
+| Analytics V2 API | Complete (uncommitted) | `backend/app/routers/analytics_v2.py` |
 | Intent Bar (onEditingStarted) | Complete | `ExplanationHUDViewModel.swift`, `FloatingExplanationHUD.swift` |
 | Conditional Vision (SelectionMode) | Complete | `Decode/Application/SelectionModeCoordinator.swift` |
 | ExplanationExecutionContext | Complete | `Decode/Domain/Models/ExplanationExecutionContext.swift` |
-| VisualContextExtractor | Complete | `Decode/Application/VisualContextExtractor.swift` |
-| WindowSelector | Complete | `Decode/Infrastructure/Capture/WindowSelector.swift` |
-| VisualContext model | Complete | `Decode/Domain/Models/VisualContext.swift` |
-| DecodeGatewayProvider (vision) | Complete | `Decode/Infrastructure/AI/DecodeGatewayProvider.swift` |
-| Backend vision config | Complete | `backend/app/config.py`, `backend/app/gateway_service.py` |
 | Visual Context Architecture | Complete | `architecture/VISUAL_CONTEXT_ARCHITECTURE.md` |
 
 ### Repository State
 
 - Branch: `main`.
 - All code builds successfully. 4 pre-existing test failures unchanged.
+- Uncommitted changes: CLAUDE.md, analytics_v2.py, app.js, components.js, design.css (Dashboard V2 from prior session).
+- No code changes were made during the 2026-08-05 session (analysis/design only).
 
-### Immediate Next Recommended Task
+### Immediate Next Recommended Tasks
 
-1. **Project Intelligence M12 — Validation**: End-to-end validation of the complete Project Intelligence stack (M8–M11). See `PROJECT_INTELLIGENCE_IMPLEMENTATION_STATUS.md`.
+1. **Commit Dashboard V2**: The uncommitted Dashboard V2 changes should be reviewed and committed.
+2. **Implement Billing Engine Phase 1**: Add `credits` column to `request_logs`, implement `compute_credits()` in `_log_request()`, add `tier` to users table. See billing architecture in conversation for full spec.
+3. **Dashboard V2 Validation**: Browser testing, UX polish, edge case handling.
+4. **Project Intelligence M12 — Validation**: End-to-end validation of the complete Project Intelligence stack (M8–M11). See `PROJECT_INTELLIGENCE_IMPLEMENTATION_STATUS.md`.

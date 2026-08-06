@@ -713,8 +713,8 @@ App.pages.product = {
     const modes = this._lastData.product.by_mode || [];
     D.drillDown.open('Mode Details', `
       <div style="margin-bottom:16px">
-        <button class="d-btn d-btn-sm" onclick="D.drillDown.exportData(${JSON.stringify(JSON.stringify(modes))}, 'modes.json')">Export JSON</button>
-        <button class="d-btn d-btn-sm" style="margin-left:8px" onclick="D.drillDown.exportData(JSON.parse('${JSON.stringify(JSON.stringify(modes))}'), 'modes.csv', 'csv')">Export CSV</button>
+        <button class="d-btn d-btn-sm" onclick="D.drillDown.exportData(JSON.parse(atob('${btoa(JSON.stringify(modes))}')), 'modes.json')">Export JSON</button>
+        <button class="d-btn d-btn-sm" style="margin-left:8px" onclick="D.drillDown.exportData(JSON.parse(atob('${btoa(JSON.stringify(modes))}')), 'modes.csv', 'csv')">Export CSV</button>
       </div>
       ${D.table({
         headers: ['Mode', { label: 'Requests', align: 'right' }, { label: 'Users', align: 'right' }, { label: 'Avg Latency', align: 'right' }],
@@ -738,23 +738,25 @@ App.pages.ai = {
       ${D.globalFilterBar()}
       ${D.sectionHeader('Platform Health')}
       ${D.kpiLoading(4, 4)}
+      <div class="d-section d-mt-6">${D.sectionHeader('Token Consumption')}${D.kpiLoading(4, 4)}</div>
       <div class="d-section d-mt-6">${D.sectionHeader('Providers')}${D.chartLoading(2, 2)}</div>
       <div class="d-section d-mt-6">${D.sectionHeader('Models')}${D.tableLoading(6)}</div>`;
 
     try {
-      const [ai, quality, live] = await Promise.all([
+      const [ai, quality, live, tokens] = await Promise.all([
         D.api.fetch(D.api.url('/api/v2/analytics/ai-platform')),
         D.api.fetch(D.api.url('/api/v2/analytics/quality')),
         D.api.fetch(D.api.url('/api/v2/analytics/live', { minutes: 60 })),
+        D.api.fetch(D.api.url('/api/v2/analytics/token-breakdown')),
       ]);
-      this._lastData = { ai, quality, live };
-      this._renderLive(el, ai, quality, live);
+      this._lastData = { ai, quality, live, tokens };
+      this._renderLive(el, ai, quality, live, tokens);
     } catch (err) {
       el.innerHTML = `${D.globalFilterBar()}${D.error('Failed to load AI platform data', err.message, "App.pages.ai.render()")}`;
     }
   },
 
-  _renderLive(el, ai, quality, live) {
+  _renderLive(el, ai, quality, live, tokens) {
     const providers = ai.by_provider || [];
     const models = ai.by_model || [];
     const errors = ai.errors || [];
@@ -779,6 +781,75 @@ App.pages.ai = {
     const dailySuccess = dailyTrend.map(d => d.successful);
     const dailyFailed = dailyTrend.map(d => d.total - d.successful);
 
+    // Token breakdown data
+    const byMode = tokens.by_mode || [];
+    const byType = tokens.by_request_type || [];
+    const byProfile = tokens.by_profile || [];
+    const byFeature = tokens.by_feature || [];
+    const tokenDaily = tokens.daily_trend || [];
+    const topUsers = tokens.top_users || [];
+    const tokenDist = tokens.token_distribution;
+    const featureByProvider = tokens.feature_by_provider || [];
+    const featureByModel = tokens.feature_by_model || [];
+    const vision = tokens.vision || {};
+    const dsa = tokens.dsa || {};
+
+    // Token totals across all modes
+    const totalPrompt = byMode.reduce((s, m) => s + (m.prompt_tokens || 0), 0);
+    const totalCompletion = byMode.reduce((s, m) => s + (m.completion_tokens || 0), 0);
+    const totalTokens = byMode.reduce((s, m) => s + (m.total_tokens || 0), 0);
+    const totalCost = byMode.reduce((s, m) => s + (m.total_cost_usd || 0), 0);
+
+    // Token donut segments by mode
+    const modeTokenColors = { selection: '#e87830', session: '#3b82f6', screenshot: '#8b5cf6', unknown: '#6b7280' };
+    const modeTokenSegs = byMode.filter(m => m.total_tokens > 0).map(m => ({
+      label: m.key, value: m.total_tokens, color: modeTokenColors[m.key] || '#6b7280',
+    }));
+
+    // Token donut segments by type
+    const typeTokenColors = { explain: '#e87830', followup: '#3b82f6', improve: '#10b981', vision: '#8b5cf6', enrichment: '#f59e0b', unknown: '#6b7280' };
+    const typeTokenSegs = byType.filter(t => t.total_tokens > 0).map(t => ({
+      label: t.key, value: t.total_tokens, color: typeTokenColors[t.key] || '#6b7280',
+    }));
+
+    // Feature colors
+    const featureColors = {
+      selection: '#e87830', session: '#3b82f6', session_followup: '#06b6d4',
+      session_improve: '#10b981', selection_followup: '#f97316', screenshot: '#8b5cf6',
+      vision: '#ec4899', enrichment: '#f59e0b', other: '#6b7280',
+    };
+    const featureLabel = k => k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+
+    // Feature cost donut
+    const featureCostSegs = byFeature.filter(f => f.total_cost_usd > 0).map(f => ({
+      label: featureLabel(f.key), value: f.total_cost_usd, color: featureColors[f.key] || '#6b7280',
+    }));
+
+    // Vision / DSA section data
+    const visionTotals = vision.totals;
+    const hasVision = visionTotals && visionTotals.requests > 0;
+    const dsaTotals = dsa.totals;
+    const hasDSA = dsaTotals && dsaTotals.requests > 0;
+
+    // Forecast calculations
+    const numDays = tokenDaily.length || 1;
+    const avgDailyReqs = totalReqs / numDays;
+    const avgDailyCost = totalCost / numDays;
+    const avgDailyTokens = totalTokens / numDays;
+    const avgTokensPerReq = totalReqs > 0 ? totalTokens / totalReqs : 0;
+    const costPer100 = totalReqs > 0 ? (totalCost / totalReqs) * 100 : 0;
+    const costPer1000 = costPer100 * 10;
+    const estMonthlyCost = avgDailyCost * 30;
+    const estMonthlyTokens = avgDailyTokens * 30;
+
+    // Token daily trend data
+    const tdLabels = tokenDaily.map(d => D.fmt.dateShort(d.date));
+    const tdPrompt = tokenDaily.map(d => d.prompt_tokens);
+    const tdCompletion = tokenDaily.map(d => d.completion_tokens);
+    const tdTotal = tokenDaily.map(d => d.total_tokens);
+    const tdCost = tokenDaily.map(d => d.cost_usd);
+    const tdReqs = tokenDaily.map(d => d.requests);
+
     el.innerHTML = `
       ${D.globalFilterBar()}
 
@@ -799,6 +870,260 @@ App.pages.ai = {
         ], 4)}
       </div>
 
+      <!-- ═══ TOKEN CONSUMPTION OVERVIEW ═══ -->
+      <div class="d-section d-mt-6">
+        ${D.sectionHeader('Token Consumption Overview', `<button class="d-btn d-btn-sm d-btn-ghost" onclick="App.pages.ai._drillDownTokens()">Export</button>`)}
+        ${D.kpiGrid([
+          D.kpi({ label: 'Total Input Tokens', value: D.fmt.num(totalPrompt), accent: 'brand' }),
+          D.kpi({ label: 'Total Output Tokens', value: D.fmt.num(totalCompletion), accent: 'info' }),
+          D.kpi({ label: 'Total Tokens', value: D.fmt.num(totalTokens), accent: 'purple' }),
+          D.kpi({ label: 'Total Token Cost', value: D.fmt.usdCompact(totalCost), accent: 'warning' }),
+        ], 4)}
+      </div>
+
+      <div class="d-section d-mt-6">
+        ${D.sectionHeader('Token Distribution')}
+        ${D.chartGrid([
+          D.chartCard({ title: 'Tokens by Mode', canvasId: 'ai-donut-mode-tokens', height: 260, placeholder: false }),
+          D.chartCard({ title: 'Tokens by Request Type', canvasId: 'ai-donut-type-tokens', height: 260, placeholder: false }),
+        ], 2)}
+      </div>
+
+      <!-- ═══ 1. TOKEN EFFICIENCY BY FEATURE ═══ -->
+      <div class="d-section d-mt-6">
+        ${D.sectionHeader('Token Efficiency by Feature', `<button class="d-btn d-btn-sm d-btn-ghost" onclick="App.pages.ai._drillDownFeatureEfficiency()">Details</button>`)}
+        ${byFeature.length > 0 ? D.table({
+          headers: [
+            'Feature',
+            { label: 'Requests', align: 'right' },
+            { label: 'Avg In', align: 'right' },
+            { label: 'Avg Out', align: 'right' },
+            { label: 'Out/In Ratio', align: 'right' },
+            { label: 'Avg Cost', align: 'right' },
+            { label: 'Avg Latency', align: 'right' },
+          ],
+          rows: byFeature.map(f => {
+            const ratio = f.avg_prompt_tokens > 0 ? f.avg_completion_tokens / f.avg_prompt_tokens : 0;
+            const ratioColor = ratio > 1.5 ? 'var(--d-danger)' : ratio > 0.8 ? 'var(--d-warning)' : 'var(--d-success)';
+            return {
+              clickable: true,
+              onclick: `App.pages.ai._drillDownFeature('${D.fmt.escapeHtml(f.key)}')`,
+              cells: [
+                `<strong style="color:${featureColors[f.key] || '#6b7280'}">${featureLabel(f.key)}</strong>`,
+                D.fmt.num(f.requests),
+                D.fmt.num(f.avg_prompt_tokens),
+                D.fmt.num(f.avg_completion_tokens),
+                `<span style="color:${ratioColor};font-weight:600">${ratio.toFixed(2)}x</span>`,
+                D.fmt.usd(f.avg_cost_usd, 4),
+                D.fmt.latency(f.avg_latency_ms),
+              ],
+            };
+          }),
+        }) : D.empty(null, 'No feature data')}
+      </div>
+
+      <!-- ═══ 2. COST PER FEATURE ═══ -->
+      <div class="d-section d-mt-6">
+        ${D.sectionHeader('Cost per Feature')}
+        ${D.chartGrid([
+          D.chartCard({ title: 'Cost by Feature', canvasId: 'ai-donut-feature-cost', height: 260, placeholder: false }),
+          `<div class="d-chart-card">${D.table({
+            headers: [
+              'Feature',
+              { label: 'Cost', align: 'right' },
+              { label: 'Requests', align: 'right' },
+              { label: 'Avg Cost', align: 'right' },
+              { label: 'Cost %', align: 'right' },
+              { label: 'Tokens', align: 'right' },
+            ],
+            rows: byFeature.filter(f => f.total_cost_usd > 0).sort((a, b) => b.total_cost_usd - a.total_cost_usd).map(f => ({
+              cells: [
+                `<strong style="color:${featureColors[f.key] || '#6b7280'}">${featureLabel(f.key)}</strong>`,
+                D.fmt.usd(f.total_cost_usd),
+                D.fmt.num(f.requests),
+                D.fmt.usd(f.avg_cost_usd, 4),
+                D.fmt.pct(totalCost > 0 ? (f.total_cost_usd / totalCost * 100) : 0),
+                D.fmt.num(f.total_tokens),
+              ],
+            })),
+            emptyText: 'No cost data',
+          })}</div>`,
+        ], 2)}
+      </div>
+
+      <!-- ═══ 3. TOKEN TRENDS ═══ -->
+      <div class="d-section d-mt-6">
+        ${D.sectionHeader('Token Trends')}
+        ${D.chartGrid([
+          D.chartCard({ title: 'Daily Input vs Output Tokens', canvasId: 'ai-trend-in-out', height: 220 }),
+          D.chartCard({ title: 'Daily Total Tokens', canvasId: 'ai-trend-total', height: 220 }),
+        ], 2)}
+        <div class="d-mt-4">
+          ${D.chartGrid([
+            D.chartCard({ title: 'Daily Token Cost', canvasId: 'ai-trend-cost', height: 220 }),
+            D.chartCard({ title: 'Daily Requests', canvasId: 'ai-trend-reqs', height: 220 }),
+          ], 2)}
+        </div>
+      </div>
+
+      <!-- ═══ 5. TOKEN DISTRIBUTION (PERCENTILES) ═══ -->
+      ${tokenDist ? `
+        <div class="d-section d-mt-6">
+          ${D.sectionHeader('Token Distribution (Percentiles)')}
+          <div class="d-chart-card" style="padding:var(--d-sp-5)">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px">
+              ${D.percentileCard('Input Tokens', tokenDist.prompt, { color: '#3b82f6' })}
+              ${D.percentileCard('Output Tokens', tokenDist.completion, { color: '#10b981' })}
+            </div>
+          </div>
+        </div>
+      ` : ''}
+
+      <!-- ═══ 6. PROMPT VS COMPLETION RATIO ═══ -->
+      <div class="d-section d-mt-6">
+        ${D.sectionHeader('Input vs Output Ratio by Feature')}
+        <div class="d-chart-card" style="padding:var(--d-sp-5)">
+          ${D.ratioBarList(byFeature.filter(f => f.total_tokens > 0).map(f => ({
+            label: featureLabel(f.key),
+            input: f.prompt_tokens,
+            output: f.completion_tokens,
+          })))}
+        </div>
+      </div>
+
+      <!-- ═══ 7. FORECAST METRICS ═══ -->
+      <div class="d-section d-mt-6">
+        ${D.sectionHeader('Forecast Metrics', `<span class="d-text-dim" style="font-size:11px">Based on ${D.fmt.num(numDays)}-day average</span>`)}
+        ${D.kpiGrid([
+          D.kpi({ label: 'Cost / 100 Reqs', value: D.fmt.usd(costPer100), accent: 'warning' }),
+          D.kpi({ label: 'Cost / 1,000 Reqs', value: D.fmt.usd(costPer1000), accent: 'warning' }),
+          D.kpi({ label: 'Avg Tokens / Req', value: D.fmt.num(Math.round(avgTokensPerReq)), accent: 'purple' }),
+          D.kpi({ label: 'Est. Monthly Cost', value: D.fmt.usdCompact(estMonthlyCost), sub: D.fmt.usd(avgDailyCost) + '/day', accent: 'danger' }),
+        ], 4)}
+        <div class="d-mt-4">
+          ${D.kpiGrid([
+            D.kpi({ label: 'Est. Monthly Tokens', value: D.fmt.num(Math.round(estMonthlyTokens)), sub: D.fmt.num(Math.round(avgDailyTokens)) + '/day' }),
+            D.kpi({ label: 'Avg Daily Requests', value: D.fmt.num(Math.round(avgDailyReqs)) }),
+            D.kpi({ label: 'Avg Daily Cost', value: D.fmt.usd(avgDailyCost) }),
+            D.kpi({ label: 'Input/Output Split', value: totalTokens > 0 ? D.fmt.pct(totalPrompt / totalTokens * 100, 0) + ' / ' + D.fmt.pct(totalCompletion / totalTokens * 100, 0) : '—', sub: 'Input / Output' }),
+          ], 4)}
+        </div>
+      </div>
+
+      <!-- ═══ 4. TOP CONSUMERS ═══ -->
+      ${topUsers.length > 0 ? `
+        <div class="d-section d-mt-6">
+          ${D.sectionHeader('Top Consumers', `<button class="d-btn d-btn-sm d-btn-ghost" onclick="App.pages.ai._exportTopUsers()">Export</button>`)}
+          ${D.table({
+            headers: [
+              'User',
+              { label: 'Requests', align: 'right' },
+              { label: 'Input Tok', align: 'right' },
+              { label: 'Output Tok', align: 'right' },
+              { label: 'Total Tok', align: 'right' },
+              { label: 'Cost', align: 'right' },
+            ],
+            rows: topUsers.map(u => ({
+              cells: [
+                `<strong>${D.fmt.escapeHtml(u.name || u.email || u.user_id.substring(0, 8))}</strong>`,
+                D.fmt.num(u.requests),
+                D.fmt.num(u.prompt_tokens),
+                D.fmt.num(u.completion_tokens),
+                D.fmt.num(u.total_tokens),
+                D.fmt.usd(u.cost_usd),
+              ],
+            })),
+          })}
+        </div>
+      ` : ''}
+
+      ${providers.length > 0 ? `
+        <div class="d-section d-mt-6">
+          ${D.sectionHeader('Top Providers by Tokens')}
+          <div class="d-chart-card" style="padding:var(--d-sp-5)">
+            ${D.horizontalBars(providers.filter(p => p.prompt_tokens + p.completion_tokens > 0).sort((a, b) => (b.prompt_tokens + b.completion_tokens) - (a.prompt_tokens + a.completion_tokens)).map(p => ({
+              label: p.provider + ' (' + D.fmt.usd(p.total_cost_usd) + ')',
+              value: p.prompt_tokens + p.completion_tokens,
+              color: provColors(p.provider),
+            })))}
+          </div>
+        </div>
+      ` : ''}
+
+      ${models.length > 0 ? `
+        <div class="d-section d-mt-6">
+          ${D.sectionHeader('Top Models by Tokens')}
+          <div class="d-chart-card" style="padding:var(--d-sp-5)">
+            ${D.horizontalBars(models.filter(m => m.prompt_tokens + m.completion_tokens > 0).sort((a, b) => (b.prompt_tokens + b.completion_tokens) - (a.prompt_tokens + a.completion_tokens)).slice(0, 8).map(m => ({
+              label: m.model.split('/').pop() + ' (' + D.fmt.usd(m.total_cost_usd) + ')',
+              value: m.prompt_tokens + m.completion_tokens,
+              color: '#8b5cf6',
+            })))}
+          </div>
+        </div>
+      ` : ''}
+
+      <!-- ═══ TOKEN BREAKDOWN TABLES (EXISTING) ═══ -->
+      <div class="d-section d-mt-6">
+        ${D.sectionHeader('Token Breakdown by Mode', `<button class="d-btn d-btn-sm d-btn-ghost" onclick="App.pages.ai._drillDownModeTokens()">Details</button>`)}
+        ${D.tokenBreakdownTable(byMode, { labelHeader: 'Mode' })}
+      </div>
+
+      <div class="d-section d-mt-6">
+        ${D.sectionHeader('Token Breakdown by Request Type')}
+        ${D.tokenBreakdownTable(byType, { labelHeader: 'Request Type' })}
+      </div>
+
+      ${byProfile.length > 0 ? `
+        <div class="d-section d-mt-6">
+          ${D.sectionHeader('Token Breakdown by Explanation Profile')}
+          ${D.tokenBreakdownTable(byProfile, { labelHeader: 'Profile' })}
+        </div>
+      ` : ''}
+
+      <!-- ═══ VISION ANALYTICS ═══ -->
+      <div class="d-section d-mt-6">
+        ${D.sectionHeader('Vision Analytics', hasVision ? `<button class="d-btn d-btn-sm d-btn-ghost" onclick="App.pages.ai._drillDownVision()">Details</button>` : '')}
+        ${hasVision ? `
+          ${D.kpiGrid([
+            D.kpi({ label: 'Vision Requests', value: D.fmt.num(visionTotals.requests), accent: 'purple' }),
+            D.kpi({ label: 'Input Tokens', value: D.fmt.num(visionTotals.prompt_tokens), accent: 'brand' }),
+            D.kpi({ label: 'Output Tokens', value: D.fmt.num(visionTotals.completion_tokens), accent: 'info' }),
+            D.kpi({ label: 'Vision Cost', value: D.fmt.usd(visionTotals.total_cost_usd), accent: 'warning' }),
+          ], 4)}
+          <div class="d-mt-4">
+            ${D.kpiGrid([
+              D.kpi({ label: 'Avg Input / Req', value: D.fmt.num(visionTotals.avg_prompt_tokens) }),
+              D.kpi({ label: 'Avg Output / Req', value: D.fmt.num(visionTotals.avg_completion_tokens) }),
+              D.kpi({ label: 'Success Rate', value: D.fmt.pct(visionTotals.success_rate), accent: visionTotals.success_rate >= 95 ? 'success' : 'danger' }),
+              D.kpi({ label: 'Avg Latency', value: D.fmt.latency(visionTotals.avg_latency_ms) }),
+            ], 4)}
+          </div>
+        ` : D.empty(null, 'No Vision Requests', 'Vision analytics will appear when vision requests are recorded')}
+      </div>
+
+      <!-- ═══ DSA ANALYTICS ═══ -->
+      <div class="d-section d-mt-6">
+        ${D.sectionHeader('DSA Analytics', hasDSA ? `<button class="d-btn d-btn-sm d-btn-ghost" onclick="App.pages.ai._drillDownDSA()">Details</button>` : '')}
+        ${hasDSA ? `
+          ${D.kpiGrid([
+            D.kpi({ label: 'DSA Requests', value: D.fmt.num(dsaTotals.requests), accent: 'brand' }),
+            D.kpi({ label: 'Input Tokens', value: D.fmt.num(dsaTotals.prompt_tokens), accent: 'brand' }),
+            D.kpi({ label: 'Output Tokens', value: D.fmt.num(dsaTotals.completion_tokens), accent: 'info' }),
+            D.kpi({ label: 'DSA Cost', value: D.fmt.usd(dsaTotals.total_cost_usd), accent: 'warning' }),
+          ], 4)}
+          <div class="d-mt-4">
+            ${D.kpiGrid([
+              D.kpi({ label: 'Avg Input / Req', value: D.fmt.num(dsaTotals.avg_prompt_tokens) }),
+              D.kpi({ label: 'Avg Output / Req', value: D.fmt.num(dsaTotals.avg_completion_tokens) }),
+              D.kpi({ label: 'Success Rate', value: D.fmt.pct(dsaTotals.success_rate), accent: dsaTotals.success_rate >= 95 ? 'success' : 'danger' }),
+              D.kpi({ label: 'Avg Latency', value: D.fmt.latency(dsaTotals.avg_latency_ms) }),
+            ], 4)}
+          </div>
+        ` : D.empty(null, 'No DSA Requests', 'DSA is an active explanation profile. Analytics appear when DSA requests are recorded.')}
+      </div>
+
+      <!-- ═══ 8. PROVIDER & MODEL TABLES ═══ -->
       <div class="d-section d-mt-6">
         ${D.sectionHeader('Provider Distribution')}
         ${D.chartGrid([
@@ -815,8 +1140,9 @@ App.pages.ai = {
             { label: 'Requests', align: 'right' },
             { label: 'Success %', align: 'right' },
             { label: 'Avg Latency', align: 'right' },
-            { label: 'Prompt Tokens', align: 'right' },
-            { label: 'Compl. Tokens', align: 'right' },
+            { label: 'Input Tok', align: 'right' },
+            { label: 'Output Tok', align: 'right' },
+            { label: 'Total Tok', align: 'right' },
             { label: 'Cost', align: 'right' },
           ],
           rows: providers.map(p => ({
@@ -827,6 +1153,7 @@ App.pages.ai = {
               D.fmt.latency(p.avg_latency_ms),
               D.fmt.num(p.prompt_tokens),
               D.fmt.num(p.completion_tokens),
+              D.fmt.num(p.prompt_tokens + p.completion_tokens),
               D.fmt.usd(p.total_cost_usd),
             ],
           })),
@@ -842,6 +1169,8 @@ App.pages.ai = {
               'Model', 'Provider',
               { label: 'Requests', align: 'right' },
               { label: 'Success %', align: 'right' },
+              { label: 'Input Tok', align: 'right' },
+              { label: 'Output Tok', align: 'right' },
               { label: 'Avg Latency', align: 'right' },
               { label: 'Cost', align: 'right' },
             ],
@@ -853,6 +1182,8 @@ App.pages.ai = {
                 D.fmt.escapeHtml(m.provider),
                 D.fmt.num(m.count),
                 D.badge(D.fmt.pct(m.success_rate), m.success_rate >= 95 ? 'success' : 'danger'),
+                D.fmt.num(m.prompt_tokens),
+                D.fmt.num(m.completion_tokens),
                 D.fmt.latency(m.avg_latency_ms),
                 D.fmt.usd(m.total_cost_usd),
               ],
@@ -881,6 +1212,51 @@ App.pages.ai = {
     `;
 
     requestAnimationFrame(() => {
+      // Token donuts
+      if (modeTokenSegs.length) {
+        const mtCanvas = document.getElementById('ai-donut-mode-tokens');
+        if (mtCanvas) {
+          const body = mtCanvas.closest('.d-chart-body');
+          body.innerHTML = `<div class="d-donut-wrap"><canvas id="ai-donut-mode-tokens" style="width:180px;height:180px"></canvas>${D.donutLegend(modeTokenSegs, totalTokens)}</div>`;
+          D.renderDonutChart('ai-donut-mode-tokens', modeTokenSegs, { height: 180, centerLabel: D.fmt.num(totalTokens), centerSub: 'tokens' });
+        }
+      }
+      if (typeTokenSegs.length) {
+        const ttCanvas = document.getElementById('ai-donut-type-tokens');
+        if (ttCanvas) {
+          const body = ttCanvas.closest('.d-chart-body');
+          body.innerHTML = `<div class="d-donut-wrap"><canvas id="ai-donut-type-tokens" style="width:180px;height:180px"></canvas>${D.donutLegend(typeTokenSegs, totalTokens)}</div>`;
+          D.renderDonutChart('ai-donut-type-tokens', typeTokenSegs, { height: 180, centerLabel: D.fmt.num(totalTokens), centerSub: 'tokens' });
+        }
+      }
+      // Feature cost donut
+      if (featureCostSegs.length) {
+        const fcCanvas = document.getElementById('ai-donut-feature-cost');
+        if (fcCanvas) {
+          const body = fcCanvas.closest('.d-chart-body');
+          body.innerHTML = `<div class="d-donut-wrap"><canvas id="ai-donut-feature-cost" style="width:180px;height:180px"></canvas>${D.donutLegend(featureCostSegs, totalCost)}</div>`;
+          D.renderDonutChart('ai-donut-feature-cost', featureCostSegs, { height: 180, centerLabel: D.fmt.usdCompact(totalCost), centerSub: 'total' });
+        }
+      }
+
+      // Token trend charts
+      if (tdLabels.length > 1) {
+        D.renderMultiLineChart('ai-trend-in-out', [
+          { data: tdPrompt, color: '#3b82f6', label: 'Input' },
+          { data: tdCompletion, color: '#10b981', label: 'Output' },
+        ], { labels: tdLabels, height: 220, yFormat: v => D.fmt.num(Math.round(v)) });
+        const inOutCanvas = document.getElementById('ai-trend-in-out');
+        if (inOutCanvas) {
+          inOutCanvas.parentElement.insertAdjacentHTML('afterend',
+            D.chartLegend([{ color: '#3b82f6', label: 'Input' }, { color: '#10b981', label: 'Output' }])
+          );
+        }
+        D.renderAreaChart('ai-trend-total', tdTotal, { labels: tdLabels, height: 220, color: '#8b5cf6', yFormat: v => D.fmt.num(Math.round(v)) });
+        D.renderAreaChart('ai-trend-cost', tdCost, { labels: tdLabels, height: 220, color: '#f59e0b', yFormat: v => D.fmt.usdCompact(v) });
+        D.renderAreaChart('ai-trend-reqs', tdReqs, { labels: tdLabels, height: 220, color: '#e87830', yFormat: v => D.fmt.num(Math.round(v)) });
+      }
+
+      // Provider donut
       const provTotal = provSegments.reduce((s, x) => s + x.value, 0);
       const pCanvas = document.getElementById('ai-donut-provider');
       if (pCanvas && provSegments.length) {
@@ -893,7 +1269,6 @@ App.pages.ai = {
           { data: dailySuccess, color: '#10b981', label: 'Success' },
           { data: dailyFailed, color: '#ef4444', label: 'Failed' },
         ], { labels: dailyLabels, height: 220 });
-        // Add legend below chart
         const stackCanvas = document.getElementById('ai-stacked-trend');
         if (stackCanvas) {
           stackCanvas.parentElement.insertAdjacentHTML('afterend',
@@ -907,6 +1282,211 @@ App.pages.ai = {
   _drillDownProviders() {
     if (!this._lastData) return;
     D.drillDown.exportData(this._lastData.ai.by_provider, 'ai-providers.json');
+  },
+
+  _drillDownTokens() {
+    if (!this._lastData?.tokens) return;
+    D.drillDown.exportData(this._lastData.tokens, 'token-breakdown.json');
+  },
+
+  _exportTopUsers() {
+    if (!this._lastData?.tokens?.top_users) return;
+    D.drillDown.exportData(this._lastData.tokens.top_users, 'top-consumers.csv', 'csv');
+  },
+
+  _drillDownFeatureEfficiency() {
+    if (!this._lastData?.tokens) return;
+    const byFeature = this._lastData.tokens.by_feature || [];
+    D.drillDown.open('Feature Efficiency Detail', `
+      <div style="margin-bottom:16px">
+        <button class="d-btn d-btn-sm" onclick="D.drillDown.exportData(JSON.parse(atob('${btoa(JSON.stringify(byFeature))}')), 'feature-efficiency.json')">Export JSON</button>
+        <button class="d-btn d-btn-sm" style="margin-left:8px" onclick="D.drillDown.exportData(JSON.parse(atob('${btoa(JSON.stringify(byFeature))}')), 'feature-efficiency.csv', 'csv')">Export CSV</button>
+      </div>
+      ${D.tokenBreakdownTable(byFeature, { labelHeader: 'Feature' })}
+    `);
+  },
+
+  _drillDownFeature(featureKey) {
+    if (!this._lastData?.tokens) return;
+    const f = (this._lastData.tokens.by_feature || []).find(x => x.key === featureKey);
+    if (!f) return;
+    const label = featureKey.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    const ratio = f.avg_prompt_tokens > 0 ? (f.avg_completion_tokens / f.avg_prompt_tokens).toFixed(2) : '—';
+    // Get provider/model breakdown for this feature
+    const fpRows = (this._lastData.tokens.feature_by_provider || []).filter(r => r.feature === featureKey);
+    const fmRows = (this._lastData.tokens.feature_by_model || []).filter(r => r.feature === featureKey);
+    D.drillDown.open(`Feature: ${label}`, `
+      ${D.statRow([
+        { label: 'Requests', value: D.fmt.num(f.requests) },
+        { label: 'Success Rate', value: D.fmt.pct(f.success_rate), color: f.success_rate >= 95 ? 'var(--d-success)' : 'var(--d-danger)' },
+        { label: 'Avg Latency', value: D.fmt.latency(f.avg_latency_ms) },
+      ])}
+      ${D.statRow([
+        { label: 'Input Tokens', value: D.fmt.num(f.prompt_tokens) },
+        { label: 'Output Tokens', value: D.fmt.num(f.completion_tokens) },
+        { label: 'Total Tokens', value: D.fmt.num(f.total_tokens) },
+      ])}
+      ${D.statRow([
+        { label: 'Avg Input', value: D.fmt.num(f.avg_prompt_tokens) },
+        { label: 'Avg Output', value: D.fmt.num(f.avg_completion_tokens) },
+        { label: 'Out/In Ratio', value: ratio + 'x' },
+      ])}
+      ${D.statRow([
+        { label: 'Total Cost', value: D.fmt.usd(f.total_cost_usd) },
+        { label: 'Avg Cost/Req', value: D.fmt.usd(f.avg_cost_usd, 4) },
+        { label: 'Cost %', value: D.fmt.pct(f.total_cost_usd / Math.max(1, (this._lastData.tokens.by_feature || []).reduce((s, x) => s + x.total_cost_usd, 0)) * 100) },
+      ])}
+      ${fpRows.length ? `
+        <div class="d-mt-6">
+          ${D.sectionHeader('Provider Breakdown')}
+          ${D.table({
+            headers: ['Provider', { label: 'Requests', align: 'right' }, { label: 'In Tok', align: 'right' }, { label: 'Out Tok', align: 'right' }, { label: 'Cost', align: 'right' }, { label: 'Success', align: 'right' }, { label: 'Latency', align: 'right' }],
+            rows: fpRows.map(r => ({ cells: [
+              `<strong>${D.fmt.escapeHtml(r.provider)}</strong>`,
+              D.fmt.num(r.requests), D.fmt.num(r.prompt_tokens), D.fmt.num(r.completion_tokens),
+              D.fmt.usd(r.cost_usd), D.fmt.pct(r.success_rate), D.fmt.latency(r.avg_latency_ms),
+            ]})),
+          })}
+        </div>
+      ` : ''}
+      ${fmRows.length ? `
+        <div class="d-mt-6">
+          ${D.sectionHeader('Model Breakdown')}
+          ${D.table({
+            headers: ['Model', { label: 'Requests', align: 'right' }, { label: 'In Tok', align: 'right' }, { label: 'Out Tok', align: 'right' }, { label: 'Cost', align: 'right' }, { label: 'Success', align: 'right' }, { label: 'Latency', align: 'right' }],
+            rows: fmRows.map(r => ({ cells: [
+              `<span class="d-text-mono">${D.fmt.escapeHtml(r.model)}</span>`,
+              D.fmt.num(r.requests), D.fmt.num(r.prompt_tokens), D.fmt.num(r.completion_tokens),
+              D.fmt.usd(r.cost_usd), D.fmt.pct(r.success_rate), D.fmt.latency(r.avg_latency_ms),
+            ]})),
+          })}
+        </div>
+      ` : ''}
+      <div class="d-mt-6">
+        <button class="d-btn d-btn-sm" onclick="D.drillDown.exportData(JSON.parse(atob('${btoa(JSON.stringify({feature: f, providers: fpRows, models: fmRows}))}')), '${featureKey}.json')">Export JSON</button>
+      </div>
+    `);
+  },
+
+  _drillDownModeTokens() {
+    if (!this._lastData?.tokens) return;
+    const byMode = this._lastData.tokens.by_mode || [];
+    D.drillDown.open('Token Breakdown by Mode', `
+      <div style="margin-bottom:16px">
+        <button class="d-btn d-btn-sm" onclick="D.drillDown.exportData(JSON.parse(atob('${btoa(JSON.stringify(byMode))}')), 'tokens-by-mode.json')">Export JSON</button>
+        <button class="d-btn d-btn-sm" style="margin-left:8px" onclick="D.drillDown.exportData(JSON.parse(atob('${btoa(JSON.stringify(byMode))}')), 'tokens-by-mode.csv', 'csv')">Export CSV</button>
+      </div>
+      ${byMode.map(m => `
+        <div class="d-mt-4">
+          <h4 style="font-size:14px;font-weight:600;color:var(--d-text-1);margin-bottom:8px">${D.fmt.escapeHtml(m.key)}</h4>
+          ${D.statRow([
+            { label: 'Requests', value: D.fmt.num(m.requests) },
+            { label: 'Success Rate', value: D.fmt.pct(m.success_rate), color: m.success_rate >= 95 ? 'var(--d-success)' : 'var(--d-danger)' },
+            { label: 'Avg Latency', value: D.fmt.latency(m.avg_latency_ms) },
+          ])}
+          ${D.statRow([
+            { label: 'Input Tokens', value: D.fmt.num(m.prompt_tokens) },
+            { label: 'Output Tokens', value: D.fmt.num(m.completion_tokens) },
+            { label: 'Total Tokens', value: D.fmt.num(m.total_tokens) },
+          ])}
+          ${D.statRow([
+            { label: 'Avg Input', value: D.fmt.num(m.avg_prompt_tokens) },
+            { label: 'Avg Output', value: D.fmt.num(m.avg_completion_tokens) },
+            { label: 'Avg Total', value: D.fmt.num(m.avg_total_tokens) },
+          ])}
+          ${D.statRow([
+            { label: 'Total Cost', value: D.fmt.usd(m.total_cost_usd) },
+            { label: 'Avg Cost/Req', value: D.fmt.usd(m.avg_cost_usd, 4) },
+          ])}
+        </div>
+      `).join('<hr style="border-color:var(--d-border);margin:12px 0">')}
+    `);
+  },
+
+  _drillDownVision() {
+    if (!this._lastData?.tokens?.vision) return;
+    const v = this._lastData.tokens.vision;
+    const t = v.totals;
+    if (!t) return;
+    D.drillDown.open('Vision Analytics Detail', `
+      <div style="margin-bottom:16px">
+        <button class="d-btn d-btn-sm" onclick="D.drillDown.exportData(JSON.parse(atob('${btoa(JSON.stringify(v))}')), 'vision-analytics.json')">Export JSON</button>
+      </div>
+      ${D.statRow([
+        { label: 'Requests', value: D.fmt.num(t.requests) },
+        { label: 'Success Rate', value: D.fmt.pct(t.success_rate), color: t.success_rate >= 95 ? 'var(--d-success)' : 'var(--d-danger)' },
+        { label: 'Avg Latency', value: D.fmt.latency(t.avg_latency_ms) },
+      ])}
+      ${D.statRow([
+        { label: 'Input Tokens', value: D.fmt.num(t.prompt_tokens) },
+        { label: 'Output Tokens', value: D.fmt.num(t.completion_tokens) },
+        { label: 'Total Tokens', value: D.fmt.num(t.total_tokens) },
+      ])}
+      ${D.statRow([
+        { label: 'Avg Input', value: D.fmt.num(t.avg_prompt_tokens) },
+        { label: 'Avg Output', value: D.fmt.num(t.avg_completion_tokens) },
+        { label: 'Avg Total', value: D.fmt.num(t.avg_total_tokens) },
+      ])}
+      ${D.statRow([
+        { label: 'Total Cost', value: D.fmt.usd(t.total_cost_usd) },
+        { label: 'Avg Cost/Req', value: D.fmt.usd(t.requests > 0 ? t.total_cost_usd / t.requests : 0, 4) },
+      ])}
+      ${v.by_provider?.length ? `
+        <div class="d-mt-6">
+          ${D.sectionHeader('By Provider')}
+          ${D.horizontalBars(v.by_provider.map(p => ({ label: p.key, value: p.total_tokens, color: '#8b5cf6' })))}
+        </div>
+      ` : ''}
+      ${v.by_model?.length ? `
+        <div class="d-mt-6">
+          ${D.sectionHeader('By Model')}
+          ${D.horizontalBars(v.by_model.map(m => ({ label: m.key, value: m.total_tokens, color: '#06b6d4' })))}
+        </div>
+      ` : ''}
+    `);
+  },
+
+  _drillDownDSA() {
+    if (!this._lastData?.tokens?.dsa) return;
+    const d = this._lastData.tokens.dsa;
+    const t = d.totals;
+    if (!t) return;
+    D.drillDown.open('DSA Analytics Detail', `
+      <div style="margin-bottom:16px">
+        <button class="d-btn d-btn-sm" onclick="D.drillDown.exportData(JSON.parse(atob('${btoa(JSON.stringify(d))}')), 'dsa-analytics.json')">Export JSON</button>
+      </div>
+      ${D.statRow([
+        { label: 'Requests', value: D.fmt.num(t.requests) },
+        { label: 'Success Rate', value: D.fmt.pct(t.success_rate), color: t.success_rate >= 95 ? 'var(--d-success)' : 'var(--d-danger)' },
+        { label: 'Avg Latency', value: D.fmt.latency(t.avg_latency_ms) },
+      ])}
+      ${D.statRow([
+        { label: 'Input Tokens', value: D.fmt.num(t.prompt_tokens) },
+        { label: 'Output Tokens', value: D.fmt.num(t.completion_tokens) },
+        { label: 'Total Tokens', value: D.fmt.num(t.total_tokens) },
+      ])}
+      ${D.statRow([
+        { label: 'Avg Input', value: D.fmt.num(t.avg_prompt_tokens) },
+        { label: 'Avg Output', value: D.fmt.num(t.avg_completion_tokens) },
+        { label: 'Avg Total', value: D.fmt.num(t.avg_total_tokens) },
+      ])}
+      ${D.statRow([
+        { label: 'Total Cost', value: D.fmt.usd(t.total_cost_usd) },
+        { label: 'Avg Cost/Req', value: D.fmt.usd(t.requests > 0 ? t.total_cost_usd / t.requests : 0, 4) },
+      ])}
+      ${d.by_provider?.length ? `
+        <div class="d-mt-6">
+          ${D.sectionHeader('By Provider')}
+          ${D.horizontalBars(d.by_provider.map(p => ({ label: p.key, value: p.total_tokens, color: '#e87830' })))}
+        </div>
+      ` : ''}
+      ${d.by_model?.length ? `
+        <div class="d-mt-6">
+          ${D.sectionHeader('By Model')}
+          ${D.horizontalBars(d.by_model.map(m => ({ label: m.key, value: m.total_tokens, color: '#3b82f6' })))}
+        </div>
+      ` : ''}
+    `);
   },
 
   _drillDownModel(model) {
@@ -923,13 +1503,18 @@ App.pages.ai = {
       <div class="d-mt-6">
         ${D.sectionHeader('Token Usage')}
         ${D.statRow([
-          { label: 'Prompt', value: D.fmt.num(m.prompt_tokens) },
-          { label: 'Completion', value: D.fmt.num(m.completion_tokens) },
+          { label: 'Input', value: D.fmt.num(m.prompt_tokens) },
+          { label: 'Output', value: D.fmt.num(m.completion_tokens) },
           { label: 'Total', value: D.fmt.num(m.prompt_tokens + m.completion_tokens) },
+        ])}
+        ${D.statRow([
+          { label: 'Avg Input / Req', value: m.count > 0 ? D.fmt.num(Math.round(m.prompt_tokens / m.count)) : '—' },
+          { label: 'Avg Output / Req', value: m.count > 0 ? D.fmt.num(Math.round(m.completion_tokens / m.count)) : '—' },
+          { label: 'Cost / Request', value: m.count > 0 ? D.fmt.usd(m.total_cost_usd / m.count, 4) : '—' },
         ])}
       </div>
       <div class="d-mt-6">
-        <button class="d-btn d-btn-sm" onclick="D.drillDown.exportData(${JSON.stringify(JSON.stringify(m))}, '${model}.json')">Export JSON</button>
+        <button class="d-btn d-btn-sm" onclick="D.drillDown.exportData(JSON.parse(atob('${btoa(JSON.stringify(m))}')), '${model}.json')">Export JSON</button>
       </div>
     `);
   },
@@ -970,10 +1555,6 @@ App.pages.users = {
     const totalCount = users.total_count || 0;
     const totalUsers = settings.users?.total || 0;
     const activeUsers = settings.users?.active || 0;
-
-    // Classify users by request volume
-    const powerUsers = userList.filter(u => u.total_requests >= 20).length;
-    const dormantUsers = userList.filter(u => u.total_requests <= 2).length;
 
     const avatarColors = ['#e87830', '#3b82f6', '#10b981', '#8b5cf6', '#f59e0b', '#ef4444', '#06b6d4', '#ec4899'];
 
@@ -1107,7 +1688,7 @@ App.pages.users = {
         ` : ''}
 
         <div class="d-mt-6">
-          <button class="d-btn d-btn-sm" onclick="D.drillDown.exportData(JSON.parse('${JSON.stringify(JSON.stringify(detail))}'), 'user-${userId}.json')">Export JSON</button>
+          <button class="d-btn d-btn-sm" onclick="D.drillDown.exportData(JSON.parse(atob('${btoa(JSON.stringify(detail))}')), 'user-${userId}.json')">Export JSON</button>
         </div>
       `);
 
@@ -1472,8 +2053,9 @@ App.pages.cost = {
               { label: 'Cost', align: 'right' },
               { label: 'Requests', align: 'right' },
               { label: 'Cost/Req', align: 'right' },
-              { label: 'Prompt Tokens', align: 'right' },
-              { label: 'Compl. Tokens', align: 'right' },
+              { label: 'Input Tok', align: 'right' },
+              { label: 'Output Tok', align: 'right' },
+              { label: 'Total Tok', align: 'right' },
               { label: '% of Spend', align: 'right' },
             ],
             rows: providers.map(p => ({
@@ -1484,6 +2066,7 @@ App.pages.cost = {
                 D.fmt.usd(p.requests > 0 ? p.cost_usd / p.requests : 0, 4),
                 D.fmt.num(p.prompt_tokens),
                 D.fmt.num(p.completion_tokens),
+                D.fmt.num((p.prompt_tokens || 0) + (p.completion_tokens || 0)),
                 D.fmt.pct(totalCost > 0 ? (p.cost_usd / totalCost * 100) : 0),
               ],
             })),
@@ -1500,6 +2083,9 @@ App.pages.cost = {
               { label: 'Cost', align: 'right' },
               { label: 'Requests', align: 'right' },
               { label: 'Cost/Req', align: 'right' },
+              { label: 'Input Tok', align: 'right' },
+              { label: 'Output Tok', align: 'right' },
+              { label: 'Total Tok', align: 'right' },
               { label: '% of Spend', align: 'right' },
             ],
             rows: models.map(m => ({
@@ -1508,6 +2094,9 @@ App.pages.cost = {
                 D.fmt.usd(m.cost_usd),
                 D.fmt.num(m.requests),
                 D.fmt.usd(m.requests > 0 ? m.cost_usd / m.requests : 0, 4),
+                D.fmt.num(m.prompt_tokens),
+                D.fmt.num(m.completion_tokens),
+                D.fmt.num((m.prompt_tokens || 0) + (m.completion_tokens || 0)),
                 D.fmt.pct(totalCost > 0 ? (m.cost_usd / totalCost * 100) : 0),
               ],
             })),

@@ -10,7 +10,7 @@ import logging
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import Date, cast, func as sa_func
+from sqlalchemy import Date, and_, case, cast, func as sa_func
 from sqlalchemy.orm import Session
 
 from app.auth import require_admin
@@ -921,6 +921,372 @@ def global_search(
         "total_results": len(truncated),
         "has_more": len(results) > limit,
         "results": truncated,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Token Breakdown
+# ---------------------------------------------------------------------------
+
+@router.get("/token-breakdown")
+def get_token_breakdown(
+    days: int | None = Query(None, ge=1, le=365),
+    start: date | None = None,
+    end: date | None = None,
+    db: Session = Depends(get_db),
+):
+    """Detailed token consumption grouped by mode, request type, and profile.
+
+    Provides the granular token analytics needed for AI resource monitoring:
+    per-mode token usage, Vision-specific breakdown, and DSA-specific breakdown.
+    """
+    start_date, end_date = _parse_date_range(days, start, end)
+    filters = _date_filter(AIRequest, start_date, end_date)
+
+    def _agg_group(group_col, extra_filters=()):
+        """Aggregate token stats grouped by a column."""
+        all_filters = (*filters, *extra_filters)
+        rows = db.query(
+            group_col.label("group_key"),
+            sa_func.count().label("requests"),
+            sa_func.count().filter(AIRequest.success.is_(True)).label("successful"),
+            sa_func.sum(AIRequest.prompt_tokens).label("prompt_tokens"),
+            sa_func.sum(AIRequest.completion_tokens).label("completion_tokens"),
+            sa_func.sum(AIRequest.total_tokens).label("total_tokens"),
+            sa_func.avg(AIRequest.prompt_tokens).label("avg_prompt"),
+            sa_func.avg(AIRequest.completion_tokens).label("avg_completion"),
+            sa_func.avg(AIRequest.total_tokens).label("avg_total"),
+            sa_func.sum(AIRequest.estimated_cost_usd).label("total_cost"),
+            sa_func.avg(AIRequest.estimated_cost_usd).label("avg_cost"),
+            sa_func.avg(AIRequest.latency_ms).label("avg_latency"),
+        ).filter(*all_filters).group_by("group_key").all()
+
+        return [
+            {
+                "key": r.group_key or "unknown",
+                "requests": r.requests,
+                "successful": r.successful,
+                "success_rate": round(r.successful / r.requests * 100, 1) if r.requests else 0,
+                "prompt_tokens": r.prompt_tokens or 0,
+                "completion_tokens": r.completion_tokens or 0,
+                "total_tokens": r.total_tokens or 0,
+                "avg_prompt_tokens": round(r.avg_prompt) if r.avg_prompt else 0,
+                "avg_completion_tokens": round(r.avg_completion) if r.avg_completion else 0,
+                "avg_total_tokens": round(r.avg_total) if r.avg_total else 0,
+                "total_cost_usd": round(r.total_cost, 4) if r.total_cost else 0,
+                "avg_cost_usd": round(r.avg_cost, 6) if r.avg_cost else 0,
+                "avg_latency_ms": round(r.avg_latency) if r.avg_latency else 0,
+            }
+            for r in rows
+        ]
+
+    # --- By origin mode ---
+    by_mode = _agg_group(sa_func.coalesce(AIRequest.origin_mode, "unknown"))
+
+    # --- By request type ---
+    by_type = _agg_group(AIRequest.request_type)
+
+    # --- By explanation profile ---
+    by_profile = _agg_group(
+        sa_func.coalesce(AIRequest.explanation_profile, "none"),
+    )
+
+    # --- Vision-specific breakdown (request_type = 'vision') ---
+    vision_filters = (*filters, AIRequest.request_type == "vision")
+
+    vision_provider_rows = db.query(
+        AIRequest.ai_provider.label("provider"),
+        sa_func.count().label("requests"),
+        sa_func.sum(AIRequest.prompt_tokens).label("prompt_tokens"),
+        sa_func.sum(AIRequest.completion_tokens).label("completion_tokens"),
+        sa_func.sum(AIRequest.total_tokens).label("total_tokens"),
+        sa_func.sum(AIRequest.estimated_cost_usd).label("cost"),
+    ).filter(*vision_filters).group_by("provider").all()
+
+    vision_model_rows = db.query(
+        AIRequest.ai_model.label("model"),
+        sa_func.count().label("requests"),
+        sa_func.sum(AIRequest.prompt_tokens).label("prompt_tokens"),
+        sa_func.sum(AIRequest.completion_tokens).label("completion_tokens"),
+        sa_func.sum(AIRequest.total_tokens).label("total_tokens"),
+        sa_func.sum(AIRequest.estimated_cost_usd).label("cost"),
+    ).filter(*vision_filters).group_by("model").all()
+
+    # Vision totals
+    vision_totals = db.query(
+        sa_func.count().label("requests"),
+        sa_func.count().filter(AIRequest.success.is_(True)).label("successful"),
+        sa_func.sum(AIRequest.prompt_tokens).label("prompt_tokens"),
+        sa_func.sum(AIRequest.completion_tokens).label("completion_tokens"),
+        sa_func.sum(AIRequest.total_tokens).label("total_tokens"),
+        sa_func.avg(AIRequest.prompt_tokens).label("avg_prompt"),
+        sa_func.avg(AIRequest.completion_tokens).label("avg_completion"),
+        sa_func.avg(AIRequest.total_tokens).label("avg_total"),
+        sa_func.sum(AIRequest.estimated_cost_usd).label("cost"),
+        sa_func.avg(AIRequest.latency_ms).label("avg_latency"),
+    ).filter(*vision_filters).first()
+
+    # --- DSA-specific breakdown (explanation_profile = 'dsa') ---
+    dsa_filters = (*filters, AIRequest.explanation_profile == "dsa")
+
+    dsa_provider_rows = db.query(
+        AIRequest.ai_provider.label("provider"),
+        sa_func.count().label("requests"),
+        sa_func.sum(AIRequest.prompt_tokens).label("prompt_tokens"),
+        sa_func.sum(AIRequest.completion_tokens).label("completion_tokens"),
+        sa_func.sum(AIRequest.total_tokens).label("total_tokens"),
+        sa_func.sum(AIRequest.estimated_cost_usd).label("cost"),
+    ).filter(*dsa_filters).group_by("provider").all()
+
+    dsa_model_rows = db.query(
+        AIRequest.ai_model.label("model"),
+        sa_func.count().label("requests"),
+        sa_func.sum(AIRequest.prompt_tokens).label("prompt_tokens"),
+        sa_func.sum(AIRequest.completion_tokens).label("completion_tokens"),
+        sa_func.sum(AIRequest.total_tokens).label("total_tokens"),
+        sa_func.sum(AIRequest.estimated_cost_usd).label("cost"),
+    ).filter(*dsa_filters).group_by("model").all()
+
+    dsa_totals = db.query(
+        sa_func.count().label("requests"),
+        sa_func.count().filter(AIRequest.success.is_(True)).label("successful"),
+        sa_func.sum(AIRequest.prompt_tokens).label("prompt_tokens"),
+        sa_func.sum(AIRequest.completion_tokens).label("completion_tokens"),
+        sa_func.sum(AIRequest.total_tokens).label("total_tokens"),
+        sa_func.avg(AIRequest.prompt_tokens).label("avg_prompt"),
+        sa_func.avg(AIRequest.completion_tokens).label("avg_completion"),
+        sa_func.avg(AIRequest.total_tokens).label("avg_total"),
+        sa_func.sum(AIRequest.estimated_cost_usd).label("cost"),
+        sa_func.avg(AIRequest.latency_ms).label("avg_latency"),
+    ).filter(*dsa_filters).first()
+
+    def _format_breakdown_rows(rows):
+        return [
+            {
+                "key": r.provider if hasattr(r, "provider") else r.model,
+                "requests": r.requests,
+                "prompt_tokens": r.prompt_tokens or 0,
+                "completion_tokens": r.completion_tokens or 0,
+                "total_tokens": r.total_tokens or 0,
+                "cost_usd": round(r.cost, 4) if r.cost else 0,
+            }
+            for r in rows
+        ]
+
+    def _format_totals(t):
+        if not t or not t.requests:
+            return None
+        return {
+            "requests": t.requests,
+            "successful": t.successful,
+            "success_rate": round(t.successful / t.requests * 100, 1) if t.requests else 0,
+            "prompt_tokens": t.prompt_tokens or 0,
+            "completion_tokens": t.completion_tokens or 0,
+            "total_tokens": t.total_tokens or 0,
+            "avg_prompt_tokens": round(t.avg_prompt) if t.avg_prompt else 0,
+            "avg_completion_tokens": round(t.avg_completion) if t.avg_completion else 0,
+            "avg_total_tokens": round(t.avg_total) if t.avg_total else 0,
+            "total_cost_usd": round(t.cost, 4) if t.cost else 0,
+            "avg_latency_ms": round(t.avg_latency) if t.avg_latency else 0,
+        }
+
+    # --- Compound feature breakdown ---
+    # Derives a "feature" label from origin_mode + request_type so the
+    # dashboard can show Selection, Session, Session Follow-up, etc.
+    feature_expr = case(
+        (AIRequest.request_type == "vision", "vision"),
+        (and_(AIRequest.origin_mode == "session",
+              AIRequest.request_type == "followup"), "session_followup"),
+        (and_(AIRequest.origin_mode == "session",
+              AIRequest.request_type == "improve"), "session_improve"),
+        (and_(AIRequest.origin_mode == "selection",
+              AIRequest.request_type == "followup"), "selection_followup"),
+        (AIRequest.origin_mode == "selection", "selection"),
+        (AIRequest.origin_mode == "session", "session"),
+        (AIRequest.origin_mode == "screenshot", "screenshot"),
+        (AIRequest.request_type == "enrichment", "enrichment"),
+        else_="other",
+    )
+
+    by_feature = _agg_group(feature_expr)
+
+    # --- Daily token trends ---
+    daily_tokens = db.query(
+        cast(AIRequest.created_at, Date).label("day"),
+        sa_func.count().label("requests"),
+        sa_func.sum(AIRequest.prompt_tokens).label("prompt_tokens"),
+        sa_func.sum(AIRequest.completion_tokens).label("completion_tokens"),
+        sa_func.sum(AIRequest.total_tokens).label("total_tokens"),
+        sa_func.sum(AIRequest.estimated_cost_usd).label("cost"),
+    ).filter(*filters).group_by("day").order_by("day").all()
+
+    daily_trend = [
+        {
+            "date": str(r.day),
+            "requests": r.requests,
+            "prompt_tokens": r.prompt_tokens or 0,
+            "completion_tokens": r.completion_tokens or 0,
+            "total_tokens": r.total_tokens or 0,
+            "cost_usd": round(r.cost, 4) if r.cost else 0,
+        }
+        for r in daily_tokens
+    ]
+
+    # --- Top consumers (users) ---
+    top_user_rows = db.query(
+        AIRequest.user_id,
+        sa_func.count().label("requests"),
+        sa_func.sum(AIRequest.prompt_tokens).label("prompt_tokens"),
+        sa_func.sum(AIRequest.completion_tokens).label("completion_tokens"),
+        sa_func.sum(AIRequest.total_tokens).label("total_tokens"),
+        sa_func.sum(AIRequest.estimated_cost_usd).label("cost"),
+    ).filter(*filters).group_by(AIRequest.user_id).order_by(
+        sa_func.sum(AIRequest.total_tokens).desc()
+    ).limit(15).all()
+
+    top_user_ids = [r.user_id for r in top_user_rows]
+    users_map = {}
+    if top_user_ids:
+        user_records = db.query(User.id, User.name, User.email).filter(
+            User.id.in_(top_user_ids)
+        ).all()
+        users_map = {str(u.id): (u.name, u.email) for u in user_records}
+
+    top_users = [
+        {
+            "user_id": r.user_id,
+            "name": users_map.get(r.user_id, (None, None))[0],
+            "email": users_map.get(r.user_id, (None, None))[1],
+            "requests": r.requests,
+            "prompt_tokens": r.prompt_tokens or 0,
+            "completion_tokens": r.completion_tokens or 0,
+            "total_tokens": r.total_tokens or 0,
+            "cost_usd": round(r.cost, 4) if r.cost else 0,
+        }
+        for r in top_user_rows
+    ]
+
+    # --- Token distribution (percentiles) ---
+    success_filters = (*filters, AIRequest.success.is_(True))
+
+    token_dist = db.query(
+        sa_func.percentile_cont(0.5).within_group(
+            AIRequest.prompt_tokens).label("prompt_p50"),
+        sa_func.percentile_cont(0.95).within_group(
+            AIRequest.prompt_tokens).label("prompt_p95"),
+        sa_func.percentile_cont(0.99).within_group(
+            AIRequest.prompt_tokens).label("prompt_p99"),
+        sa_func.max(AIRequest.prompt_tokens).label("prompt_max"),
+        sa_func.percentile_cont(0.5).within_group(
+            AIRequest.completion_tokens).label("completion_p50"),
+        sa_func.percentile_cont(0.95).within_group(
+            AIRequest.completion_tokens).label("completion_p95"),
+        sa_func.percentile_cont(0.99).within_group(
+            AIRequest.completion_tokens).label("completion_p99"),
+        sa_func.max(AIRequest.completion_tokens).label("completion_max"),
+    ).filter(*success_filters).first()
+
+    token_distribution = None
+    if token_dist and token_dist.prompt_p50 is not None:
+        token_distribution = {
+            "prompt": {
+                "p50": round(token_dist.prompt_p50),
+                "p95": round(token_dist.prompt_p95),
+                "p99": round(token_dist.prompt_p99),
+                "max": token_dist.prompt_max or 0,
+            },
+            "completion": {
+                "p50": round(token_dist.completion_p50),
+                "p95": round(token_dist.completion_p95),
+                "p99": round(token_dist.completion_p99),
+                "max": token_dist.completion_max or 0,
+            },
+        }
+
+    # --- Feature × Provider cross-tab ---
+    fp_rows = db.query(
+        feature_expr.label("feature"),
+        AIRequest.ai_provider.label("provider"),
+        sa_func.count().label("requests"),
+        sa_func.count().filter(AIRequest.success.is_(True)).label("successful"),
+        sa_func.sum(AIRequest.prompt_tokens).label("prompt_tokens"),
+        sa_func.sum(AIRequest.completion_tokens).label("completion_tokens"),
+        sa_func.sum(AIRequest.total_tokens).label("total_tokens"),
+        sa_func.sum(AIRequest.estimated_cost_usd).label("cost"),
+        sa_func.avg(AIRequest.estimated_cost_usd).label("avg_cost"),
+        sa_func.avg(AIRequest.latency_ms).label("avg_latency"),
+    ).filter(*filters).group_by("feature", "provider").all()
+
+    feature_by_provider = [
+        {
+            "feature": r.feature,
+            "provider": r.provider,
+            "requests": r.requests,
+            "successful": r.successful,
+            "success_rate": round(r.successful / r.requests * 100, 1) if r.requests else 0,
+            "prompt_tokens": r.prompt_tokens or 0,
+            "completion_tokens": r.completion_tokens or 0,
+            "total_tokens": r.total_tokens or 0,
+            "cost_usd": round(r.cost, 4) if r.cost else 0,
+            "avg_cost_usd": round(r.avg_cost, 6) if r.avg_cost else 0,
+            "avg_latency_ms": round(r.avg_latency) if r.avg_latency else 0,
+        }
+        for r in fp_rows
+    ]
+
+    # --- Feature × Model cross-tab ---
+    fm_rows = db.query(
+        feature_expr.label("feature"),
+        AIRequest.ai_model.label("model"),
+        sa_func.count().label("requests"),
+        sa_func.count().filter(AIRequest.success.is_(True)).label("successful"),
+        sa_func.sum(AIRequest.prompt_tokens).label("prompt_tokens"),
+        sa_func.sum(AIRequest.completion_tokens).label("completion_tokens"),
+        sa_func.sum(AIRequest.total_tokens).label("total_tokens"),
+        sa_func.sum(AIRequest.estimated_cost_usd).label("cost"),
+        sa_func.avg(AIRequest.estimated_cost_usd).label("avg_cost"),
+        sa_func.avg(AIRequest.latency_ms).label("avg_latency"),
+    ).filter(*filters).group_by("feature", "model").all()
+
+    feature_by_model = [
+        {
+            "feature": r.feature,
+            "model": r.model,
+            "requests": r.requests,
+            "successful": r.successful,
+            "success_rate": round(r.successful / r.requests * 100, 1) if r.requests else 0,
+            "prompt_tokens": r.prompt_tokens or 0,
+            "completion_tokens": r.completion_tokens or 0,
+            "total_tokens": r.total_tokens or 0,
+            "cost_usd": round(r.cost, 4) if r.cost else 0,
+            "avg_cost_usd": round(r.avg_cost, 6) if r.avg_cost else 0,
+            "avg_latency_ms": round(r.avg_latency) if r.avg_latency else 0,
+        }
+        for r in fm_rows
+    ]
+
+    return {
+        "period": {"start": str(start_date), "end": str(end_date)},
+        "_source": "v2",
+        "by_mode": by_mode,
+        "by_request_type": by_type,
+        "by_profile": by_profile,
+        "by_feature": by_feature,
+        "daily_trend": daily_trend,
+        "top_users": top_users,
+        "token_distribution": token_distribution,
+        "feature_by_provider": feature_by_provider,
+        "feature_by_model": feature_by_model,
+        "vision": {
+            "totals": _format_totals(vision_totals),
+            "by_provider": _format_breakdown_rows(vision_provider_rows),
+            "by_model": _format_breakdown_rows(vision_model_rows),
+        },
+        "dsa": {
+            "totals": _format_totals(dsa_totals),
+            "by_provider": _format_breakdown_rows(dsa_provider_rows),
+            "by_model": _format_breakdown_rows(dsa_model_rows),
+        },
     }
 
 
