@@ -214,6 +214,10 @@ final class ExplanationHUDViewModel {
         /// so they participate in language analytics.
         let language: String?
 
+        /// PID of the app the user was in when the hotkey was triggered.
+        /// Used by Replace to re-activate the source editor before pasting.
+        let sourceAppPID: pid_t?
+
         // MARK: - Pipeline Follow-Up State
 
         /// Pipeline query service for follow-up via the understanding pipeline.
@@ -230,6 +234,11 @@ final class ExplanationHUDViewModel {
 
         /// Entity name resolved during the initial pipeline query.
         let pipelineEntityName: String?
+
+        /// Formatted profile context string for injection into follow-up
+        /// and improvement prompts. `nil` when profile is empty or below
+        /// confidence threshold.
+        let profileContext: String?
     }
 
     // MARK: - Follow-up Prompt
@@ -281,6 +290,9 @@ final class ExplanationHUDViewModel {
     /// Error from the most recent improvement attempt.
     private(set) var improvementError: String = ""
 
+    /// The optimisation goal selected by the user for the current improvement.
+    private(set) var selectedOptimisationGoal: OptimisationGoal?
+
     /// Whether the "Improve Code" button should be enabled.
     ///
     /// Available when: explanation is complete, mode is not screenshot,
@@ -318,6 +330,59 @@ final class ExplanationHUDViewModel {
     /// Whether the Replace button should be enabled.
     var canReplace: Bool {
         !improvedCode.isEmpty && !isImprovementLoading && replacementConfirmation.isEmpty && !isReplacing
+    }
+
+    // MARK: - Note State
+
+    /// Confirmation message shown after a note is saved.
+    private(set) var noteSavedConfirmation: String = ""
+
+    /// Whether a note can be saved (explanation complete + text exists).
+    var canSaveNote: Bool {
+        displayState == .complete && !explanationText.isEmpty
+    }
+
+    /// Note service reference, set by AppDependencies.
+    var noteService: NoteService?
+
+    // MARK: - Feedback
+
+    /// Feedback manager reference, set by AppDependencies.
+    var feedbackManager: FeedbackManager?
+
+    /// Save the current explanation as a note.
+    func saveNote() {
+        guard canSaveNote, let service = noteService else { return }
+
+        let code = followUpContext?.originalCode ?? ""
+        let explanation = explanationText
+        let language = followUpContext?.language
+        let mode = followUpContext?.mode
+        let filePath = followUpContext?.pipelineFilePath
+
+        Task {
+            do {
+                let note = try await service.saveNote(
+                    selectedCode: code,
+                    explanation: explanation,
+                    language: language,
+                    mode: mode,
+                    workspacePath: nil,
+                    filePath: filePath
+                )
+                noteSavedConfirmation = "Saved: \(note.title)"
+
+                // Auto-dismiss confirmation after 3 seconds.
+                Task {
+                    try? await Task.sleep(nanoseconds: 3_000_000_000)
+                    noteSavedConfirmation = ""
+                }
+            } catch {
+                #if DEBUG
+                print("[DEBUG NOTE] save failed: \(error.localizedDescription)")
+                #endif
+            }
+        }
     }
 
     // MARK: - Active Stream
@@ -442,6 +507,9 @@ final class ExplanationHUDViewModel {
                     #endif
                     displayState = .complete
                     onComplete?(explanationText)
+
+                    // Trigger feedback scheduling for explanations.
+                    feedbackManager?.recordExplanation(metadata: buildFeedbackMetadata())
                 }
             } catch is CancellationError {
                 // Stream was cancelled (dismiss or new stream). No error state.
@@ -490,13 +558,15 @@ final class ExplanationHUDViewModel {
                let conversationState = ctx.pipelineConversationState,
                let filePath = ctx.pipelineFilePath,
                let entityName = ctx.pipelineEntityName {
+                let capturedProfileCtx = ctx.profileContext
 
                 let result = await Task.detached {
                     await service.queryFollowUp(
                         filePath: filePath,
                         entityName: entityName,
                         question: question,
-                        conversationState: conversationState
+                        conversationState: conversationState,
+                        profileContext: capturedProfileCtx
                     )
                 }.value
 
@@ -532,7 +602,12 @@ final class ExplanationHUDViewModel {
 
         // Combine the original session context with follow-up formatting rules
         // so the model retains file structure knowledge while answering concisely.
-        let combinedSystemPrompt = ctx.systemPrompt + "\n\n---\n\n" + Self.followUpSystemPrompt
+        var combinedSystemPrompt = ctx.systemPrompt + "\n\n---\n\n" + Self.followUpSystemPrompt
+
+        // Profile Intelligence: inject profile context into follow-up prompt.
+        if let profileBlock = ctx.profileContext {
+            combinedSystemPrompt += "\n\n\(profileBlock)"
+        }
 
         // Compound follow-up mode for analytics (e.g. "selection" → "selection_followup").
         let followUpMode: String? = if let mode = ctx.mode {
@@ -576,7 +651,9 @@ final class ExplanationHUDViewModel {
     ///
     /// Uses the original code from ``FollowUpContext`` and the explanation
     /// as context. Streams the response and parses it into summary + code.
-    func requestImprovement() {
+    ///
+    /// - Parameter goal: The optimisation goal selected by the user.
+    func requestImprovement(goal: OptimisationGoal = .balanced) {
         guard let ctx = followUpContext,
               let originalCode = ctx.originalCode
         else { return }
@@ -589,6 +666,7 @@ final class ExplanationHUDViewModel {
 
         improvementTask?.cancel()
 
+        selectedOptimisationGoal = goal
         isImprovementLoading = true
         improvementRawText = ""
         improvementSummary = ""
@@ -600,11 +678,13 @@ final class ExplanationHUDViewModel {
             if let service = ctx.pipelineQueryService,
                let filePath = ctx.pipelineFilePath,
                let entityName = ctx.pipelineEntityName {
+                let capturedProfileCtx = ctx.profileContext
                 let result = await Task.detached {
                     await service.query(
                         filePath: filePath,
                         entityName: entityName,
-                        purpose: "improve"
+                        purpose: "improve",
+                        profileContext: capturedProfileCtx
                     )
                 }.value
 
@@ -628,13 +708,16 @@ final class ExplanationHUDViewModel {
                                 metadata: ["summary_length": parsed.summary.count]
                             )
                         }
+
+                        // Trigger feedback for optimisation.
+                        feedbackManager?.recordOptimisation(metadata: buildFeedbackMetadata(optimisationGoal: selectedOptimisationGoal))
                     }
                     return
                 }
                 // Fall through to legacy path.
             }
 
-            await requestImprovementLegacy(originalCode: originalCode, ctx: ctx)
+            await requestImprovementLegacy(originalCode: originalCode, ctx: ctx, goal: goal)
         }
     }
 
@@ -642,17 +725,23 @@ final class ExplanationHUDViewModel {
     ///
     /// Used when the pipeline is unavailable or fails. Preserves the original
     /// Selection and Session mode improvement flows exactly.
-    private func requestImprovementLegacy(originalCode: String, ctx: FollowUpContext) async {
+    private func requestImprovementLegacy(originalCode: String, ctx: FollowUpContext, goal: OptimisationGoal = .balanced) async {
         let messages: [AIMessage] = [
             AIMessage(role: .user, content: originalCode),
         ]
 
         let mode = ImprovementService.improvementMode(from: ctx.mode)
 
+        // Profile Intelligence: inject profile context into improvement prompt.
+        var improvementPrompt = ImprovementService.systemPrompt(for: goal)
+        if let profileBlock = ctx.profileContext {
+            improvementPrompt += "\n\n\(profileBlock)"
+        }
+
         do {
             let stream = try await ctx.aiProvider.streamChat(
                 messages: messages,
-                systemPrompt: ImprovementService.systemPrompt,
+                systemPrompt: improvementPrompt,
                 mode: mode,
                 contextTier: nil,
                 explanationProfile: ctx.explanationProfile,
@@ -682,6 +771,9 @@ final class ExplanationHUDViewModel {
                         metadata: ["summary_length": result.summary.count]
                     )
                 }
+
+                // Trigger feedback for optimisation.
+                feedbackManager?.recordOptimisation(metadata: buildFeedbackMetadata(optimisationGoal: goal))
             }
         } catch is CancellationError {
             isImprovementLoading = false
@@ -747,7 +839,7 @@ final class ExplanationHUDViewModel {
         let meta = improvementMetadata()
 
         Task {
-            let result = await textReplacementService.replaceSelection(with: improvedCode)
+            let result = await textReplacementService.replaceSelection(with: improvedCode, sourceAppPID: followUpContext?.sourceAppPID)
 
             let replaceResult: String
             switch result {
@@ -792,6 +884,16 @@ final class ExplanationHUDViewModel {
         ]
     }
 
+    /// Build metadata for feedback analytics events.
+    private func buildFeedbackMetadata(optimisationGoal: OptimisationGoal? = nil) -> [String: Any] {
+        var meta: [String: Any] = [:]
+        if let mode = followUpContext?.mode { meta["mode"] = mode }
+        if let language = followUpContext?.language { meta["language"] = language }
+        if let profile = followUpContext?.explanationProfile { meta["explanation_profile"] = profile }
+        if let goal = optimisationGoal { meta["optimisation_goal"] = goal.rawValue }
+        return meta
+    }
+
     /// Reset all improvement-related state.
     private func resetImprovementState() {
         improvementRawText = ""
@@ -799,6 +901,7 @@ final class ExplanationHUDViewModel {
         improvedCode = ""
         isImprovementLoading = false
         improvementError = ""
+        selectedOptimisationGoal = nil
         replacementConfirmation = ""
         replacementError = ""
         isReplacing = false
@@ -855,6 +958,8 @@ final class ExplanationHUDViewModel {
         followUpError = ""
         followUpText = ""
         isFollowUpLoading = false
+        noteSavedConfirmation = ""
+        feedbackManager?.reset()
         resetImprovementState()
     }
 }

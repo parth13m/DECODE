@@ -143,6 +143,7 @@ const App = {
     quality:    { title: 'Quality & Errors',       subtitle: 'Reliability and error analysis' },
     cost:       { title: 'Cost Intelligence',      subtitle: 'AI economics and optimization' },
     settings:   { title: 'Settings',               subtitle: 'Dashboard configuration' },
+    feedback:   { title: 'Feedback',               subtitle: 'User satisfaction analytics' },
   },
 
   /* ── Global Filter Actions ── */
@@ -2284,6 +2285,137 @@ App.pages.settings = {
         </div>
       </div>
     `;
+  },
+};
+
+
+/* ═══════════════════════════════════════════════════════════
+   FEEDBACK — User Satisfaction Analytics
+   ═══════════════════════════════════════════════════════════ */
+
+App.pages.feedback = {
+  _lastData: null,
+
+  async render() {
+    const el = document.getElementById('page-feedback');
+
+    el.innerHTML = `
+      <div class="d-page-loading">
+        ${D.kpiGrid([
+          D.kpi({ label: 'Loading...', value: '—' }),
+          D.kpi({ label: '', value: '' }),
+          D.kpi({ label: '', value: '' }),
+        ])}
+      </div>
+    `;
+
+    try {
+      const data = await D.api.fetch(D.api.url('/api/v2/analytics/feedback'));
+      this._lastData = data;
+
+      const satisfactionColor = data.satisfaction >= 70 ? 'var(--d-success)' :
+                                data.satisfaction >= 40 ? 'var(--d-warning)' : 'var(--d-danger)';
+
+      let html = '';
+
+      // KPIs
+      html += D.kpiGrid([
+        D.kpi({ label: 'Satisfaction', value: D.fmt.pct(data.satisfaction), accent: satisfactionColor }),
+        D.kpi({ label: 'Total Feedback', value: D.fmt.num(data.total_feedback) }),
+        D.kpi({ label: 'Likes', value: D.fmt.num(data.likes), accent: 'var(--d-success)' }),
+        D.kpi({ label: 'Dislikes', value: D.fmt.num(data.dislikes), accent: 'var(--d-danger)' }),
+      ]);
+
+      // Feedback by Feature
+      if (data.by_feature && data.by_feature.length) {
+        html += D.sectionHeader('By Feature');
+        html += D.table({
+          headers: ['Feature', 'Total', 'Likes', 'Dislikes', 'Satisfaction'],
+          rows: data.by_feature.map(r => [
+            D.badge(r.feature, r.feature === 'explain' ? 'info' : 'brand'),
+            D.fmt.num(r.total),
+            D.fmt.num(r.likes),
+            D.fmt.num(r.dislikes),
+            D.badge(D.fmt.pct(r.satisfaction), r.satisfaction >= 70 ? 'success' : r.satisfaction >= 40 ? 'warning' : 'danger'),
+          ]),
+        });
+      }
+
+      // Feedback by Optimisation Goal
+      if (data.by_optimisation_goal && data.by_optimisation_goal.length) {
+        html += D.sectionHeader('By Optimisation Goal');
+        html += D.table({
+          headers: ['Goal', 'Total', 'Likes', 'Dislikes', 'Satisfaction'],
+          rows: data.by_optimisation_goal.map(r => [
+            D.badge(r.goal, 'brand'),
+            D.fmt.num(r.total),
+            D.fmt.num(r.likes),
+            D.fmt.num(r.dislikes),
+            D.badge(D.fmt.pct(r.satisfaction), r.satisfaction >= 70 ? 'success' : r.satisfaction >= 40 ? 'warning' : 'danger'),
+          ]),
+        });
+      }
+
+      // Feedback by Language
+      if (data.by_language && data.by_language.length) {
+        html += D.sectionHeader('By Language');
+        html += D.table({
+          headers: ['Language', 'Total', 'Likes', 'Dislikes', 'Satisfaction'],
+          rows: data.by_language.map(r => [
+            r.language,
+            D.fmt.num(r.total),
+            D.fmt.num(r.likes),
+            D.fmt.num(r.dislikes),
+            D.badge(D.fmt.pct(r.satisfaction), r.satisfaction >= 70 ? 'success' : r.satisfaction >= 40 ? 'warning' : 'danger'),
+          ]),
+        });
+      }
+
+      // Feedback by Mode (Provider proxy)
+      if (data.by_mode && data.by_mode.length) {
+        html += D.sectionHeader('By Mode');
+        html += D.table({
+          headers: ['Mode', 'Total', 'Likes', 'Dislikes', 'Satisfaction'],
+          rows: data.by_mode.map(r => [
+            D.badge(r.mode, 'neutral'),
+            D.fmt.num(r.total),
+            D.fmt.num(r.likes),
+            D.fmt.num(r.dislikes),
+            D.badge(D.fmt.pct(r.satisfaction), r.satisfaction >= 70 ? 'success' : r.satisfaction >= 40 ? 'warning' : 'danger'),
+          ]),
+        });
+      }
+
+      // Daily Trend Chart
+      if (data.daily_trend && data.daily_trend.length > 1) {
+        html += D.sectionHeader('Feedback Over Time');
+        html += D.chartGrid([
+          D.chartCard({ title: 'Daily Feedback', height: 220, canvasId: 'feedback-daily-chart' }),
+          D.chartCard({ title: 'Daily Satisfaction', height: 220, canvasId: 'feedback-satisfaction-chart' }),
+        ], 2);
+      }
+
+      el.innerHTML = html;
+
+      // Render charts after DOM mount.
+      if (data.daily_trend && data.daily_trend.length > 1) {
+        requestAnimationFrame(() => {
+          D.renderBarChart('feedback-daily-chart', {
+            labels: data.daily_trend.map(d => D.fmt.dateShort(d.date)),
+            values: data.daily_trend.map(d => d.total),
+          }, { color: 'var(--d-brand)' });
+
+          const satValues = data.daily_trend.map(d => d.total > 0 ? Math.round(d.likes / d.total * 100) : 0);
+          D.renderAreaChart('feedback-satisfaction-chart', {
+            labels: data.daily_trend.map(d => D.fmt.dateShort(d.date)),
+            values: satValues,
+          }, { color: 'var(--d-success)', yMax: 100, ySuffix: '%' });
+        });
+      }
+
+    } catch (e) {
+      el.innerHTML = D.error('Failed to load feedback data', e.message, () => this.render());
+    }
   },
 };
 

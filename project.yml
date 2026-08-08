@@ -21,8 +21,9 @@ settings:
       ENABLE_TESTABILITY: YES
       CLANG_ENABLE_CODE_COVERAGE: NO
     Release:
-      SWIFT_OPTIMIZATION_LEVEL: -O
-      SWIFT_COMPILATION_MODE: wholemodule
+      # -Onone: Swift 6 compiler on Xcode 16.2 stack-overflows during
+      # optimization of this codebase. Revisit after upgrading Xcode.
+      SWIFT_OPTIMIZATION_LEVEL: -Onone
       ENABLE_HARDENED_RUNTIME: YES
 
 packages:

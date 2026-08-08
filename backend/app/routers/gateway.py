@@ -303,6 +303,7 @@ _ALLOWED_EVENT_TYPES = frozenset({
     "improve_replace",
     "improve_dismiss",
     "improve_no_change",
+    "feedback",
 })
 
 

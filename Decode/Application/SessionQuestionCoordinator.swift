@@ -36,6 +36,7 @@ final class SessionQuestionCoordinator {
     private let knowledgeArtifactStore: KnowledgeArtifactStore?
     private let pipelineQueryService: PipelineQueryService
     private let virtualSessionManager: VirtualSessionManager
+    private let profileIntelligenceService: ProfileIntelligenceService?
 
     // MARK: - State
 
@@ -64,7 +65,8 @@ final class SessionQuestionCoordinator {
         usageTracker: AIUsageTracker,
         knowledgeArtifactStore: KnowledgeArtifactStore? = nil,
         pipelineQueryService: PipelineQueryService,
-        virtualSessionManager: VirtualSessionManager
+        virtualSessionManager: VirtualSessionManager,
+        profileIntelligenceService: ProfileIntelligenceService? = nil
     ) {
         self.selectionCapture = selectionCapture
         self.aiProvider = aiProvider
@@ -76,6 +78,7 @@ final class SessionQuestionCoordinator {
         self.knowledgeArtifactStore = knowledgeArtifactStore
         self.pipelineQueryService = pipelineQueryService
         self.virtualSessionManager = virtualSessionManager
+        self.profileIntelligenceService = profileIntelligenceService
     }
 
     // MARK: - Lifecycle
@@ -265,15 +268,24 @@ final class SessionQuestionCoordinator {
             return
         }
 
+        // Profile Intelligence: load profile for pipeline and follow-up context.
+        var profileContext: String?
+        if let service = profileIntelligenceService {
+            let profile = await service.currentProfile()
+            profileContext = ProfilePromptFormatter.format(profile)
+        }
+
         // 10. Execute the pipeline.
         let queryService = pipelineQueryService
         let hint = intentText.isEmpty ? nil : intentText
+        let capturedProfileContext = profileContext
         let pipelineResult = await Task.detached {
             await queryService.query(
                 filePath: effectiveFilePath,
                 entityName: entityName,
                 purpose: "explain",
-                questionHint: hint
+                questionHint: hint,
+                profileContext: capturedProfileContext
             )
         }.value
 
@@ -333,13 +345,16 @@ final class SessionQuestionCoordinator {
             originalCode: snippetText,
             explanationProfile: explanationProfile,
             language: language,
+            sourceAppPID: event.sourceAppPID,
             pipelineQueryService: pipelineQueryService,
             pipelineConversationState: understanding.conversationState,
             pipelineFilePath: effectiveFilePath,
-            pipelineEntityName: entityName
+            pipelineEntityName: entityName,
+            profileContext: profileContext
         )
 
         // Virtual Session: record insight on stream completion.
+        // Profile Intelligence: record observation at the same completion point.
         let insightContext = buildInsightContext(
             filePath: effectiveFilePath,
             fileName: effectiveFileName,
@@ -351,16 +366,24 @@ final class SessionQuestionCoordinator {
         )
         let vsManager = virtualSessionManager
         let capturedInsightContext = insightContext
+        let profileService = profileIntelligenceService
         hud.showStream(stream, sourceApp: sourceAppName, followUpContext: followUpCtx) { explanationText in
-            guard vsManager.isEnabled else { return }
-            let understanding = VirtualSessionManager.extractUnderstanding(
-                from: explanationText,
-                sourceApp: sourceAppName
-            )
-            vsManager.recordInsight(
-                understanding: understanding,
-                mode: .session,
-                context: capturedInsightContext
+            if vsManager.isEnabled {
+                let understanding = VirtualSessionManager.extractUnderstanding(
+                    from: explanationText,
+                    sourceApp: sourceAppName
+                )
+                vsManager.recordInsight(
+                    understanding: understanding,
+                    mode: .session,
+                    context: capturedInsightContext
+                )
+            }
+
+            profileService?.recordObservation(
+                context: capturedInsightContext,
+                mode: "session",
+                observationType: .explanation
             )
         }
 

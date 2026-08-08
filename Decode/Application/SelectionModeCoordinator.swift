@@ -27,6 +27,7 @@ final class SelectionModeCoordinator {
     private let usageTracker: AIUsageTracker
     private let virtualSessionManager: VirtualSessionManager
     private let visualContextExtractor: (any VisualContextExtracting)?
+    private let profileIntelligenceService: ProfileIntelligenceService?
 
     // MARK: - State
 
@@ -63,7 +64,8 @@ final class SelectionModeCoordinator {
         toastManager: DecodeToastManager,
         usageTracker: AIUsageTracker,
         virtualSessionManager: VirtualSessionManager,
-        visualContextExtractor: (any VisualContextExtracting)? = nil
+        visualContextExtractor: (any VisualContextExtracting)? = nil,
+        profileIntelligenceService: ProfileIntelligenceService? = nil
     ) {
         self.selectionCapture = selectionCapture
         self.aiProvider = aiProvider
@@ -72,6 +74,7 @@ final class SelectionModeCoordinator {
         self.usageTracker = usageTracker
         self.virtualSessionManager = virtualSessionManager
         self.visualContextExtractor = visualContextExtractor
+        self.profileIntelligenceService = profileIntelligenceService
     }
 
     // MARK: - Lifecycle
@@ -336,6 +339,16 @@ final class SelectionModeCoordinator {
             executionContext.virtualSession = true
         }
 
+        // Profile Intelligence: inject user profile context into system prompt.
+        var profileContext: String?
+        if let service = profileIntelligenceService {
+            let profile = await service.currentProfile()
+            profileContext = ProfilePromptFormatter.format(profile)
+            if let profileBlock = profileContext {
+                systemPrompt += "\n\n\(profileBlock)"
+            }
+        }
+
         // Assemble user message — uses shared prompt composition.
         let formattedVC = visualContext.flatMap { $0.isEmpty ? nil : $0.formatted() }
         if formattedVC != nil { executionContext.vision = true }
@@ -408,26 +421,38 @@ final class SelectionModeCoordinator {
                 originalCode: text,
                 explanationProfile: explanationProfile,
                 language: nil,
+                sourceAppPID: event.sourceAppPID,
                 pipelineQueryService: nil,
                 pipelineConversationState: nil,
                 pipelineFilePath: nil,
-                pipelineEntityName: nil
+                pipelineEntityName: nil,
+                profileContext: profileContext
             )
 
             // Virtual Session: record insight on stream completion.
+            // Profile Intelligence: record observation at the same completion point.
             let vsManager = virtualSessionManager
             let capturedSourceApp = sourceAppName
+            let profileService = profileIntelligenceService
             hud.showStream(stream, sourceApp: sourceAppName, followUpContext: followUpCtx) { explanationText in
-                guard vsManager.isEnabled else { return }
-                let understanding = VirtualSessionManager.extractUnderstanding(
-                    from: explanationText,
-                    sourceApp: capturedSourceApp
-                )
                 let context = InsightContext.minimal(sourceApp: capturedSourceApp)
-                vsManager.recordInsight(
-                    understanding: understanding,
-                    mode: .selection,
-                    context: context
+
+                if vsManager.isEnabled {
+                    let understanding = VirtualSessionManager.extractUnderstanding(
+                        from: explanationText,
+                        sourceApp: capturedSourceApp
+                    )
+                    vsManager.recordInsight(
+                        understanding: understanding,
+                        mode: .selection,
+                        context: context
+                    )
+                }
+
+                profileService?.recordObservation(
+                    context: context,
+                    mode: "selection",
+                    observationType: .explanation
                 )
             }
         } catch {

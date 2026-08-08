@@ -205,18 +205,22 @@ final class SessionViewModel {
     /// Whether the session sheet should be auto-presented (e.g., after hotkey open).
     var shouldPresentSession = false
 
-    /// Open a file picker and create/activate a workspace for the selected file.
+    /// Open a file picker and create/activate workspaces for the selected files.
     func openFile() {
         let panel = NSOpenPanel()
-        panel.title = "Select a code file"
+        panel.title = "Select code files"
         panel.allowedContentTypes = Self.supportedCodeTypes
-        panel.allowsMultipleSelection = false
+        panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
 
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard panel.runModal() == .OK else { return }
+        let urls = panel.urls
+        guard !urls.isEmpty else { return }
 
         Task {
-            await loadFile(url: url)
+            for url in urls {
+                await loadFile(url: url)
+            }
         }
     }
 

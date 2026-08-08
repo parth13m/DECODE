@@ -143,6 +143,64 @@ struct DecodeDatabaseMigrator {
             try db.drop(table: "sessions")
         }
 
+        migrator.registerMigration("v4_notes") { db in
+            try db.create(table: "notes") { t in
+                t.primaryKey("id", .text).notNull()
+                t.column("title", .text).notNull()
+                t.column("fileName", .text).notNull()
+                t.column("language", .text)
+                t.column("mode", .text)
+                t.column("workspacePath", .text)
+                t.column("filePath", .text)
+                t.column("createdAt", .datetime).notNull()
+            }
+
+            try db.create(
+                index: "idx_notes_createdAt",
+                on: "notes",
+                columns: ["createdAt"]
+            )
+        }
+
+        migrator.registerMigration("v5_profile_observations") { db in
+            try db.create(table: "profile_observations") { t in
+                t.primaryKey("id", .text).notNull()
+                t.column("timestamp", .datetime).notNull()
+                t.column("observationType", .text).notNull()
+                t.column("mode", .text).notNull()
+                t.column("isFollowUp", .boolean).notNull().defaults(to: false)
+                t.column("schemaVersion", .integer).notNull().defaults(to: 1)
+                t.column("filePath", .text)
+                t.column("fileName", .text)
+                t.column("entityName", .text)
+                t.column("entityType", .text)
+                t.column("moduleName", .text)
+                t.column("layer", .text)
+                t.column("fileRole", .text)
+                t.column("language", .text)
+                t.column("sourceApp", .text)
+                t.column("workspaceID", .text)
+            }
+
+            try db.create(
+                index: "idx_profile_observations_timestamp",
+                on: "profile_observations",
+                columns: ["timestamp"]
+            )
+
+            try db.create(
+                index: "idx_profile_observations_language",
+                on: "profile_observations",
+                columns: ["language"]
+            )
+
+            try db.create(
+                index: "idx_profile_observations_observationType",
+                on: "profile_observations",
+                columns: ["observationType"]
+            )
+        }
+
         try migrator.migrate(db)
     }
 }

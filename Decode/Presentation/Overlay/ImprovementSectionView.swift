@@ -27,11 +27,11 @@ struct ImprovementSectionView: View {
                 .padding(.top, 4)
 
             HStack(spacing: 6) {
-                Image(systemName: "wand.and.stars")
+                Image(systemName: "bolt.fill")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(accentOrange)
 
-                Text("Improve Code")
+                Text("Optimise")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.secondary)
 
@@ -50,7 +50,7 @@ struct ImprovementSectionView: View {
                     ProgressView()
                         .controlSize(.small)
                         .tint(accentOrange)
-                    Text("Improving...")
+                    Text("Optimising...")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.secondary)
                 }

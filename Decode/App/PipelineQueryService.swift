@@ -44,7 +44,8 @@ final class PipelineQueryService: Sendable {
         entityName: String,
         purpose: String = "explain",
         questionHint: String? = nil,
-        conversationState: ConversationState? = nil
+        conversationState: ConversationState? = nil,
+        profileContext: String? = nil
     ) async -> PipelineQueryResult {
         let contextPurpose = ContextPurpose(purpose)
 
@@ -101,7 +102,8 @@ final class PipelineQueryService: Sendable {
             outputSpecification: OutputSpecification(
                 purpose: contextPurpose,
                 outputClass: .human,
-                detailLevel: .standard
+                detailLevel: .standard,
+                profileContext: profileContext
             ),
             conversationState: conversationState
         )
@@ -136,7 +138,8 @@ final class PipelineQueryService: Sendable {
         filePath: String,
         entityName: String,
         question: String,
-        conversationState: ConversationState
+        conversationState: ConversationState,
+        profileContext: String? = nil
     ) async -> PipelineQueryResult {
         // Inject the question into the conversation state.
         let injectedState = injectQuestion(question, into: conversationState)
@@ -146,7 +149,8 @@ final class PipelineQueryService: Sendable {
             entityName: entityName,
             purpose: "followup",
             questionHint: question,
-            conversationState: injectedState
+            conversationState: injectedState,
+            profileContext: profileContext
         )
     }
 

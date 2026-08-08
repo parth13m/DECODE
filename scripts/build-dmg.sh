@@ -7,9 +7,10 @@ set -euo pipefail
 # Produces: build/Decode-<version>.dmg
 # No Apple Developer Program, notarization, or CI/CD required.
 #
-# The app is signed with Apple Development during the archive step.
-# This preserves the certificate trust chain (TeamIdentifier, Authority)
-# so that testers can bypass Gatekeeper via right-click → Open.
+# Uses xcodebuild build (not archive) to avoid a Swift compiler stack
+# overflow triggered by the archive action on Xcode 16.2. The app is
+# signed with Apple Development and hardened runtime is enabled via
+# Release config, so testers can bypass Gatekeeper via right-click → Open.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -26,7 +27,6 @@ if [ -z "$VERSION" ]; then
     exit 1
 fi
 
-ARCHIVE_PATH="$BUILD_DIR/Decode.xcarchive"
 APP_PATH="$BUILD_DIR/Decode.app"
 DMG_STAGING="$BUILD_DIR/dmg-staging"
 DMG_PATH="$BUILD_DIR/Decode-${VERSION}.dmg"
@@ -42,29 +42,30 @@ echo "[1/5] Cleaning previous build..."
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 
-# ── Step 2: Archive ──
-echo "[2/5] Archiving (this takes a few minutes)..."
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild archive \
+# ── Step 2: Build ──
+echo "[2/5] Building (this takes a few minutes)..."
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild build \
     -project Decode.xcodeproj \
     -scheme "$SCHEME" \
     -configuration "$CONFIG" \
-    -archivePath "$ARCHIVE_PATH" \
     -arch arm64 \
     CODE_SIGN_IDENTITY="Apple Development" \
     DEVELOPMENT_TEAM=P5Y864DV5S \
     -quiet
 
-if [ ! -d "$ARCHIVE_PATH" ]; then
-    echo "ERROR: Archive failed — $ARCHIVE_PATH not found"
+# Find the built app in DerivedData
+DERIVED_APP=$(find ~/Library/Developer/Xcode/DerivedData -path "*/Decode-*/Build/Products/$CONFIG/Decode.app" -maxdepth 6 2>/dev/null | head -1)
+if [ -z "$DERIVED_APP" ] || [ ! -d "$DERIVED_APP" ]; then
+    echo "ERROR: Build succeeded but Decode.app not found in DerivedData"
     exit 1
 fi
 
-echo "    Archive created."
+echo "    Build succeeded."
 
-# ── Step 3: Extract app from archive ──
-echo "[3/5] Extracting app..."
-cp -R "$ARCHIVE_PATH/Products/Applications/Decode.app" "$APP_PATH"
-echo "    App extracted (Apple Development signed)."
+# ── Step 3: Copy app from DerivedData ──
+echo "[3/5] Copying app..."
+cp -R "$DERIVED_APP" "$APP_PATH"
+echo "    App copied (Apple Development signed)."
 
 # ── Step 4: Verify ──
 echo "[4/5] Verifying..."
@@ -89,10 +90,10 @@ else
     echo "    ✗ WARNING: Hardened runtime not detected"
 fi
 
-# Check entitlements — must NOT have get-task-allow or app-sandbox
+# Check entitlements
 ENTITLEMENTS=$(codesign -d --entitlements - "$APP_PATH" 2>&1)
 if echo "$ENTITLEMENTS" | grep -q "get-task-allow"; then
-    echo "    ✗ WARNING: get-task-allow present"
+    echo "    ✗ WARNING: get-task-allow present (Debug entitlement)"
 else
     echo "    ✓ get-task-allow stripped"
 fi

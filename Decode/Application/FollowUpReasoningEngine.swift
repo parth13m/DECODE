@@ -171,12 +171,18 @@ struct FollowUpReasoningEngine: ReasoningEngine, Sendable {
             )
         }
 
-        let systemPrompt = buildInitialSystemPrompt(
+        var systemPrompt = buildInitialSystemPrompt(
             knowledge: knowledge,
             outputSpecification: outputSpecification,
             hasModuleObservations: moduleObservations != nil,
             hasSystemObservations: systemObservations != nil
         )
+
+        // Profile Intelligence: append advisory profile context if available.
+        if let profileBlock = outputSpecification.profileContext {
+            systemPrompt += "\n\n\(profileBlock)"
+        }
+
         let userPrompt = buildInitialUserPrompt(
             knowledge: knowledge,
             systemObservations: systemObservations,
@@ -249,9 +255,15 @@ struct FollowUpReasoningEngine: ReasoningEngine, Sendable {
             AIMessage(role: .user, content: question),
         ]
 
+        // Profile Intelligence: append advisory profile context if available.
+        var followUpPrompt = Self.followUpSystemPrompt
+        if let profileBlock = outputSpecification.profileContext {
+            followUpPrompt += "\n\n\(profileBlock)"
+        }
+
         let stream = try await provider.streamChat(
             messages: messages,
-            systemPrompt: Self.followUpSystemPrompt,
+            systemPrompt: followUpPrompt,
             mode: "session_followup"
         )
 

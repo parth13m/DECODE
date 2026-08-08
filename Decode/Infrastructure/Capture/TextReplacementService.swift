@@ -18,12 +18,13 @@ enum ReplacementResult: Sendable {
 /// Uses the same clipboard backup/restore pattern as ``AccessibilityCapture``'s
 /// clipboard fallback. The replacement flow:
 ///
-/// 1. Verify the frontmost app is not Decode
+/// 1. Activate the source editor (or verify Decode is not frontmost)
 /// 2. Backup current clipboard contents
 /// 3. Write replacement text to clipboard
-/// 4. Simulate ⌘V via CGEvent
-/// 5. Wait for the editor to process the paste
-/// 6. Restore original clipboard contents
+/// 4. Resign key from any Decode window so the paste targets the editor
+/// 5. Simulate ⌘V via CGEvent
+/// 6. Wait for the editor to process the paste
+/// 7. Restore original clipboard contents
 ///
 /// Requires Accessibility permission (already granted for text capture).
 @MainActor
@@ -33,14 +34,25 @@ final class TextReplacementService {
 
     /// Replace the current selection in the frontmost editor with the given text.
     ///
-    /// - Parameter text: The replacement text to paste.
+    /// - Parameters:
+    ///   - text: The replacement text to paste.
+    ///   - sourceAppPID: PID of the editor to activate before pasting. When provided,
+    ///     the service activates this app so the simulated ⌘V targets the correct window.
     /// - Returns: The result of the replacement attempt.
-    func replaceSelection(with text: String) async -> ReplacementResult {
-        // 1. Guard: frontmost app must not be Decode.
-        if let frontmost = NSWorkspace.shared.frontmostApplication,
-           frontmost.bundleIdentifier == Bundle.main.bundleIdentifier {
-            replaceLog.warning("replacement blocked: Decode is frontmost app")
-            return .decodeIsFrontmost
+    func replaceSelection(with text: String, sourceAppPID: pid_t? = nil) async -> ReplacementResult {
+        // 1. Activate the source editor if we know its PID.
+        if let pid = sourceAppPID,
+           let sourceApp = NSRunningApplication(processIdentifier: pid) {
+            sourceApp.activate()
+            // Give the system time to bring the editor to front and make it key.
+            try? await Task.sleep(nanoseconds: 200_000_000) // 200ms
+        } else {
+            // Fallback: check that the frontmost app is not Decode.
+            if let frontmost = NSWorkspace.shared.frontmostApplication,
+               frontmost.bundleIdentifier == Bundle.main.bundleIdentifier {
+                replaceLog.warning("replacement blocked: Decode is frontmost app")
+                return .decodeIsFrontmost
+            }
         }
 
         let pasteboard = NSPasteboard.general
@@ -52,22 +64,26 @@ final class TextReplacementService {
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
 
-        // 4. Simulate ⌘V.
+        // 4. Resign key from any Decode window (e.g. HUD panel) so the
+        //    keyboard event routes to the source editor, not our floating panel.
+        if let keyWindow = NSApp.keyWindow {
+            keyWindow.resignKey()
+            // Brief yield to let the window server update key window routing.
+            try? await Task.sleep(nanoseconds: 50_000_000) // 50ms
+        }
+
+        // 5. Simulate ⌘V.
         guard simulatePaste() else {
             replaceLog.warning("replacement failed: CGEvent paste simulation failed")
             restorePasteboard(pasteboard, items: savedItems)
             return .pasteEventFailed
         }
 
-        // 5. Wait for the editor to process the paste command.
+        // 6. Wait for the editor to process the paste command.
         try? await Task.sleep(nanoseconds: 300_000_000) // 300ms
 
-        // 6. Restore original clipboard.
+        // 7. Restore original clipboard.
         restorePasteboard(pasteboard, items: savedItems)
-
-        #if DEBUG
-        print("[DIAG_REPLACE] replacement complete, \(text.count) chars pasted")
-        #endif
 
         replaceLog.info("replacement succeeded: \(text.count, privacy: .public) chars")
         return .success

@@ -1,5 +1,11 @@
 import SwiftUI
 
+/// Navigation page within the main window.
+private enum AppPage: Hashable {
+    case home
+    case notes
+}
+
 /// The root view of the application.
 ///
 /// Displays a welcome state with guidance to configure the AI provider
@@ -8,8 +14,10 @@ struct ContentView: View {
 
     @Environment(AppDependencies.self) private var dependencies
     @State private var showingSession = false
+    @State private var selectedPage: AppPage = .home
     @State private var showingOnboarding = !OnboardingState.hasCompleted
     @State private var showingMemoryInspector = false
+    @State private var showingProfileInspector = false
     @AppStorage("dsaModeEnabled") private var dsaModeEnabled = false
     @AppStorage("virtualSessionEnabled") private var virtualSessionEnabled = false
     @AppStorage("enhancedExplanationEnabled") private var enhancedExplanationEnabled = false
@@ -46,6 +54,82 @@ struct ContentView: View {
     // MARK: - Authenticated Content
 
     private var authenticatedContent: some View {
+        HStack(spacing: 0) {
+            // Custom sidebar
+            VStack(spacing: 0) {
+                // Logo
+                HStack(spacing: 8) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 7)
+                            .fill(accentOrange.opacity(0.15))
+                            .frame(width: 28, height: 28)
+                        Text("D")
+                            .font(.system(size: 14, weight: .bold, design: .rounded))
+                            .foregroundStyle(accentOrange)
+                    }
+                    Text("Decode")
+                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .foregroundStyle(textPrimary)
+                    Spacer()
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 18)
+                .padding(.bottom, 24)
+
+                // Nav items
+                VStack(spacing: 4) {
+                    sidebarItem("Home", icon: "house", page: .home)
+                    sidebarItem("Notes", icon: "bookmark", page: .notes)
+                }
+                .padding(.horizontal, 10)
+
+                Spacer()
+            }
+            .frame(width: 170)
+            .background(Color(red: 0.955, green: 0.945, blue: 0.93))
+
+            Divider()
+                .overlay(cardBorder)
+
+            // Detail
+            Group {
+                switch selectedPage {
+                case .home:
+                    homeContent
+                case .notes:
+                    NotesView()
+                        .environment(dependencies)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .sheet(isPresented: $showingSession) {
+            if let vm = dependencies.sessionViewModel {
+                SessionView(viewModel: vm)
+                    .frame(minWidth: 900, minHeight: 600)
+            }
+        }
+        .sheet(isPresented: $showingOnboarding) {
+            OnboardingView(onOpenSettings: {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+                }
+            })
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .showOnboarding)) { _ in
+            showingOnboarding = true
+        }
+        .onChange(of: dependencies.sessionViewModel?.shouldPresentSession) { _, newValue in
+            if newValue == true {
+                showingSession = true
+                dependencies.sessionViewModel?.shouldPresentSession = false
+            }
+        }
+    }
+
+    // MARK: - Home Page
+
+    private var homeContent: some View {
         VStack(spacing: 0) {
             Spacer()
 
@@ -183,6 +267,30 @@ struct ContentView: View {
                 EnhancedExplanationDebugView()
                     .padding(.horizontal, 60)
             }
+
+            // Profile Intelligence inspector
+            if dependencies.profileIntelligenceService != nil {
+                HStack(spacing: 10) {
+                    Button {
+                        showingProfileInspector.toggle()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "person.text.rectangle")
+                                .font(.system(size: 11))
+                            Text("Profile Inspector")
+                                .font(.system(size: 11, weight: .medium))
+                        }
+                        .foregroundStyle(accentOrange)
+                    }
+                    .buttonStyle(.plain)
+                    .popover(isPresented: $showingProfileInspector) {
+                        ProfileIntelligenceInspectorView()
+                            .environment(dependencies)
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 60)
+            }
             #endif
 
             Spacer().frame(height: 12)
@@ -205,28 +313,35 @@ struct ContentView: View {
 
             Spacer()
         }
-        .sheet(isPresented: $showingSession) {
-            if let vm = dependencies.sessionViewModel {
-                SessionView(viewModel: vm)
-                    .frame(minWidth: 900, minHeight: 600)
+        .background(warmBackground)
+    }
+
+    // MARK: - Sidebar Item
+
+    private func sidebarItem(_ title: String, icon: String, page: AppPage) -> some View {
+        let isSelected = selectedPage == page
+
+        return Button {
+            selectedPage = page
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(isSelected ? accentOrange : textSecondary)
+                    .frame(width: 18)
+                Text(title)
+                    .font(.system(size: 13, weight: isSelected ? .semibold : .medium))
+                    .foregroundStyle(isSelected ? textPrimary : textSecondary)
+                Spacer()
             }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(
+                RoundedRectangle(cornerRadius: 7)
+                    .fill(isSelected ? accentOrange.opacity(0.12) : Color.clear)
+            )
         }
-        .sheet(isPresented: $showingOnboarding) {
-            OnboardingView(onOpenSettings: {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-                }
-            })
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .showOnboarding)) { _ in
-            showingOnboarding = true
-        }
-        .onChange(of: dependencies.sessionViewModel?.shouldPresentSession) { _, newValue in
-            if newValue == true {
-                showingSession = true
-                dependencies.sessionViewModel?.shouldPresentSession = false
-            }
-        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Auth State Views

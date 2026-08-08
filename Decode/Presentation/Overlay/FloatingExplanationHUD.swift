@@ -542,9 +542,19 @@ private struct HUDContentView: View {
                         followUpSection
                     }
 
-                    // MARK: Improve Code
+                    // MARK: Optimise & Note
                     if viewModel.displayState == .complete {
                         improveCodeSection
+                    }
+
+                    // MARK: Note
+                    if viewModel.displayState == .complete {
+                        noteSection
+                    }
+
+                    // MARK: Feedback
+                    if let fm = viewModel.feedbackManager, fm.showingFeedback {
+                        feedbackSection(manager: fm)
                     }
                 }
                 .padding(.vertical, 4)
@@ -649,7 +659,7 @@ private struct HUDContentView: View {
         }
     }
 
-    // MARK: - Improve Code
+    // MARK: - Optimise Code
 
     @ViewBuilder
     private var improveCodeSection: some View {
@@ -657,18 +667,27 @@ private struct HUDContentView: View {
             // Show the full improvement section (loading, result, or error).
             ImprovementSectionView(viewModel: viewModel)
         } else if viewModel.canRequestImprovement {
-            // Show the "Improve Code" button.
+            // Show the "Optimise" button with goal picker menu.
             Divider()
                 .overlay(Color(red: 0.91, green: 0.90, blue: 0.88))
                 .padding(.top, 4)
 
-            Button {
-                viewModel.requestImprovement()
+            Menu {
+                ForEach(OptimisationGoal.allCases, id: \.self) { goal in
+                    Button {
+                        viewModel.requestImprovement(goal: goal)
+                    } label: {
+                        VStack(alignment: .leading) {
+                            Text("\(goal.icon) \(goal.displayName)")
+                            Text(goal.description)
+                        }
+                    }
+                }
             } label: {
                 HStack(spacing: 5) {
-                    Image(systemName: "wand.and.stars")
+                    Image(systemName: "bolt.fill")
                         .font(.system(size: 11))
-                    Text("Improve Code")
+                    Text("Optimise")
                         .font(.system(size: 12, weight: .semibold))
                 }
                 .foregroundStyle(.white)
@@ -677,8 +696,118 @@ private struct HUDContentView: View {
                 .background(accentOrange)
                 .clipShape(RoundedRectangle(cornerRadius: 6))
             }
-            .buttonStyle(.plain)
+            .menuStyle(.borderlessButton)
+            .fixedSize()
             .padding(.top, 2)
+        }
+    }
+
+    // MARK: - Note
+
+    @ViewBuilder
+    private var noteSection: some View {
+        if viewModel.canSaveNote && !viewModel.hasImprovementResult {
+            HStack(spacing: 8) {
+                Button {
+                    viewModel.saveNote()
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "bookmark.fill")
+                            .font(.system(size: 11))
+                        Text("Note")
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    .foregroundStyle(accentOrange)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(accentOrange.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                }
+                .buttonStyle(.plain)
+
+                if !viewModel.noteSavedConfirmation.isEmpty {
+                    HStack(spacing: 4) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color(red: 0.22, green: 0.65, blue: 0.36))
+                        Text(viewModel.noteSavedConfirmation)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(Color(red: 0.22, green: 0.65, blue: 0.36))
+                    }
+                }
+
+                Spacer()
+            }
+        }
+    }
+
+    // MARK: - Feedback
+
+    private func feedbackSection(manager: FeedbackManager) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Divider()
+                .overlay(Color(red: 0.91, green: 0.90, blue: 0.88))
+                .padding(.top, 4)
+
+            if manager.feedbackSubmitted {
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color(red: 0.22, green: 0.65, blue: 0.36))
+                    Text("Thanks for your feedback!")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                HStack(spacing: 10) {
+                    Text("Was this helpful?")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.secondary)
+
+                    Button {
+                        manager.submitFeedback(liked: true)
+                    } label: {
+                        HStack(spacing: 3) {
+                            Text("\u{1F44D}")
+                                .font(.system(size: 13))
+                            Text("Helpful")
+                                .font(.system(size: 11, weight: .semibold))
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Color(red: 0.22, green: 0.65, blue: 0.36).opacity(0.12))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        manager.submitFeedback(liked: false)
+                    } label: {
+                        HStack(spacing: 3) {
+                            Text("\u{1F44E}")
+                                .font(.system(size: 13))
+                            Text("Not Helpful")
+                                .font(.system(size: 11, weight: .semibold))
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Color(red: 0.90, green: 0.30, blue: 0.24).opacity(0.12))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                    .buttonStyle(.plain)
+
+                    Spacer()
+
+                    Button {
+                        manager.dismissFeedback()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
         }
     }
 

@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from app.auth import require_admin
 from app.database import get_db
 from app.models.ai_request import AIRequest
+from app.models.analytics_event import AnalyticsEvent
 from app.models.daily_summary import DailySummary
 from app.models.event import Event
 from app.models.request_log import RequestLog
@@ -1324,4 +1325,165 @@ def trigger_aggregation(
         "action": "aggregate",
         "date": str(d),
         "rows_written": rows,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Feedback Analytics
+# ---------------------------------------------------------------------------
+
+@router.get("/feedback")
+def get_feedback_analytics(
+    days: int | None = Query(None, ge=1, le=365),
+    start: date | None = None,
+    end: date | None = None,
+    db: Session = Depends(get_db),
+):
+    """Feedback analytics from analytics_events where event_type='feedback'."""
+    start_date, end_date = _parse_date_range(days, start, end)
+    filters = (
+        AnalyticsEvent.event_type == "feedback",
+        cast(AnalyticsEvent.created_at, Date) >= start_date,
+        cast(AnalyticsEvent.created_at, Date) <= end_date,
+    )
+
+    total = db.query(sa_func.count(AnalyticsEvent.id)).filter(*filters).scalar() or 0
+
+    # Count likes/dislikes from JSONB metadata.
+    likes = db.query(sa_func.count(AnalyticsEvent.id)).filter(
+        *filters,
+        AnalyticsEvent.metadata_["liked"].as_boolean().is_(True),
+    ).scalar() or 0
+    dislikes = total - likes
+
+    satisfaction = round(likes / total * 100, 1) if total else 0
+
+    # By feature (explain / optimise).
+    by_feature = db.query(
+        AnalyticsEvent.metadata_["feature"].as_string().label("feature"),
+        sa_func.count().label("total"),
+        sa_func.count(
+            case(
+                (AnalyticsEvent.metadata_["liked"].as_boolean().is_(True), 1),
+            )
+        ).label("likes"),
+    ).filter(*filters).group_by("feature").all()
+
+    # By optimisation goal (for optimise feedback only).
+    by_goal = db.query(
+        AnalyticsEvent.metadata_["optimisation_goal"].as_string().label("goal"),
+        sa_func.count().label("total"),
+        sa_func.count(
+            case(
+                (AnalyticsEvent.metadata_["liked"].as_boolean().is_(True), 1),
+            )
+        ).label("likes"),
+    ).filter(
+        *filters,
+        AnalyticsEvent.metadata_["feature"].as_string() == "optimise",
+        AnalyticsEvent.metadata_["optimisation_goal"].as_string().isnot(None),
+    ).group_by("goal").all()
+
+    # By language.
+    by_language = db.query(
+        AnalyticsEvent.metadata_["language"].as_string().label("language"),
+        sa_func.count().label("total"),
+        sa_func.count(
+            case(
+                (AnalyticsEvent.metadata_["liked"].as_boolean().is_(True), 1),
+            )
+        ).label("likes"),
+    ).filter(
+        *filters,
+        AnalyticsEvent.metadata_["language"].as_string().isnot(None),
+    ).group_by("language").order_by(sa_func.count().desc()).limit(20).all()
+
+    # By mode (provider proxy — mode correlates with provider routing).
+    by_mode = db.query(
+        sa_func.coalesce(AnalyticsEvent.mode, "unknown").label("mode"),
+        sa_func.count().label("total"),
+        sa_func.count(
+            case(
+                (AnalyticsEvent.metadata_["liked"].as_boolean().is_(True), 1),
+            )
+        ).label("likes"),
+    ).filter(*filters).group_by("mode").all()
+
+    # Daily trend.
+    daily = db.query(
+        cast(AnalyticsEvent.created_at, Date).label("day"),
+        sa_func.count().label("total"),
+        sa_func.count(
+            case(
+                (AnalyticsEvent.metadata_["liked"].as_boolean().is_(True), 1),
+            )
+        ).label("likes"),
+    ).filter(*filters).group_by("day").order_by("day").all()
+
+    def _row(r, name_field="name"):
+        t = r.total or 0
+        l = r.likes or 0
+        return {
+            name_field: getattr(r, name_field, None) or getattr(r, "feature", None) or getattr(r, "goal", None) or getattr(r, "language", None) or getattr(r, "mode", None),
+            "total": t,
+            "likes": l,
+            "dislikes": t - l,
+            "satisfaction": round(l / t * 100, 1) if t else 0,
+        }
+
+    return {
+        "period": {"start": str(start_date), "end": str(end_date)},
+        "total_feedback": total,
+        "likes": likes,
+        "dislikes": dislikes,
+        "satisfaction": satisfaction,
+        "by_feature": [
+            {
+                "feature": r.feature or "unknown",
+                "total": r.total or 0,
+                "likes": r.likes or 0,
+                "dislikes": (r.total or 0) - (r.likes or 0),
+                "satisfaction": round((r.likes or 0) / (r.total or 1) * 100, 1) if r.total else 0,
+            }
+            for r in by_feature
+        ],
+        "by_optimisation_goal": [
+            {
+                "goal": r.goal or "unknown",
+                "total": r.total or 0,
+                "likes": r.likes or 0,
+                "dislikes": (r.total or 0) - (r.likes or 0),
+                "satisfaction": round((r.likes or 0) / (r.total or 1) * 100, 1) if r.total else 0,
+            }
+            for r in by_goal
+        ],
+        "by_language": [
+            {
+                "language": r.language or "unknown",
+                "total": r.total or 0,
+                "likes": r.likes or 0,
+                "dislikes": (r.total or 0) - (r.likes or 0),
+                "satisfaction": round((r.likes or 0) / (r.total or 1) * 100, 1) if r.total else 0,
+            }
+            for r in by_language
+        ],
+        "by_mode": [
+            {
+                "mode": r.mode or "unknown",
+                "total": r.total or 0,
+                "likes": r.likes or 0,
+                "dislikes": (r.total or 0) - (r.likes or 0),
+                "satisfaction": round((r.likes or 0) / (r.total or 1) * 100, 1) if r.total else 0,
+            }
+            for r in by_mode
+        ],
+        "daily_trend": [
+            {
+                "date": str(r.day),
+                "total": r.total or 0,
+                "likes": r.likes or 0,
+                "dislikes": (r.total or 0) - (r.likes or 0),
+            }
+            for r in daily
+        ],
     }

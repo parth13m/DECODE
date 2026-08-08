@@ -40,4 +40,18 @@ protocol DatabaseServiceProtocol: Sendable {
     func createMessage(_ message: ChatMessage) async throws
     func fetchMessages(sessionId: UUID) async throws -> [ChatMessage]
     func deleteMessages(sessionId: UUID) async throws
+
+    // MARK: - Notes
+
+    func createNote(_ note: Note) async throws
+    func fetchAllNotes() async throws -> [Note]
+    func deleteNote(id: UUID) async throws
+
+    // MARK: - Profile Observations
+
+    func createProfileObservation(_ observation: ProfileObservation) async throws
+    func fetchAllProfileObservations() async throws -> [ProfileObservation]
+    func fetchProfileObservations(since date: Date) async throws -> [ProfileObservation]
+    func countProfileObservations() async throws -> Int
+    func deleteAllProfileObservations() async throws
 }

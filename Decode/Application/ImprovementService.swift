@@ -80,6 +80,46 @@ enum ImprovementService {
         - Preserve meaningful comments from the original code.
         """
 
+    // MARK: - Goal-Specific Prompt
+
+    /// Build a system prompt tailored to the selected optimisation goal.
+    ///
+    /// Appends a goal-specific instruction block to the base prompt. The goal
+    /// enum is provider-independent — this method handles the translation.
+    static func systemPrompt(for goal: OptimisationGoal) -> String {
+        let goalInstruction: String
+        switch goal {
+        case .balanced:
+            goalInstruction = """
+
+                OPTIMISATION GOAL: Balanced
+                Balance readability, maintainability, and performance equally. \
+                Do not sacrifice clarity for marginal speed gains. Prefer the \
+                simplest correct solution.
+                """
+        case .performance:
+            goalInstruction = """
+
+                OPTIMISATION GOAL: Performance
+                Prioritise execution speed. Reduce unnecessary allocations, \
+                prefer value types over reference types where appropriate, \
+                minimize copying, use lazy evaluation where beneficial, and \
+                choose more efficient algorithms or data structures. \
+                Readability may be reduced if the performance gain is meaningful.
+                """
+        case .memoryEfficient:
+            goalInstruction = """
+
+                OPTIMISATION GOAL: Memory Efficient
+                Prioritise lower memory usage. Reduce allocations, avoid \
+                unnecessary copies, prefer in-place mutations, use smaller \
+                data types where safe, release resources early, and avoid \
+                retaining large collections longer than necessary.
+                """
+        }
+        return systemPrompt + goalInstruction
+    }
+
     // MARK: - Mode
 
     /// Build the compound analytics mode for an improvement request.

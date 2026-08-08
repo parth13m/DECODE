@@ -78,12 +78,18 @@ struct ExplainReasoningEngine: ReasoningEngine, Sendable {
             moduleName: moduleObservations?.moduleName
         )
 
-        let systemPrompt = buildSystemPrompt(
+        var systemPrompt = buildSystemPrompt(
             knowledge: knowledge,
             outputSpecification: outputSpecification,
             hasModuleObservations: moduleObservations != nil,
             hasSystemObservations: systemObservations != nil
         )
+
+        // Profile Intelligence: append advisory profile context if available.
+        if let profileBlock = outputSpecification.profileContext {
+            systemPrompt += "\n\n\(profileBlock)"
+        }
+
         let userPrompt = buildUserPrompt(
             knowledge: knowledge,
             outputSpecification: outputSpecification,

@@ -70,11 +70,30 @@ final class AppDependencies {
     /// Observation task that watches workspace count and updates dock visibility.
     private var dockVisibilityTask: Task<Void, Never>?
 
+    /// Floating launcher on the left screen edge for quick file/folder actions.
+    private(set) var floatingLauncher: FloatingLauncher?
+
+    // MARK: - Notes
+
+    /// Service for saving and loading explanation notes.
+    private(set) var noteService: NoteService?
+
+    // MARK: - Feedback
+
+    /// Manages feedback scheduling and submission.
+    let feedbackManager = FeedbackManager()
+
     // MARK: - Virtual Sessions
 
     /// Manages optional cross-mode investigation memory.
     /// Created at init (lightweight). Restored during deferred startup.
     let virtualSessionManager: VirtualSessionManager
+
+    // MARK: - Profile Intelligence
+
+    /// Records user behavior observations and derives a learning profile.
+    /// Created during deferred startup after the database is available.
+    private(set) var profileIntelligenceService: ProfileIntelligenceService?
 
     // MARK: - Understanding Pipeline
 
@@ -237,6 +256,22 @@ final class AppDependencies {
             #endif
         }
 
+        // 0b2. Initialize note service.
+        if let db = database {
+            let service = NoteService(database: db)
+            self.noteService = service
+            hud.viewModel.noteService = service
+        }
+
+        // 0b3. Initialize Profile Intelligence service.
+        if let db = database {
+            let repository = ProfileObservationRepository(database: db)
+            self.profileIntelligenceService = ProfileIntelligenceService(repository: repository)
+        }
+
+        // 0b4. Wire feedback manager to HUD.
+        hud.viewModel.feedbackManager = feedbackManager
+
         // 0c. Restore virtual session state.
         virtualSessionManager.restore()
 
@@ -350,7 +385,8 @@ final class AppDependencies {
             toastManager: toastManager,
             usageTracker: tracker,
             virtualSessionManager: virtualSessionManager,
-            visualContextExtractor: vcExtractor
+            visualContextExtractor: vcExtractor,
+            profileIntelligenceService: profileIntelligenceService
         )
         self.selectionCoordinator = selCoordinator
 
@@ -362,7 +398,8 @@ final class AppDependencies {
             toastManager: toastManager,
             usageTracker: tracker,
             virtualSessionManager: virtualSessionManager,
-            visualContextExtractor: vcExtractor
+            visualContextExtractor: vcExtractor,
+            profileIntelligenceService: profileIntelligenceService
         )
         self.screenshotCoordinator = ssCoordinator
 
@@ -438,6 +475,23 @@ final class AppDependencies {
             }
         }
 
+        // 2d. Floating Launcher: always-visible left-edge launcher.
+        let launcher = FloatingLauncher()
+        launcher.onAddFile = { [weak self] in
+            self?.handleOpenSession()
+        }
+        launcher.onAddFolder = { [weak self] in
+            self?.handleOpenWorkspace()
+        }
+        launcher.onLauncherTapped = {
+            NSApp.activate(ignoringOtherApps: true)
+            if let mainWindow = NSApp.windows.first(where: { !($0 is NSPanel) }) {
+                mainWindow.makeKeyAndOrderFront(nil)
+            }
+        }
+        self.floatingLauncher = launcher
+        launcher.show()
+
         let enrichment = SemanticEnrichmentService(
             aiProvider: { [weak self] in self?.aiProvider }
         )
@@ -459,7 +513,8 @@ final class AppDependencies {
             usageTracker: tracker,
             knowledgeArtifactStore: artifactStore,
             pipelineQueryService: pipelineQueryService,
-            virtualSessionManager: virtualSessionManager
+            virtualSessionManager: virtualSessionManager,
+            profileIntelligenceService: profileIntelligenceService
         )
         self.sessionQuestionCoordinator = sqCoordinator
 
@@ -676,18 +731,22 @@ final class AppDependencies {
 
         // Open file picker — same panel config as SessionViewModel.openFile().
         let panel = NSOpenPanel()
-        panel.title = "Select a code file"
-        panel.allowsMultipleSelection = false
+        panel.title = "Select code files"
+        panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
 
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard panel.runModal() == .OK else { return }
+        let urls = panel.urls
+        guard !urls.isEmpty else { return }
 
         Task { [weak self] in
             guard let self else { return }
 
-            // Create workspace for the selected file.
+            // Create workspaces for the selected files.
             if let vm = self.sessionViewModel {
-                await vm.loadFile(url: url)
+                for url in urls {
+                    await vm.loadFile(url: url)
+                }
             }
 
             // Present session sheet if a workspace is now active.

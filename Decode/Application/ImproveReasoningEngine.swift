@@ -64,7 +64,13 @@ struct ImproveReasoningEngine: ReasoningEngine, Sendable {
 
         let knowledge = ReasoningEngineSupport.extractKnowledge(from: allUnits)
 
-        let systemPrompt = buildSystemPrompt(outputSpecification: outputSpecification)
+        var systemPrompt = buildSystemPrompt(outputSpecification: outputSpecification)
+
+        // Profile Intelligence: append advisory profile context if available.
+        if let profileBlock = outputSpecification.profileContext {
+            systemPrompt += "\n\n\(profileBlock)"
+        }
+
         let userPrompt = buildUserPrompt(knowledge: knowledge)
 
         guard let provider = await aiProvider() else {

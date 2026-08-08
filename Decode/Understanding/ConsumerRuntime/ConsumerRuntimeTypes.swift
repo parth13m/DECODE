@@ -28,18 +28,24 @@ public struct OutputSpecification: Sendable {
     /// Whether this is a follow-up in a conversation.
     public let isFollowUp: Bool
 
+    /// Optional advisory profile context to append to the system prompt.
+    /// Produced by ``ProfilePromptFormatter``. `nil` means no profile available.
+    public let profileContext: String?
+
     public init(
         purpose: ContextPurpose,
         outputClass: OutputClass = .human,
         maxLength: Int? = nil,
         detailLevel: DetailLevel = .standard,
-        isFollowUp: Bool = false
+        isFollowUp: Bool = false,
+        profileContext: String? = nil
     ) {
         self.purpose = purpose
         self.outputClass = outputClass
         self.maxLength = maxLength
         self.detailLevel = detailLevel
         self.isFollowUp = isFollowUp
+        self.profileContext = profileContext
     }
 }
 

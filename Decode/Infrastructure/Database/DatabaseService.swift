@@ -176,4 +176,70 @@ final class DatabaseService: DatabaseServiceProtocol, Sendable {
     }
 
     func deleteMessages(sessionId: UUID) async throws {}
+
+    // MARK: - Notes
+
+    func createNote(_ note: Note) async throws {
+        let record = NoteRecord(from: note)
+        try await dbPool.write { db in
+            try record.insert(db)
+        }
+    }
+
+    func fetchAllNotes() async throws -> [Note] {
+        try await dbPool.read { db in
+            try NoteRecord
+                .order(Column("createdAt").desc)
+                .fetchAll(db)
+                .compactMap { $0.toDomain() }
+        }
+    }
+
+    func deleteNote(id: UUID) async throws {
+        try await dbPool.write { db in
+            _ = try NoteRecord
+                .filter(Column("id") == id.uuidString)
+                .deleteAll(db)
+        }
+    }
+
+    // MARK: - Profile Observations
+
+    func createProfileObservation(_ observation: ProfileObservation) async throws {
+        let record = ProfileObservationRecord(from: observation)
+        try await dbPool.write { db in
+            try record.insert(db)
+        }
+    }
+
+    func fetchAllProfileObservations() async throws -> [ProfileObservation] {
+        try await dbPool.read { db in
+            try ProfileObservationRecord
+                .order(Column("timestamp").asc)
+                .fetchAll(db)
+                .compactMap { $0.toDomain() }
+        }
+    }
+
+    func fetchProfileObservations(since date: Date) async throws -> [ProfileObservation] {
+        try await dbPool.read { db in
+            try ProfileObservationRecord
+                .filter(Column("timestamp") >= date)
+                .order(Column("timestamp").asc)
+                .fetchAll(db)
+                .compactMap { $0.toDomain() }
+        }
+    }
+
+    func countProfileObservations() async throws -> Int {
+        try await dbPool.read { db in
+            try ProfileObservationRecord.fetchCount(db)
+        }
+    }
+
+    func deleteAllProfileObservations() async throws {
+        try await dbPool.write { db in
+            _ = try ProfileObservationRecord.deleteAll(db)
+        }
+    }
 }
