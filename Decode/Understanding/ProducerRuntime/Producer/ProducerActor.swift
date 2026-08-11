@@ -652,11 +652,15 @@ public actor ProducerActor: ProducerRegistry, ExecutionDirective, FailureReportS
                     method: inferenceMethod
                 )
             } else if record.groundingRefs.isEmpty {
+                // DAS-002 I-GND-1: Direct grounding — extracted from source.
+                // Use canonical source position from the frontend when available.
+                let fileVersion = record.version.sourceHashes.first
+                    ?? ContentHash(bytes: Array(repeating: 0, count: 32))
                 grounding = .direct(SourcePosition(
-                    filePath: "",
-                    startLine: 0,
-                    endLine: 0,
-                    fileVersion: ContentHash(bytes: Array(repeating: 0, count: 32))
+                    filePath: record.sourceFilePath ?? "",
+                    startLine: record.sourceStartLine ?? 0,
+                    endLine: record.sourceEndLine ?? 0,
+                    fileVersion: fileVersion
                 ))
             } else {
                 grounding = .derived(record.groundingRefs)

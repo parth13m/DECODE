@@ -8,6 +8,21 @@ import os
 import DIRCore
 import IndexRuntime
 
+#if DEBUG
+/// Diagnostic logger for grounding trace — writes to file for GUI app reliability.
+private func diagLog(_ message: String) {
+    let path = "/tmp/decode_grounding_diag.log"
+    let line = "[\(ISO8601DateFormatter().string(from: Date()))] \(message)\n"
+    if let handle = FileHandle(forWritingAtPath: path) {
+        handle.seekToEndOfFile()
+        handle.write(line.data(using: .utf8)!)
+        handle.closeFile()
+    } else {
+        FileManager.default.createFile(atPath: path, contents: line.data(using: .utf8))
+    }
+}
+#endif
+
 /// Stateless evidence retrieval service implementing the five-stage pipeline.
 ///
 /// DDS-005: Executes anchor resolution → direct evidence → relational evidence →
@@ -164,6 +179,24 @@ public struct RetrievalService: EvidenceRetrieval, Sendable {
         // whose source range overlaps the snippet's line range
         let allActive = await dirAccess.activeUnits()
 
+        #if DEBUG
+        // === GROUNDING DIAGNOSTIC: resolveSnippetAnchors ===
+        diagLog("[SNIPPET-DIAG] resolveSnippetAnchors called")
+        diagLog("[SNIPPET-DIAG]   snippet.filePath=\(snippet.filePath)")
+        diagLog("[SNIPPET-DIAG]   snippet.startLine=\(snippet.startLine), endLine=\(snippet.endLine)")
+        diagLog("[SNIPPET-DIAG]   total active units in DIR: \(allActive.count)")
+        // Show a sample of entity units with their grounding
+        let entityUnits = allActive.filter { if case .entity = $0.subject { return true }; return false }
+        diagLog("[SNIPPET-DIAG]   entity-subject units: \(entityUnits.count)")
+        // Show ALL entity units' grounding for diagnosis
+        for unit in entityUnits {
+            if case .entity(let e) = unit.subject, case .direct(let pos) = unit.grounding {
+                let match = pos.filePath == snippet.filePath ? "MATCH" : "no-match"
+                diagLog("[SNIPPET-DIAG]   entity=\(e.qualifiedName) filePath='\(pos.filePath)' lines=\(pos.startLine)-\(pos.endLine) [\(match)]")
+            }
+        }
+        #endif
+
         // Collect entities and their source ranges from grounding data
         var entityRanges: [EntityReference: (startLine: Int, endLine: Int)] = [:]
 
@@ -183,13 +216,27 @@ public struct RetrievalService: EvidenceRetrieval, Sendable {
             }
         }
 
-        // Find entities whose range contains the snippet
+        // Find entities whose range overlaps the snippet range.
+        // DDS-005 PC-2: "If the snippet spans multiple entities, returns all
+        // containing entities." — interpreted as all entities whose source range
+        // overlaps the snippet's range. Two ranges [a,b] and [c,d] overlap iff
+        // a <= d AND b >= c. This handles: single-entity containment, multi-entity
+        // spanning, and file-level selections.
         var containingEntities: [EntityReference] = []
         for (entity, range) in entityRanges {
-            if range.startLine <= snippet.startLine && range.endLine >= snippet.endLine {
+            if range.startLine <= snippet.endLine && range.endLine >= snippet.startLine {
                 containingEntities.append(entity)
             }
         }
+
+        #if DEBUG
+        diagLog("[SNIPPET-DIAG] entityRanges found: \(entityRanges.count)")
+        for (entity, range) in entityRanges {
+            let overlaps = range.startLine <= snippet.endLine && range.endLine >= snippet.startLine
+            diagLog("[SNIPPET-DIAG]   \(entity.qualifiedName) range=\(range.startLine)-\(range.endLine) overlaps=\(overlaps)")
+        }
+        diagLog("[SNIPPET-DIAG] containingEntities: \(containingEntities.count) → \(containingEntities.map(\.qualifiedName))")
+        #endif
 
         if !containingEntities.isEmpty {
             // Sort for determinism (RC-4)
@@ -197,9 +244,17 @@ public struct RetrievalService: EvidenceRetrieval, Sendable {
         }
 
         // Fallback: file-level scope entity
-        // Look for a scope entity representing this file
-        let fileEntity = EntityReference(qualifiedName: snippet.filePath)
+        // Look for a scope entity representing this file.
+        // File entities are indexed with "file:<filename>" qualified names
+        // (see FrontendOutputConversion), not full paths.
+        let fileName = (snippet.filePath as NSString).lastPathComponent
+        let fileEntity = EntityReference(qualifiedName: "file:\(fileName)")
         let fileResult = await indexQuerying.queryEntity(fileEntity, predicate: nil, tier: nil, status: .active)
+
+        #if DEBUG
+        diagLog("[SNIPPET-DIAG] File-scope fallback: entity='file:\(fileName)' indexHit=\(!fileResult.entries.isEmpty)")
+        #endif
+
         if !fileResult.entries.isEmpty {
             return [fileEntity]
         }
@@ -392,20 +447,24 @@ public struct RetrievalService: EvidenceRetrieval, Sendable {
                 return false
             }
 
-            // Determine the file path from grounding
-            var scopeEntities: [EntityReference] = []
+            // Determine the file-scope entity from grounding.
+            // File entities use canonical "file:<filename>" qualified names
+            // (see FrontendOutputConversion). Track both the scope entity
+            // and the original full file path (needed for module derivation).
+            var scopeEntities: [(entity: EntityReference, filePath: String)] = []
             for unit in anchorUnits {
-                if case .direct(let position) = unit.grounding {
-                    let fileScope = EntityReference(qualifiedName: position.filePath)
-                    if !scopeEntities.contains(fileScope) && fileScope != anchor {
-                        scopeEntities.append(fileScope)
+                if case .direct(let position) = unit.grounding, !position.filePath.isEmpty {
+                    let scopeName = "file:\((position.filePath as NSString).lastPathComponent)"
+                    let fileScope = EntityReference(qualifiedName: scopeName)
+                    if !scopeEntities.contains(where: { $0.entity == fileScope }) && fileScope != anchor {
+                        scopeEntities.append((entity: fileScope, filePath: position.filePath))
                     }
                     break
                 }
             }
 
             // Gather file-scope evidence for identified scope entities.
-            for scopeEntity in scopeEntities {
+            for (scopeEntity, _) in scopeEntities {
                 guard accumulator.canGather(stage: .scope, stageBudget: stageBudget) else {
                     accumulator.markTruncated(.scope)
                     return
@@ -439,9 +498,8 @@ public struct RetrievalService: EvidenceRetrieval, Sendable {
             // Module entity is determined from the anchor's file path using
             // the same directory-based algorithm as ModuleBoundaryPass.
             if plan.scope >= .module {
-                for scopeEntity in scopeEntities {
-                    let filePath = scopeEntity.qualifiedName
-                    let dirPath = (filePath as NSString).deletingLastPathComponent
+                for (_, scopeFilePath) in scopeEntities {
+                    let dirPath = (scopeFilePath as NSString).deletingLastPathComponent
                     let moduleName = (dirPath as NSString).lastPathComponent
                     guard !moduleName.isEmpty else { continue }
 

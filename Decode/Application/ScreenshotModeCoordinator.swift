@@ -337,6 +337,8 @@ final class ScreenshotModeCoordinator {
                 pipelineConversationState: nil,
                 pipelineFilePath: nil,
                 pipelineEntityName: nil,
+                pipelineSnippetStartLine: nil,
+                pipelineSnippetEndLine: nil,
                 profileContext: profileContext
             )
 

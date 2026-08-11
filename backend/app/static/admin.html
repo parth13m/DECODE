@@ -1072,6 +1072,13 @@
       </div>
     </div>
 
+    <div class="zone" id="detail-intelligence-zone" style="display:none">
+      <div class="zone-title">Profile Intelligence</div>
+      <div class="section" id="detail-intelligence-section">
+        <div id="detail-intelligence"></div>
+      </div>
+    </div>
+
     <div class="zone">
       <div class="zone-title">Usage</div>
 
@@ -2059,6 +2066,97 @@ async function loadUserDetail(userId) {
           }
         }
       });
+    }
+
+    // Profile Intelligence
+    const pi = data.profile_intelligence;
+    const piZone = document.getElementById('detail-intelligence-zone');
+    const piContainer = document.getElementById('detail-intelligence');
+    if (pi && pi.available && pi.data) {
+      piZone.style.display = 'block';
+      const d = pi.data;
+      const tech = d.technology || {};
+      const learn = d.learning || {};
+      const inter = d.interaction || {};
+      const coding = d.coding || {};
+      const pref = d.preference || {};
+      const proj = d.project || {};
+
+      let piHTML = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">';
+
+      // Technology
+      piHTML += '<div>';
+      piHTML += '<h3 style="margin:0 0 8px;font-size:13px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px">Technology</h3>';
+      if (tech.languages && tech.languages.length > 0) {
+        piHTML += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">';
+        for (const l of tech.languages) {
+          const isPrimary = tech.primaryLanguage === l.language;
+          piHTML += `<span style="padding:3px 10px;border-radius:12px;font-size:12px;font-weight:${isPrimary ? '600' : '400'};background:${isPrimary ? '#e8783020' : '#f3f4f6'};color:${isPrimary ? '#e87830' : '#374151'};border:1px solid ${isPrimary ? '#e8783040' : 'transparent'}">${escapeHtml(l.language)} (${l.count})</span>`;
+        }
+        piHTML += '</div>';
+        if (tech.primaryLanguage) piHTML += `<div style="font-size:11px;color:#9ca3af">Primary: ${escapeHtml(tech.primaryLanguage)}</div>`;
+      } else {
+        piHTML += '<div style="font-size:12px;color:#9ca3af">No language data</div>';
+      }
+      piHTML += '</div>';
+
+      // Exploration
+      piHTML += '<div>';
+      piHTML += '<h3 style="margin:0 0 8px;font-size:13px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px">Exploration</h3>';
+      if (learn.frequentEntityTypes && learn.frequentEntityTypes.length > 0) {
+        piHTML += `<div style="font-size:12px;margin-bottom:4px"><span style="color:#9ca3af">Entity types:</span> ${escapeHtml(learn.frequentEntityTypes.join(', '))}</div>`;
+      }
+      if (learn.frequentLayers && learn.frequentLayers.length > 0) {
+        piHTML += `<div style="font-size:12px;margin-bottom:4px"><span style="color:#9ca3af">Layers:</span> ${escapeHtml(learn.frequentLayers.join(', '))}</div>`;
+      }
+      if (learn.frequentFileRoles && learn.frequentFileRoles.length > 0) {
+        piHTML += `<div style="font-size:12px;margin-bottom:4px"><span style="color:#9ca3af">File roles:</span> ${escapeHtml(learn.frequentFileRoles.join(', '))}</div>`;
+      }
+      piHTML += `<div style="font-size:12px;color:#6b7280;margin-top:6px">${learn.distinctFilesExplored || 0} files \u00b7 ${learn.distinctEntitiesExplored || 0} entities explored</div>`;
+      piHTML += '</div>';
+
+      // Interaction
+      piHTML += '<div>';
+      piHTML += '<h3 style="margin:0 0 8px;font-size:13px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px">Interaction</h3>';
+      if (inter.modeUsage && inter.modeUsage.length > 0) {
+        for (const m of inter.modeUsage) {
+          piHTML += `<div style="font-size:12px;margin-bottom:3px">${escapeHtml(m.mode)}: <strong>${m.count}</strong></div>`;
+        }
+        if (inter.primaryMode) piHTML += `<div style="font-size:11px;color:#9ca3af;margin-top:4px">Primary: ${escapeHtml(inter.primaryMode)}</div>`;
+      } else {
+        piHTML += '<div style="font-size:12px;color:#9ca3af">No interaction data</div>';
+      }
+      piHTML += '</div>';
+
+      // Learning / Behavior
+      piHTML += '<div>';
+      piHTML += '<h3 style="margin:0 0 8px;font-size:13px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px">Learning</h3>';
+      piHTML += `<div style="font-size:12px;margin-bottom:3px">Explanations: <strong>${coding.explanationCount || 0}</strong></div>`;
+      piHTML += `<div style="font-size:12px;margin-bottom:3px">Follow-ups: <strong>${coding.followUpCount || 0}</strong></div>`;
+      piHTML += `<div style="font-size:12px;margin-bottom:3px">Follow-up rate: <strong>${coding.followUpRate != null ? (coding.followUpRate * 100).toFixed(0) + '%' : '\u2014'}</strong></div>`;
+      if (pref.sessionModePreference > 0) {
+        piHTML += `<div style="font-size:12px;margin-bottom:3px">Session mode preference: <strong>${(pref.sessionModePreference * 100).toFixed(0)}%</strong></div>`;
+      }
+      piHTML += '</div>';
+
+      piHTML += '</div>';
+
+      // Metadata footer
+      piHTML += `<div style="margin-top:12px;padding-top:10px;border-top:1px solid #e5e7eb;font-size:11px;color:#9ca3af">`;
+      piHTML += `Schema v${pi.schema_version || '\u2014'} \u00b7 ${d.totalObservationCount || 0} observations \u00b7 `;
+      piHTML += `Synced ${pi.synced_at ? formatDate(pi.synced_at) : 'never'}`;
+      if (proj.sourceApps && proj.sourceApps.length > 0) {
+        piHTML += ` \u00b7 Source apps: ${escapeHtml(proj.sourceApps.join(', '))}`;
+      }
+      piHTML += '</div>';
+
+      piContainer.innerHTML = piHTML;
+    } else {
+      piZone.style.display = 'block';
+      piContainer.innerHTML = '<div style="text-align:center;padding:20px;color:#9ca3af;font-size:13px">' +
+        '<div style="font-size:24px;margin-bottom:8px">\u2014</div>' +
+        'Profile not available yet. The user\'s Decode app will sync their profile automatically.' +
+        '</div>';
     }
 
     // Daily table

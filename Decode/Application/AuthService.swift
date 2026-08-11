@@ -22,6 +22,10 @@ final class AuthService {
     /// Current authentication state. Observed by ContentView for the centralized gate.
     private(set) var state: AuthState = .authenticating
 
+    /// Account metadata populated from the validate response.
+    /// Available only after successful authentication.
+    private(set) var accountInfo: AccountInfo?
+
     // MARK: - Dependencies
 
     private let keychain: KeychainService
@@ -160,6 +164,13 @@ final class AuthService {
             case 200:
                 if let result = try? JSONDecoder().decode(ValidateResponse.self, from: data) {
                     UserDefaults.standard.set(result.userId, forKey: Self.userIdKey)
+                    accountInfo = AccountInfo(
+                        userId: result.userId,
+                        status: result.status,
+                        name: result.name,
+                        email: result.email,
+                        activatedAt: Self.parseISO8601(result.activatedAt)
+                    )
                 }
                 state = .authenticated
                 #if DEBUG
@@ -236,6 +247,7 @@ final class AuthService {
     /// Sign out — clear token and reset to invite flow.
     func signOut() {
         clearToken()
+        accountInfo = nil
         state = .needsInvite
     }
 
@@ -243,6 +255,16 @@ final class AuthService {
 
     private func performRequest(_ request: URLRequest) async throws -> (Data, URLResponse) {
         try await session.data(for: request)
+    }
+
+    /// Parse an ISO 8601 date string from the backend.
+    private static func parseISO8601(_ string: String?) -> Date? {
+        guard let string else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = formatter.date(from: string) { return date }
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: string)
     }
 
     private func extractErrorDetail(from data: Data) -> String {
@@ -271,10 +293,16 @@ private struct ActivateResponse: Decodable {
 private struct ValidateResponse: Decodable {
     let userId: String
     let status: String
+    let name: String?
+    let email: String?
+    let activatedAt: String?
 
     enum CodingKeys: String, CodingKey {
         case userId = "user_id"
         case status
+        case name
+        case email
+        case activatedAt = "activated_at"
     }
 }
 

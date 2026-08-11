@@ -46,12 +46,16 @@ final class AccessibilityCapture: SelectionCaptureProtocol {
         }
 
         // Primary: AX-based capture (native apps, Safari).
-        if let text = readSelectedText(fromPID: pid), !text.isEmpty {
+        if let axResult = readSelectedText(fromPID: pid), !axResult.text.isEmpty {
             #if DEBUG
-            axLog.debug("DIAG strategy=AX, len=\(text.count, privacy: .public)")
+            axLog.debug("DIAG strategy=AX, len=\(axResult.text.count, privacy: .public)")
             #endif
-            axLog.info("captured \(text.count, privacy: .public) chars via AX from \(appName, privacy: .public)")
-            return SelectionCaptureResult(text: text, sourceApplicationName: appName)
+            axLog.info("captured \(axResult.text.count, privacy: .public) chars via AX from \(appName, privacy: .public)")
+            return SelectionCaptureResult(
+                text: axResult.text,
+                sourceApplicationName: appName,
+                selectedRange: axResult.selectedRange
+            )
         }
 
         // Fallback: clipboard-based capture (Chrome, VS Code, Electron apps).
@@ -243,7 +247,10 @@ final class AccessibilityCapture: SelectionCaptureProtocol {
     /// 1. Focused element via per-PID app element or system-wide element
     /// 2. Text marker conversion (Safari/WebKit)
     /// 3. BFS tree walk to find any element with selected text
-    private func readSelectedText(fromPID pid: pid_t) -> String? {
+    ///
+    /// Returns both the text and (when available) the character range of the
+    /// selection within the focused AX element's text.
+    private func readSelectedText(fromPID pid: pid_t) -> (text: String, selectedRange: (location: Int, length: Int)?)? {
         let appElement = AXUIElementCreateApplication(pid)
 
         // Step 1: Get focused UI element.
@@ -263,8 +270,11 @@ final class AccessibilityCapture: SelectionCaptureProtocol {
                 &focusedValue
             )
             if sysError != .success || focusedValue == nil {
-                // Last resort: walk the AX tree.
-                return readSelectedTextByTreeWalk(appElement: appElement)
+                // Last resort: walk the AX tree (no range data available).
+                if let text = readSelectedTextByTreeWalk(appElement: appElement) {
+                    return (text: text, selectedRange: nil)
+                }
+                return nil
             }
         }
 
@@ -309,12 +319,31 @@ final class AccessibilityCapture: SelectionCaptureProtocol {
                 let preview = String(text.prefix(100))
                 axLog.debug("DIAG accepted AX text — role=\(role ?? "nil", privacy: .public) len=\(text.count, privacy: .public) preview=\(preview, privacy: .public)")
                 #endif
-                return text
+
+                // Query AX selected text range for position data.
+                var selectedRange: (location: Int, length: Int)? = nil
+                var rangeRef: CFTypeRef?
+                let rangeErr = AXUIElementCopyAttributeValue(
+                    focusedUIElement,
+                    kAXSelectedTextRangeAttribute as CFString,
+                    &rangeRef
+                )
+                if rangeErr == .success, let rangeValue = rangeRef {
+                    var cfRange = CFRange(location: 0, length: 0)
+                    if AXValueGetValue(rangeValue as! AXValue, .cfRange, &cfRange) {
+                        selectedRange = (location: cfRange.location, length: cfRange.length)
+                    }
+                }
+
+                return (text: text, selectedRange: selectedRange)
             }
         }
 
-        // Fallback: text markers (Safari/WebKit AXWebArea elements).
-        return readSelectedTextViaMarkers(from: focusedUIElement)
+        // Fallback: text markers (Safari/WebKit AXWebArea elements, no range data).
+        if let text = readSelectedTextViaMarkers(from: focusedUIElement) {
+            return (text: text, selectedRange: nil)
+        }
+        return nil
     }
 
     // MARK: - Text Marker Fallback (Safari / WebKit)

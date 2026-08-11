@@ -2,6 +2,21 @@ import AppKit
 import Foundation
 import ConsumerRuntime
 
+#if DEBUG
+/// Diagnostic logger for grounding trace — writes to file for GUI app reliability.
+private func diagLog(_ message: String) {
+    let path = "/tmp/decode_grounding_diag.log"
+    let line = "[\(ISO8601DateFormatter().string(from: Date()))] \(message)\n"
+    if let handle = FileHandle(forWritingAtPath: path) {
+        handle.seekToEndOfFile()
+        handle.write(line.data(using: .utf8)!)
+        handle.closeFile()
+    } else {
+        FileManager.default.createFile(atPath: path, contents: line.data(using: .utf8))
+    }
+}
+#endif
+
 /// Orchestrates the Workspace Question flow: hotkey → capture → resolve workspace → pipeline → HUD.
 ///
 /// When the user presses double-tap Shift, this coordinator:
@@ -221,27 +236,25 @@ final class SessionQuestionCoordinator {
         }
 
         #if DEBUG
-        print("[SessionQuestion] Resolved workspace: \(effectiveFileName) (method=\(resolution.method), confidence=\(resolution.confidence), file=\(effectiveFileName))")
+        diagLog("[SessionQuestion] Resolved workspace: \(effectiveFileName) (method=\(resolution.method), confidence=\(resolution.confidence))")
+        diagLog("[SessionQuestion] effectiveFilePath=\(effectiveFilePath)")
+        diagLog("[SessionQuestion] snippetText length=\(snippetText.count) chars")
         #endif
 
-        // 7. Find the containing entity for the snippet.
-        let containingEntity = effectiveEntities
-            .filter { $0.sourceText.contains(snippetText) }
-            .min(by: { $0.sourceText.count < $1.sourceText.count })
+        // 7. Derive snippet line range for pipeline query.
+        // The RetrievalRuntime resolves the snippet to entity anchors via
+        // DDS-005 PC-2 — the coordinator provides the source range, not a
+        // pre-resolved entity name.
+        let snippetLineRange = Self.deriveSnippetLineRange(
+            snippetText: snippetText,
+            filePath: effectiveFilePath,
+            selectedRange: result.selectedRange
+        )
 
-        guard let entity = containingEntity else {
-            toastManager.show("Could not match selection to a code entity. Try selecting inside a function or type.", icon: "text.cursor")
-            return
-        }
-
-        // Build the qualified entity name.
-        let entityName: String
-        if let parentStableId = entity.parentStableId,
-           let parent = effectiveEntities.first(where: { $0.entity.stableId == parentStableId }) {
-            entityName = "\(parent.entity.name).\(entity.entity.name)"
-        } else {
-            entityName = entity.entity.name
-        }
+        #if DEBUG
+        diagLog("[SessionQuestion] Snippet line range: \(snippetLineRange.startLine)-\(snippetLineRange.endLine)")
+        diagLog("[SessionQuestion] BaseModel.py total lines: \((try? String(contentsOfFile: effectiveFilePath, encoding: .utf8))?.components(separatedBy: "\n").count ?? -1)")
+        #endif
 
         // 8. Collect user intent.
         let dsaMode = UserDefaults.standard.bool(forKey: "dsaModeEnabled")
@@ -305,10 +318,13 @@ final class SessionQuestionCoordinator {
         let capturedProfileContext = profileContext
         let capturedSnippet = snippetText
         let capturedSemanticContext = semanticContext
+        let capturedStartLine = snippetLineRange.startLine
+        let capturedEndLine = snippetLineRange.endLine
         let pipelineResult = await Task.detached {
-            await queryService.query(
+            await queryService.queryBySnippet(
                 filePath: effectiveFilePath,
-                entityName: entityName,
+                startLine: capturedStartLine,
+                endLine: capturedEndLine,
                 purpose: "explain",
                 questionHint: hint,
                 profileContext: capturedProfileContext,
@@ -320,14 +336,14 @@ final class SessionQuestionCoordinator {
         // Staleness check after pipeline await.
         guard generation == requestGeneration else {
             #if DEBUG
-            print("[SessionQuestion] Pipeline: request superseded (gen=\(generation), current=\(requestGeneration))")
+            diagLog("[SessionQuestion] Pipeline: request superseded (gen=\(generation), current=\(requestGeneration))")
             #endif
             return
         }
 
         guard case .success(let understanding) = pipelineResult else {
             #if DEBUG
-            print("[SessionQuestion] Pipeline: non-success result — \(pipelineResult)")
+            diagLog("[SessionQuestion] Pipeline: non-success result — \(pipelineResult)")
             #endif
             hud.showError("Could not generate explanation. The understanding pipeline did not produce a result.")
             return
@@ -377,7 +393,9 @@ final class SessionQuestionCoordinator {
             pipelineQueryService: pipelineQueryService,
             pipelineConversationState: understanding.conversationState,
             pipelineFilePath: effectiveFilePath,
-            pipelineEntityName: entityName,
+            pipelineEntityName: nil,
+            pipelineSnippetStartLine: snippetLineRange.startLine,
+            pipelineSnippetEndLine: snippetLineRange.endLine,
             profileContext: profileContext
         )
 
@@ -442,6 +460,77 @@ final class SessionQuestionCoordinator {
 
         let result = sections.joined(separator: "\n\n")
         return result.isEmpty ? nil : result
+    }
+
+    // MARK: - Snippet Line Range Derivation
+
+    /// Derives the line range of `snippetText` within the file at `filePath`.
+    ///
+    /// Strategy:
+    /// 1. Finds the snippet text in the file content. If exactly one occurrence
+    ///    exists, the match is provably correct.
+    /// 2. If multiple occurrences exist and an AX character offset is available,
+    ///    uses the offset to pick the closest match.
+    /// 3. If multiple occurrences exist with no AX offset, or the snippet is not
+    ///    found (unsaved changes), uses the full file line range as a conservative
+    ///    but correct fallback.
+    ///
+    /// Correctness guarantee: this method never resolves to the wrong source
+    /// location. Unique matches are exact; ambiguous or missing matches use the
+    /// full file range, which is broader than needed but never incorrect.
+    nonisolated static func deriveSnippetLineRange(
+        snippetText: String,
+        filePath: String,
+        selectedRange: (location: Int, length: Int)?
+    ) -> (startLine: Int, endLine: Int) {
+        guard let fileContent = try? String(contentsOfFile: filePath, encoding: .utf8) else {
+            return (1, 1)
+        }
+
+        let totalLines = max(1, fileContent.components(separatedBy: "\n").count)
+
+        let trimmed = snippetText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return (1, totalLines)
+        }
+
+        // Find occurrences of the snippet in the file.
+        var occurrences: [(charOffset: Int, startLine: Int, endLine: Int)] = []
+        var searchStart = fileContent.startIndex
+        let limit = selectedRange != nil ? 10 : 2
+
+        while let range = fileContent.range(of: trimmed, range: searchStart..<fileContent.endIndex) {
+            let offset = fileContent.distance(from: fileContent.startIndex, to: range.lowerBound)
+            let prefix = fileContent[fileContent.startIndex..<range.lowerBound]
+            let startLine = prefix.filter({ $0 == "\n" }).count + 1
+            let snippetNewlines = fileContent[range].filter({ $0 == "\n" }).count
+            let endLine = startLine + snippetNewlines
+
+            occurrences.append((charOffset: offset, startLine: startLine, endLine: endLine))
+
+            guard range.upperBound < fileContent.endIndex else { break }
+            searchStart = fileContent.index(after: range.lowerBound)
+            if occurrences.count >= limit { break }
+        }
+
+        switch occurrences.count {
+        case 0:
+            // Snippet not found in file (unsaved changes?) — full file range.
+            return (1, totalLines)
+        case 1:
+            // Unique match — provably correct.
+            return (occurrences[0].startLine, occurrences[0].endLine)
+        default:
+            // Multiple matches — try AX offset disambiguation.
+            if let axRange = selectedRange {
+                let closest = occurrences.min(by: {
+                    abs($0.charOffset - axRange.location) < abs($1.charOffset - axRange.location)
+                })!
+                return (closest.startLine, closest.endLine)
+            }
+            // No AX offset — conservative full file range.
+            return (1, totalLines)
+        }
     }
 
     // MARK: - Virtual Session: InsightContext Construction

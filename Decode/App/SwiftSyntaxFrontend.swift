@@ -40,11 +40,13 @@ enum FrontendOutputConversion {
     ///   - result: The parse result from either SwiftSyntaxParser or TreeSitterParser.
     ///   - fileName: The file name (used for file-level import entity).
     ///   - version: The version stamp derived from the file's content hash.
+    ///   - filePath: The absolute file path for source grounding (DAS-002 I-GND-1).
     /// - Returns: Array of FrontendOutput records ready for ProducerRuntime.
     static func convert(
         result: DetailedParseResult,
         fileName: String,
-        version: VersionStamp
+        version: VersionStamp,
+        filePath: String
     ) -> [FrontendOutput] {
         var outputs: [FrontendOutput] = []
         outputs.reserveCapacity(result.entities.count * 5 + result.imports.count + result.relationships.count)
@@ -56,8 +58,12 @@ enum FrontendOutputConversion {
         )
 
         // --- Entities ---
+        // Deduplicate entities by qualified name to avoid supersession key
+        // conflicts (e.g., file defines the same class name twice).
+        var seenEntityNames: Set<String> = []
         for entity in result.entities {
             let qualifiedName = qualifiedEntityName(entity: entity, allEntities: result.entities)
+            guard seenEntityNames.insert(qualifiedName).inserted else { continue }
             let entityRef = EntityReference(qualifiedName: qualifiedName)
             let subject = UnitSubject.entity(entityRef)
 
@@ -68,7 +74,10 @@ enum FrontendOutputConversion {
                 value: .string(entity.entity.entityType.rawValue),
                 tier: .t0,
                 confidence: .deterministic,
-                version: version
+                version: version,
+                sourceFilePath: filePath,
+                sourceStartLine: entity.startLine,
+                sourceEndLine: entity.endLine
             ))
 
             // signature
@@ -79,7 +88,10 @@ enum FrontendOutputConversion {
                     value: .string(entity.signature),
                     tier: .t0,
                     confidence: .deterministic,
-                    version: version
+                    version: version,
+                    sourceFilePath: filePath,
+                    sourceStartLine: entity.startLine,
+                    sourceEndLine: entity.endLine
                 ))
             }
 
@@ -90,7 +102,10 @@ enum FrontendOutputConversion {
                 value: .integer(Int64(entity.startLine)),
                 tier: .t0,
                 confidence: .deterministic,
-                version: version
+                version: version,
+                sourceFilePath: filePath,
+                sourceStartLine: entity.startLine,
+                sourceEndLine: entity.endLine
             ))
 
             // endLine
@@ -100,7 +115,10 @@ enum FrontendOutputConversion {
                 value: .integer(Int64(entity.endLine)),
                 tier: .t0,
                 confidence: .deterministic,
-                version: version
+                version: version,
+                sourceFilePath: filePath,
+                sourceStartLine: entity.startLine,
+                sourceEndLine: entity.endLine
             ))
 
             // parentEntity (if nested)
@@ -112,7 +130,10 @@ enum FrontendOutputConversion {
                     value: .reference(EntityReference(qualifiedName: parentName)),
                     tier: .t0,
                     confidence: .deterministic,
-                    version: version
+                    version: version,
+                    sourceFilePath: filePath,
+                    sourceStartLine: entity.startLine,
+                    sourceEndLine: entity.endLine
                 ))
             }
         }
@@ -122,9 +143,12 @@ enum FrontendOutputConversion {
         // contains(File → Entity) relationship. This mirrors syntactic
         // declaration structure — below the file boundary, containment
         // is populated by source parsers.
+        // Uses seenEntityNames from above to avoid duplicate containment entries.
         let fileEntityRef = EntityReference(qualifiedName: "file:\(fileName)")
+        var seenContainmentNames: Set<String> = []
         for entity in result.entities {
             let qualifiedName = qualifiedEntityName(entity: entity, allEntities: result.entities)
+            guard seenContainmentNames.insert(qualifiedName).inserted else { continue }
             let entityRef = EntityReference(qualifiedName: qualifiedName)
 
             outputs.append(FrontendOutput(
@@ -133,32 +157,42 @@ enum FrontendOutputConversion {
                 value: .boolean(true),
                 tier: .t0,
                 confidence: .deterministic,
-                version: version
+                version: version,
+                sourceFilePath: filePath
             ))
         }
 
         // --- Imports ---
+        // All imports are combined into a single unit to avoid supersession
+        // key conflicts (same subject + predicate + tier = same key).
         let fileSubject = UnitSubject.entity(fileEntityRef)
 
-        for imp in result.imports {
-            let importValue: String
-            if imp.importedSymbols.isEmpty {
-                importValue = imp.moduleName
-            } else {
-                importValue = "\(imp.moduleName).\(imp.importedSymbols.joined(separator: ", "))"
+        if !result.imports.isEmpty {
+            let importLines = result.imports.map { imp -> String in
+                if imp.importedSymbols.isEmpty {
+                    return imp.moduleName
+                } else {
+                    return "\(imp.moduleName).\(imp.importedSymbols.joined(separator: ", "))"
+                }
             }
+            let combinedValue = importLines.joined(separator: "\n")
 
             outputs.append(FrontendOutput(
                 subject: fileSubject,
                 predicate: PredicateIdentifier(name: "imports", domain: "dependency"),
-                value: .string(importValue),
+                value: .string(combinedValue),
                 tier: .t0,
                 confidence: .deterministic,
-                version: version
+                version: version,
+                sourceFilePath: filePath
             ))
         }
 
         // --- Relationships ---
+        // Deduplicate relationships to avoid supersession key conflicts
+        // (e.g., multiple calls to print() from the same function produce
+        // the same pair(caller→callee) + calls key).
+        var seenRelationshipKeys: Set<String> = []
         for rel in result.relationships {
             let sourceName = entityNameByStableId[rel.sourceEntity] ?? rel.sourceEntity
             let predicate: PredicateIdentifier
@@ -173,6 +207,9 @@ enum FrontendOutputConversion {
                 predicate = PredicateIdentifier(name: "owns", domain: "relationship")
             }
 
+            let dedupeKey = "\(sourceName)|\(rel.targetName)|\(predicate.name)"
+            guard seenRelationshipKeys.insert(dedupeKey).inserted else { continue }
+
             outputs.append(FrontendOutput(
                 subject: .pair(EntityPair(
                     source: EntityReference(qualifiedName: sourceName),
@@ -182,7 +219,8 @@ enum FrontendOutputConversion {
                 value: .boolean(true),
                 tier: .t0,
                 confidence: .deterministic,
-                version: version
+                version: version,
+                sourceFilePath: filePath
             ))
         }
 
@@ -253,7 +291,8 @@ enum SwiftSyntaxFrontend {
         return FrontendOutputConversion.convert(
             result: result,
             fileName: fileName,
-            version: version
+            version: version,
+            filePath: filePath
         )
     }
 }

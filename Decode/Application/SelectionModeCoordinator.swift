@@ -426,6 +426,8 @@ final class SelectionModeCoordinator {
                 pipelineConversationState: nil,
                 pipelineFilePath: nil,
                 pipelineEntityName: nil,
+                pipelineSnippetStartLine: nil,
+                pipelineSnippetEndLine: nil,
                 profileContext: profileContext
             )
 

@@ -29,6 +29,15 @@ struct RawOutputRecord: Sendable {
     /// The version stamp (source hashes this output derives from).
     let version: VersionStamp
 
+    /// Source file path for direct grounding (populated by frontends).
+    let sourceFilePath: String?
+
+    /// Source start line (1-based) for direct grounding (populated by frontends).
+    let sourceStartLine: Int?
+
+    /// Source end line (1-based) for direct grounding (populated by frontends).
+    let sourceEndLine: Int?
+
     init(
         subject: UnitSubject,
         predicate: PredicateIdentifier,
@@ -37,7 +46,10 @@ struct RawOutputRecord: Sendable {
         confidence: Confidence,
         groundingRefs: [UnitIdentifier],
         inferenceMethod: String? = nil,
-        version: VersionStamp
+        version: VersionStamp,
+        sourceFilePath: String? = nil,
+        sourceStartLine: Int? = nil,
+        sourceEndLine: Int? = nil
     ) {
         self.subject = subject
         self.predicate = predicate
@@ -47,6 +59,9 @@ struct RawOutputRecord: Sendable {
         self.groundingRefs = groundingRefs
         self.inferenceMethod = inferenceMethod
         self.version = version
+        self.sourceFilePath = sourceFilePath
+        self.sourceStartLine = sourceStartLine
+        self.sourceEndLine = sourceEndLine
     }
 }
 
@@ -153,6 +168,15 @@ public struct FrontendOutput: Sendable {
     public let groundingRefs: [UnitIdentifier]
     public let version: VersionStamp
 
+    /// Source file path for direct grounding (DAS-002 I-GND-1).
+    public let sourceFilePath: String?
+
+    /// Source start line (1-based) for direct grounding.
+    public let sourceStartLine: Int?
+
+    /// Source end line (1-based) for direct grounding.
+    public let sourceEndLine: Int?
+
     public init(
         subject: UnitSubject,
         predicate: PredicateIdentifier,
@@ -160,7 +184,10 @@ public struct FrontendOutput: Sendable {
         tier: Tier,
         confidence: Confidence,
         groundingRefs: [UnitIdentifier] = [],
-        version: VersionStamp
+        version: VersionStamp,
+        sourceFilePath: String? = nil,
+        sourceStartLine: Int? = nil,
+        sourceEndLine: Int? = nil
     ) {
         self.subject = subject
         self.predicate = predicate
@@ -169,6 +196,9 @@ public struct FrontendOutput: Sendable {
         self.confidence = confidence
         self.groundingRefs = groundingRefs
         self.version = version
+        self.sourceFilePath = sourceFilePath
+        self.sourceStartLine = sourceStartLine
+        self.sourceEndLine = sourceEndLine
     }
 }
 
@@ -194,7 +224,10 @@ struct ClosureFrontend: FrontendDefinition {
                 tier: output.tier,
                 confidence: output.confidence,
                 groundingRefs: output.groundingRefs,
-                version: output.version
+                version: output.version,
+                sourceFilePath: output.sourceFilePath,
+                sourceStartLine: output.sourceStartLine,
+                sourceEndLine: output.sourceEndLine
             )
         }
     }

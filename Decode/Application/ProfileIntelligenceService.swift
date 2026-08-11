@@ -38,6 +38,10 @@ final class ProfileIntelligenceService {
     /// Whether the cache has been invalidated since the last derivation.
     private var cacheValid = false
 
+    /// The last profile that was successfully synced to the backend.
+    /// Used to avoid redundant sync calls when the profile hasn't changed.
+    private var lastSyncedProfile: UserProfile?
+
     // MARK: - Init
 
     init(repository: ProfileObservationRepository) {
@@ -115,6 +119,7 @@ final class ProfileIntelligenceService {
             let profile = Self.deriveProfile(from: observations)
             cachedProfile = profile
             cacheValid = true
+            syncProfileIfChanged(profile)
             return profile
         } catch {
             profileLog.error("Failed to fetch observations for derivation: \(error.localizedDescription, privacy: .public)")
@@ -140,6 +145,36 @@ final class ProfileIntelligenceService {
         recordedCount = 0
         failedCount = 0
         profileLog.info("Profile Intelligence data reset")
+    }
+
+    // MARK: - Profile Sync
+
+    /// Sync the derived profile to the backend if it has meaningfully changed.
+    ///
+    /// Uses `UserProfile.Equatable` conformance to detect changes. The actual
+    /// network call is fire-and-forget via ``ProfileSyncService`` — it never
+    /// blocks the explanation path.
+    private func syncProfileIfChanged(_ profile: UserProfile) {
+        // Skip sync for empty profiles — nothing useful to report.
+        guard profile.totalObservationCount > 0 else { return }
+
+        // Skip if the profile hasn't changed since last sync.
+        // `derivedAt` changes on every re-derivation, so exclude it from comparison.
+        // We compare the substantive content by checking observation count and
+        // the sub-profiles directly.
+        if let last = lastSyncedProfile,
+           last.technology == profile.technology,
+           last.learning == profile.learning,
+           last.coding == profile.coding,
+           last.interaction == profile.interaction,
+           last.preference == profile.preference,
+           last.project == profile.project,
+           last.totalObservationCount == profile.totalObservationCount {
+            return
+        }
+
+        lastSyncedProfile = profile
+        ProfileSyncService.sync(profile: profile)
     }
 
     // MARK: - Derivation (Phase 3 — Pure Functions)

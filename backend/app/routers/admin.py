@@ -855,6 +855,14 @@ class UserFollowUpBreakdown(BaseModel):
     estimated_cost_usd: float | None = None
 
 
+class UserProfileIntelligence(BaseModel):
+    """Derived Profile Intelligence snapshot synced from the macOS client."""
+    available: bool = False
+    schema_version: int | None = None
+    synced_at: datetime | None = None
+    data: dict | None = None
+
+
 class UserDetailResponse(BaseModel):
     profile: UserProfile
     mode_breakdown: UserModeBreakdown
@@ -863,6 +871,7 @@ class UserDetailResponse(BaseModel):
     token_breakdown: UserTokenBreakdown
     cost_breakdown: UserCostBreakdown
     daily: list[UserDailyRecord]
+    profile_intelligence: UserProfileIntelligence = UserProfileIntelligence()
 
 
 def _user_improve_breakdown(db: Session, user_id: str) -> UserImproveBreakdown:
@@ -1078,6 +1087,12 @@ def get_user_detail(
             cost_per_active_day=cost_per_active_day,
         ),
         daily=daily,
+        profile_intelligence=UserProfileIntelligence(
+            available=user.profile_snapshot is not None,
+            schema_version=user.profile_schema_version,
+            synced_at=user.profile_synced_at,
+            data=user.profile_snapshot,
+        ),
     )
 
 

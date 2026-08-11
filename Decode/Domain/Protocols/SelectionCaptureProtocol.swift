@@ -7,6 +7,16 @@ struct SelectionCaptureResult: Sendable {
 
     /// The name of the application the text was captured from, if available.
     let sourceApplicationName: String?
+
+    /// Character offset and length of the selection within the focused AX element's text.
+    /// Available when captured via Accessibility APIs; `nil` for clipboard fallback.
+    let selectedRange: (location: Int, length: Int)?
+
+    init(text: String, sourceApplicationName: String?, selectedRange: (location: Int, length: Int)? = nil) {
+        self.text = text
+        self.sourceApplicationName = sourceApplicationName
+        self.selectedRange = selectedRange
+    }
 }
 
 /// Defines the contract for capturing highlighted text from any macOS application.

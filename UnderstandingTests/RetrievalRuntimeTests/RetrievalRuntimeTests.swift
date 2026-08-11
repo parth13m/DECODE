@@ -211,10 +211,12 @@ struct AnchorResolutionTests {
         let dirAccess = MockDIRReadAccess()
         let indexQuerying = MockIndexQuerying()
 
-        // No entity covers lines 100-110, but file scope entity exists
-        let fileScopeUnit = makeUnitWithEntity(id: 1, entity: "app.swift", filePath: "other.swift", startLine: 1, endLine: 1)
+        // No entity covers lines 100-110, but file scope entity exists.
+        // File entities use canonical "file:<filename>" qualified names
+        // (see FrontendOutputConversion.convert).
+        let fileScopeUnit = makeUnitWithEntity(id: 1, entity: "file:app.swift", filePath: "other.swift", startLine: 1, endLine: 1)
         dirAccess.units[fileScopeUnit.id] = fileScopeUnit
-        indexQuerying.entityResults[makeEntityRef("app.swift")] = IndexQueryResult(
+        indexQuerying.entityResults[makeEntityRef("file:app.swift")] = IndexQueryResult(
             entries: [EntityIndexEntry(unitId: fileScopeUnit.id, predicate: testPredicate, tier: .t0, status: .active)],
             usedFallback: false
         )
@@ -223,7 +225,7 @@ struct AnchorResolutionTests {
         let snippet = SnippetReference(filePath: "app.swift", startLine: 100, endLine: 110)
         let anchors = await service.resolveAnchors(for: .snippet(snippet))
 
-        #expect(anchors == [makeEntityRef("app.swift")])
+        #expect(anchors == [makeEntityRef("file:app.swift")])
     }
 
     @Test("SnippetReference outside all ranges with no file scope returns empty")
@@ -518,9 +520,9 @@ struct ScopeEvidenceTests {
         let entityUnit = makeUnitWithEntity(id: 1, entity: "MyFunc", filePath: "test.swift", startLine: 5, endLine: 20)
         setupEntity("MyFunc", units: [entityUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
 
-        // File scope entity
-        let fileScopeUnit = makeUnitWithEntity(id: 100, entity: "test.swift", filePath: "test.swift", startLine: 1, endLine: 50)
-        setupEntity("test.swift", units: [fileScopeUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
+        // File scope entity — canonical "file:<filename>" naming per FrontendOutputConversion
+        let fileScopeUnit = makeUnitWithEntity(id: 100, entity: "file:test.swift", filePath: "test.swift", startLine: 1, endLine: 50)
+        setupEntity("file:test.swift", units: [fileScopeUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
 
         let service = makeService(indexQuerying: indexQuerying, dirAccess: dirAccess)
         let request = RetrievalRequest(subject: .entity(makeEntityRef("MyFunc")), intent: .explain, scope: .local)
@@ -549,12 +551,12 @@ struct ModuleScopeEvidenceTests {
         )
         setupEntity("MyClass", units: [entityUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
 
-        // File scope entity
+        // File scope entity — canonical "file:<filename>" naming per FrontendOutputConversion
         let fileScopeUnit = makeUnitWithEntity(
-            id: 10, entity: "/src/ModA/File.swift",
+            id: 10, entity: "file:File.swift",
             filePath: "/src/ModA/File.swift", startLine: 1, endLine: 50
         )
-        setupEntity("/src/ModA/File.swift", units: [fileScopeUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
+        setupEntity("file:File.swift", units: [fileScopeUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
 
         // Module entity — T1 emergence predicate
         let moduleUnit = makeUnit(
@@ -595,10 +597,10 @@ struct ModuleScopeEvidenceTests {
         setupEntity("MyClass", units: [entityUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
 
         let fileScopeUnit = makeUnitWithEntity(
-            id: 10, entity: "/src/ModA/File.swift",
+            id: 10, entity: "file:File.swift",
             filePath: "/src/ModA/File.swift"
         )
-        setupEntity("/src/ModA/File.swift", units: [fileScopeUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
+        setupEntity("file:File.swift", units: [fileScopeUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
 
         let moduleUnit = makeUnit(
             id: UnitIdentifier(rawValue: 100),
@@ -636,10 +638,10 @@ struct ModuleScopeEvidenceTests {
         setupEntity("Svc", units: [entityUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
 
         let fileScopeUnit = makeUnitWithEntity(
-            id: 10, entity: "/src/Infra/Svc.swift",
+            id: 10, entity: "file:Svc.swift",
             filePath: "/src/Infra/Svc.swift"
         )
-        setupEntity("/src/Infra/Svc.swift", units: [fileScopeUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
+        setupEntity("file:Svc.swift", units: [fileScopeUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
 
         let moduleRoleUnit = makeUnit(
             id: UnitIdentifier(rawValue: 100),
@@ -683,10 +685,10 @@ struct ModuleScopeEvidenceTests {
         setupEntity("Solo", units: [entityUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
 
         let fileScopeUnit = makeUnitWithEntity(
-            id: 10, entity: "/src/Alone/Solo.swift",
+            id: 10, entity: "file:Solo.swift",
             filePath: "/src/Alone/Solo.swift"
         )
-        setupEntity("/src/Alone/Solo.swift", units: [fileScopeUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
+        setupEntity("file:Solo.swift", units: [fileScopeUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
 
         // No module entity registered in index — module:Alone does not exist
         let service = makeService(indexQuerying: indexQuerying, dirAccess: dirAccess)
@@ -714,10 +716,10 @@ struct ModuleScopeEvidenceTests {
         setupEntity("E", units: [entityUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
 
         let fileScopeUnit = makeUnitWithEntity(
-            id: 10, entity: "/src/Mod/E.swift",
+            id: 10, entity: "file:E.swift",
             filePath: "/src/Mod/E.swift"
         )
-        setupEntity("/src/Mod/E.swift", units: [fileScopeUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
+        setupEntity("file:E.swift", units: [fileScopeUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
 
         // Module entity at T1
         let moduleUnit = makeUnit(
@@ -766,10 +768,10 @@ struct SystemScopeEvidenceTests {
 
         // File scope entity
         let fileScopeUnit = makeUnitWithEntity(
-            id: 10, entity: "/src/ModA/File.swift",
+            id: 10, entity: "file:File.swift",
             filePath: "/src/ModA/File.swift", startLine: 1, endLine: 50
         )
-        setupEntity("/src/ModA/File.swift", units: [fileScopeUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
+        setupEntity("file:File.swift", units: [fileScopeUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
 
         // Module entity
         let moduleUnit = makeUnit(
@@ -834,10 +836,10 @@ struct SystemScopeEvidenceTests {
         setupEntity("MyClass", units: [entityUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
 
         let fileScopeUnit = makeUnitWithEntity(
-            id: 10, entity: "/src/ModA/File.swift",
+            id: 10, entity: "file:File.swift",
             filePath: "/src/ModA/File.swift"
         )
-        setupEntity("/src/ModA/File.swift", units: [fileScopeUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
+        setupEntity("file:File.swift", units: [fileScopeUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
 
         // System entity
         let systemKindUnit = makeUnit(
@@ -878,10 +880,10 @@ struct SystemScopeEvidenceTests {
         setupEntity("Svc", units: [entityUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
 
         let fileScopeUnit = makeUnitWithEntity(
-            id: 10, entity: "/src/Infra/Svc.swift",
+            id: 10, entity: "file:Svc.swift",
             filePath: "/src/Infra/Svc.swift"
         )
-        setupEntity("/src/Infra/Svc.swift", units: [fileScopeUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
+        setupEntity("file:Svc.swift", units: [fileScopeUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
 
         let moduleRoleUnit = makeUnit(
             id: UnitIdentifier(rawValue: 100),
@@ -951,10 +953,10 @@ struct SystemScopeEvidenceTests {
         setupEntity("E", units: [entityUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
 
         let fileScopeUnit = makeUnitWithEntity(
-            id: 10, entity: "/src/Mod/E.swift",
+            id: 10, entity: "file:E.swift",
             filePath: "/src/Mod/E.swift"
         )
-        setupEntity("/src/Mod/E.swift", units: [fileScopeUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
+        setupEntity("file:E.swift", units: [fileScopeUnit], indexQuerying: indexQuerying, dirAccess: dirAccess)
 
         // System entity at T1
         let systemKindUnit = makeUnit(

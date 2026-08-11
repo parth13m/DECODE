@@ -62,11 +62,23 @@ struct WorkspaceResolver {
         // 2. Trivial case — only one workspace open.
         let accessible = workspaces.values.filter { $0.isFileAccessible }
         if accessible.count == 1, let only = accessible.first {
+            // For .directory workspaces, still identify which file within
+            // the directory the snippet belongs to — the coordinator needs
+            // a file path, not a directory path.
+            var resolvedFile: String?
+            if only.workspace.kind == .directory {
+                let trimmed = snippet.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.count >= Self.minimumSnippetLength {
+                    let (_, _, matchedPath) = scoreWorkspace(managed: only, snippet: trimmed)
+                    resolvedFile = matchedPath
+                }
+            }
             return WorkspaceResolution(
                 workspace: only,
                 confidence: 100,
                 method: .singleWorkspace,
-                candidates: [WorkspaceCandidateScore(workspace: only, score: 100, matchType: .singleWorkspace)]
+                candidates: [WorkspaceCandidateScore(workspace: only, score: 100, matchType: .singleWorkspace)],
+                resolvedFilePath: resolvedFile
             )
         }
 

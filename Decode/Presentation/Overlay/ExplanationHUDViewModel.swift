@@ -233,7 +233,15 @@ final class ExplanationHUDViewModel {
         let pipelineFilePath: String?
 
         /// Entity name resolved during the initial pipeline query.
+        /// Used by legacy entity-based follow-up path. `nil` for snippet-based queries.
         let pipelineEntityName: String?
+
+        /// Snippet start line for snippet-based pipeline queries.
+        /// Used by follow-up and improve when the initial query used SnippetReference.
+        let pipelineSnippetStartLine: Int?
+
+        /// Snippet end line for snippet-based pipeline queries.
+        let pipelineSnippetEndLine: Int?
 
         /// Formatted profile context string for injection into follow-up
         /// and improvement prompts. `nil` when profile is empty or below
@@ -556,21 +564,42 @@ final class ExplanationHUDViewModel {
             // Attempt pipeline follow-up when state is available.
             if let service = ctx.pipelineQueryService,
                let conversationState = ctx.pipelineConversationState,
-               let filePath = ctx.pipelineFilePath,
-               let entityName = ctx.pipelineEntityName {
+               let filePath = ctx.pipelineFilePath {
                 let capturedProfileCtx = ctx.profileContext
                 let capturedSnippet = ctx.originalCode
 
-                let result = await Task.detached {
-                    await service.queryFollowUp(
-                        filePath: filePath,
-                        entityName: entityName,
-                        question: question,
-                        conversationState: conversationState,
-                        profileContext: capturedProfileCtx,
-                        snippetText: capturedSnippet
-                    )
-                }.value
+                // Use snippet-based follow-up when line range is available,
+                // fall back to entity-based for legacy contexts.
+                let result: PipelineQueryResult
+                if let startLine = ctx.pipelineSnippetStartLine,
+                   let endLine = ctx.pipelineSnippetEndLine {
+                    result = await Task.detached {
+                        await service.queryFollowUpBySnippet(
+                            filePath: filePath,
+                            startLine: startLine,
+                            endLine: endLine,
+                            question: question,
+                            conversationState: conversationState,
+                            profileContext: capturedProfileCtx,
+                            snippetText: capturedSnippet
+                        )
+                    }.value
+                } else if let entityName = ctx.pipelineEntityName {
+                    result = await Task.detached {
+                        await service.queryFollowUp(
+                            filePath: filePath,
+                            entityName: entityName,
+                            question: question,
+                            conversationState: conversationState,
+                            profileContext: capturedProfileCtx,
+                            snippetText: capturedSnippet
+                        )
+                    }.value
+                } else {
+                    // No snippet or entity info — fall through to legacy.
+                    await askFollowUpLegacy(question: question, ctx: ctx)
+                    return
+                }
 
                 if case .success(let understanding) = result {
                     if !Task.isCancelled {
@@ -678,17 +707,36 @@ final class ExplanationHUDViewModel {
         improvementTask = Task {
             // Pipeline path: attempt when pipeline state is available.
             if let service = ctx.pipelineQueryService,
-               let filePath = ctx.pipelineFilePath,
-               let entityName = ctx.pipelineEntityName {
+               let filePath = ctx.pipelineFilePath {
                 let capturedProfileCtx = ctx.profileContext
-                let result = await Task.detached {
-                    await service.query(
-                        filePath: filePath,
-                        entityName: entityName,
-                        purpose: "improve",
-                        profileContext: capturedProfileCtx
-                    )
-                }.value
+
+                // Use snippet-based improve when line range is available,
+                // fall back to entity-based for legacy contexts.
+                let result: PipelineQueryResult
+                if let startLine = ctx.pipelineSnippetStartLine,
+                   let endLine = ctx.pipelineSnippetEndLine {
+                    result = await Task.detached {
+                        await service.queryBySnippet(
+                            filePath: filePath,
+                            startLine: startLine,
+                            endLine: endLine,
+                            purpose: "improve",
+                            profileContext: capturedProfileCtx
+                        )
+                    }.value
+                } else if let entityName = ctx.pipelineEntityName {
+                    result = await Task.detached {
+                        await service.query(
+                            filePath: filePath,
+                            entityName: entityName,
+                            purpose: "improve",
+                            profileContext: capturedProfileCtx
+                        )
+                    }.value
+                } else {
+                    await requestImprovementLegacy(originalCode: originalCode, ctx: ctx, goal: goal)
+                    return
+                }
 
                 if case .success(let understanding) = result {
                     if !Task.isCancelled {

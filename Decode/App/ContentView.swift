@@ -4,6 +4,7 @@ import SwiftUI
 private enum AppPage: Hashable {
     case home
     case notes
+    case profile
 }
 
 /// The root view of the application.
@@ -80,6 +81,7 @@ struct ContentView: View {
                 VStack(spacing: 4) {
                     sidebarItem("Home", icon: "house", page: .home)
                     sidebarItem("Notes", icon: "bookmark", page: .notes)
+                    sidebarItem("Profile", icon: "person.crop.circle", page: .profile)
                 }
                 .padding(.horizontal, 10)
 
@@ -98,6 +100,9 @@ struct ContentView: View {
                     homeContent
                 case .notes:
                     NotesView()
+                        .environment(dependencies)
+                case .profile:
+                    ProfileView()
                         .environment(dependencies)
                 }
             }

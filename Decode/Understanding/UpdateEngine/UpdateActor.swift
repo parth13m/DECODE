@@ -12,6 +12,21 @@ import StorageEngine
 import os
 import CryptoKit
 
+#if DEBUG
+/// Diagnostic logger for grounding trace — writes to file for GUI app reliability.
+private func diagLog(_ message: String) {
+    let path = "/tmp/decode_grounding_diag.log"
+    let line = "[\(ISO8601DateFormatter().string(from: Date()))] \(message)\n"
+    if let handle = FileHandle(forWritingAtPath: path) {
+        handle.seekToEndOfFile()
+        handle.write(line.data(using: .utf8)!)
+        handle.closeFile()
+    } else {
+        FileManager.default.createFile(atPath: path, contents: line.data(using: .utf8))
+    }
+}
+#endif
+
 /// The central actor of the understanding pipeline.
 ///
 /// IAG-003 §2.1: Implements `DIRReadAccess`, `DIRWriteAccess`, `DemandSignalSink`
@@ -378,8 +393,14 @@ public actor UpdateActor: DIRReadAccess, DIRWriteAccess, DemandSignalSink {
 
             if let current = currentHash, let stored = storedHash, current == stored {
                 hashFiltered += 1
+                #if DEBUG
+                diagLog("[UPDATE-DIAG] Hash-filtered (unchanged): \(event.filePath)")
+                #endif
                 continue
             }
+            #if DEBUG
+            diagLog("[UPDATE-DIAG] Processing file (hash miss): \(event.filePath) currentHash=\(currentHash != nil) storedHash=\(storedHash != nil)")
+            #endif
 
             changedFiles.append(event)
 
@@ -444,25 +465,46 @@ public actor UpdateActor: DIRReadAccess, DIRWriteAccess, DemandSignalSink {
                             allChanges.append(.admitted(newId))
                         }
 
+                        // Identify freshly admitted units — these must NOT be invalidated
+                        let newlyAdmittedIds = unitIdsAfter.subtracting(unitIdsBefore)
+
+                        #if DEBUG
+                        diagLog("[UPDATE-DIAG] processChangeSet for \((event.filePath as NSString).lastPathComponent): unitsBefore=\(unitIdsBefore.count) unitsAfter=\(unitIdsAfter.count) newlyAdmitted=\(newlyAdmittedIds.count)")
+                        #endif
+
                         switch result {
                         case .completed(let report):
                             // Stage 3: Entity-Level Comparison (DDS-007 CD-4, CD-5)
                             switch report.changeReport {
                             case .noChange:
                                 earlyTerminations += 1
+                                #if DEBUG
+                                diagLog("[UPDATE-DIAG] Frontend returned .noChange for \((event.filePath as NSString).lastPathComponent) — early termination")
+                                #endif
                             case .changed, .firstInvocation:
                                 // Stage 4: Direct Invalidation (DDS-007 R2)
+                                // Only invalidate PRIOR units — freshly admitted units
+                                // from this pipeline run must be preserved.
                                 let invalidations = invalidateChangedUnits(
                                     forFile: event.filePath,
-                                    producerId: producerId
+                                    producerId: producerId,
+                                    excluding: newlyAdmittedIds
                                 )
                                 directInvalidations += invalidations.count
                                 allChanges.append(contentsOf: invalidations)
+
+                                #if DEBUG
+                                let activeAfterInvalidation = unitStore.activeUnits().count
+                                diagLog("[UPDATE-DIAG] After invalidation for \((event.filePath as NSString).lastPathComponent): \(invalidations.count) invalidated, \(activeAfterInvalidation) active remaining, changeReport=\(String(describing: report.changeReport))")
+                                #endif
 
                             }
                         case .failed(let failure):
                             // FM-1: Frontend parse failure — retain prior units
                             logger.warning("Frontend parse failed for \(event.filePath): \(failure.diagnostic)")
+                            #if DEBUG
+                            diagLog("[UPDATE-DIAG] Frontend FAILED for \((event.filePath as NSString).lastPathComponent): \(failure.diagnostic)")
+                            #endif
                         }
                     }
                 }
@@ -760,15 +802,18 @@ public actor UpdateActor: DIRReadAccess, DIRWriteAccess, DemandSignalSink {
     /// Invalidates changed units for a specific file and producer.
     private func invalidateChangedUnits(
         forFile filePath: String,
-        producerId: ProducerIdentifier
+        producerId: ProducerIdentifier,
+        excluding freshlyAdmitted: Set<UnitIdentifier> = []
     ) -> [UnitChange] {
         var changes: [UnitChange] = []
         for unit in unitStore.activeUnits() {
+            // Skip units freshly admitted in this pipeline run — they are the
+            // NEW truth. Only invalidate PRIOR units from an earlier epoch.
+            guard !freshlyAdmitted.contains(unit.id) else { continue }
+
             if unit.provenance.producer == producerId.name,
                case .direct(let pos) = unit.grounding,
                pos.filePath == filePath {
-                // Check if the unit was not just admitted in this pipeline run
-                // (i.e., it was from a prior epoch and needs invalidation)
                 if unit.status == .active {
                     var mutableUnit = unit
                     mutableUnit.invalidate(metadata: InvalidationMetadata(

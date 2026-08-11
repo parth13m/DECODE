@@ -1,8 +1,8 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, String, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import DateTime, Enum, Integer, String, func
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -45,6 +45,11 @@ class User(Base):
     activated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
     )
+    profile_snapshot: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    profile_synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
+    profile_schema_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     def __repr__(self) -> str:
         label = self.name or self.email

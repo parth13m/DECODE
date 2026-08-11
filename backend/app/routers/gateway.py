@@ -333,3 +333,35 @@ async def record_analytics_event(
         mode=body.mode,
         metadata=body.metadata,
     )
+
+
+# ---------------------------------------------------------------------------
+# Profile Intelligence sync — client-reported derived profile snapshot
+# ---------------------------------------------------------------------------
+
+
+class ProfileSyncRequest(BaseModel):
+    """Derived UserProfile snapshot from the macOS client."""
+    profile_version: int
+    total_observation_count: int
+    profile_data: dict  # The full derived UserProfile as JSON
+
+
+@router.post("/profile", status_code=status.HTTP_204_NO_CONTENT)
+async def sync_profile(
+    body: ProfileSyncRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> None:
+    """Store a derived profile snapshot for the authenticated user.
+
+    Fire-and-forget from the client. The profile is the macOS Profile
+    Intelligence system's derived output — the backend stores it as an
+    opaque JSONB snapshot for admin inspection.
+    """
+    from datetime import datetime, timezone
+
+    user.profile_snapshot = body.profile_data
+    user.profile_schema_version = body.profile_version
+    user.profile_synced_at = datetime.now(timezone.utc)
+    db.flush()

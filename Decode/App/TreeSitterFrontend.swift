@@ -64,6 +64,20 @@ enum TreeSitterFrontend {
     ///
     /// Returns an empty array for unsupported file types (TreeSitterParser
     /// returns empty `DetailedParseResult` when no grammar matches).
+    #if DEBUG
+    private static func diagLog(_ message: String) {
+        let path = "/tmp/decode_grounding_diag.log"
+        let line = "[\(ISO8601DateFormatter().string(from: Date()))] \(message)\n"
+        if let handle = FileHandle(forWritingAtPath: path) {
+            handle.seekToEndOfFile()
+            handle.write(line.data(using: .utf8)!)
+            handle.closeFile()
+        } else {
+            FileManager.default.createFile(atPath: path, contents: line.data(using: .utf8))
+        }
+    }
+    #endif
+
     static let handler: @Sendable (
         _ filePath: String,
         _ identity: ProducerIdentity,
@@ -72,6 +86,9 @@ enum TreeSitterFrontend {
         let url = URL(fileURLWithPath: filePath)
         let data = try Data(contentsOf: url)
         guard let source = String(data: data, encoding: .utf8) else {
+            #if DEBUG
+            diagLog("[TS-FRONTEND] UTF-8 decode failed for \(url.lastPathComponent)")
+            #endif
             return []
         }
 
@@ -82,10 +99,21 @@ enum TreeSitterFrontend {
         let parser = TreeSitterParser()
         let result = parser.parseAllFacts(source: source, fileName: fileName)
 
-        return FrontendOutputConversion.convert(
+        #if DEBUG
+        diagLog("[TS-FRONTEND] \(fileName): entities=\(result.entities.count) imports=\(result.imports.count) relationships=\(result.relationships.count)")
+        #endif
+
+        let outputs = FrontendOutputConversion.convert(
             result: result,
             fileName: fileName,
-            version: version
+            version: version,
+            filePath: filePath
         )
+
+        #if DEBUG
+        diagLog("[TS-FRONTEND] \(fileName): FrontendOutput count=\(outputs.count)")
+        #endif
+
+        return outputs
     }
 }

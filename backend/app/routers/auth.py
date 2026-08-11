@@ -29,6 +29,9 @@ class ActivateResponse(BaseModel):
 class ValidateResponse(BaseModel):
     user_id: str
     status: str
+    name: str | None = None
+    email: str | None = None
+    activated_at: str | None = None
 
 
 @router.post("/activate", response_model=ActivateResponse)
@@ -74,4 +77,7 @@ def validate_token(user: User = Depends(get_current_user)) -> ValidateResponse:
     return ValidateResponse(
         user_id=user.id,
         status=user.status.value,
+        name=user.name,
+        email=user.email,
+        activated_at=user.activated_at.isoformat() if user.activated_at else None,
     )

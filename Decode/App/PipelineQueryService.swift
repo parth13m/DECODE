@@ -11,6 +11,21 @@ import ContextAssembly
 import ConsumerRuntime
 import UpdateEngine
 
+#if DEBUG
+/// Diagnostic logger that writes to a file — reliable for macOS GUI apps.
+private func diagLog(_ message: String) {
+    let path = "/tmp/decode_grounding_diag.log"
+    let line = "[\(ISO8601DateFormatter().string(from: Date()))] \(message)\n"
+    if let handle = FileHandle(forWritingAtPath: path) {
+        handle.seekToEndOfFile()
+        handle.write(line.data(using: .utf8)!)
+        handle.closeFile()
+    } else {
+        FileManager.default.createFile(atPath: path, contents: line.data(using: .utf8))
+    }
+}
+#endif
+
 /// Orchestrates a complete understanding query through the Software Intelligence Platform.
 ///
 /// Given a file path and an entity reference, this service:
@@ -152,6 +167,171 @@ final class PipelineQueryService: Sendable {
         return await query(
             filePath: filePath,
             entityName: entityName,
+            purpose: "followup",
+            questionHint: question,
+            conversationState: injectedState,
+            profileContext: profileContext,
+            snippetText: snippetText
+        )
+    }
+
+    // MARK: - Snippet-Based Queries
+
+    /// Executes a complete understanding query using a source range (SnippetReference)
+    /// instead of a named entity.
+    ///
+    /// The RetrievalRuntime resolves the snippet to concrete entity anchors via
+    /// DDS-005 PC-2: entities whose source range overlaps the snippet range,
+    /// with file-level scope fallback.
+    func queryBySnippet(
+        filePath: String,
+        startLine: Int,
+        endLine: Int,
+        purpose: String = "explain",
+        questionHint: String? = nil,
+        conversationState: ConversationState? = nil,
+        profileContext: String? = nil,
+        snippetText: String? = nil,
+        semanticContext: String? = nil
+    ) async -> PipelineQueryResult {
+        let contextPurpose = ContextPurpose(purpose)
+
+        // Step 1: Ensure file is processed through the write pipeline.
+        let changeEvent = UpdateEngine.FileChangeEvent(
+            filePath: filePath,
+            changeType: .modified
+        )
+        let changeResult = await understandingSystem.processChanges([changeEvent])
+
+        #if DEBUG
+        // === GROUNDING DIAGNOSTIC: Step 1 — processChanges result ===
+        diagLog("[GROUNDING-DIAG] Step 1: processChanges for \(filePath)")
+        diagLog("[GROUNDING-DIAG]   totalFiles=\(changeResult.totalFiles), hashFiltered=\(changeResult.hashFilteredFiles)")
+        diagLog("[GROUNDING-DIAG]   syncTickets=\(changeResult.syncRecomputationTickets), invalidations=\(changeResult.directInvalidations)+\(changeResult.cascadeInvalidations)")
+        diagLog("[GROUNDING-DIAG]   epoch: \(changeResult.epochBefore) → \(changeResult.epochAfter)")
+
+        // === GROUNDING DIAGNOSTIC: Inspect actual AtomicUnits in DIR ===
+        let diagAllUnits = await understandingSystem.updateActor.activeUnits()
+        diagLog("[GROUNDING-DIAG] Active units in DIR: \(diagAllUnits.count)")
+        let diagFileUnits = diagAllUnits.filter {
+            if case .direct(let pos) = $0.grounding {
+                return pos.filePath == filePath
+            }
+            return false
+        }
+        diagLog("[GROUNDING-DIAG] Units grounded to this file: \(diagFileUnits.count)")
+        for unit in diagFileUnits.prefix(10) {
+            let subjectStr: String
+            switch unit.subject {
+            case .entity(let e): subjectStr = "entity(\(e.qualifiedName))"
+            case .pair(let p): subjectStr = "pair(\(p.source.qualifiedName)→\(p.target.qualifiedName))"
+            }
+            if case .direct(let pos) = unit.grounding {
+                diagLog("[GROUNDING-DIAG]   unit[\(unit.id)] \(subjectStr) pred=\(unit.predicate.name) grounding=(\(pos.filePath), \(pos.startLine)-\(pos.endLine)) status=\(unit.status)")
+            }
+        }
+        // Also check for units with empty filePath (stale grounding)
+        let staleUnits = diagAllUnits.filter {
+            if case .direct(let pos) = $0.grounding {
+                return pos.filePath.isEmpty
+            }
+            return false
+        }
+        diagLog("[GROUNDING-DIAG] Units with EMPTY filePath (stale): \(staleUnits.count)")
+        #endif
+
+        // Step 2: Retrieve evidence via snippet reference.
+        let classification = QuestionClassifier.classify(
+            purpose: purpose,
+            questionHint: questionHint
+        )
+        let snippetRef = SnippetReference(
+            filePath: filePath,
+            startLine: startLine,
+            endLine: endLine
+        )
+        let retrievalRequest = RetrievalRequest(
+            subject: .snippet(snippetRef),
+            intent: classification.intent,
+            scope: classification.scope,
+            budget: 500
+        )
+        #if DEBUG
+        diagLog("[GROUNDING-DIAG] Step 2: SnippetReference filePath=\(filePath) startLine=\(startLine) endLine=\(endLine)")
+        // Resolve anchors directly to inspect
+        let diagAnchors = await understandingSystem.evidenceRetrieval.resolveAnchors(for: .snippet(snippetRef))
+        diagLog("[GROUNDING-DIAG] resolveAnchors returned \(diagAnchors.count) anchors: \(diagAnchors.map(\.qualifiedName))")
+        #endif
+
+        let evidenceSet = await understandingSystem.evidenceRetrieval.retrieve(retrievalRequest)
+
+        #if DEBUG
+        diagLog("[GROUNDING-DIAG] Step 2: evidence count=\(evidenceSet.evidence.count), metadata=\(evidenceSet.metadata)")
+        #endif
+
+        if evidenceSet.evidence.isEmpty {
+            return .noEvidence(
+                entityName: "(snippet \(startLine)-\(endLine))",
+                filePath: filePath,
+                filesProcessed: changeResult.totalFiles
+            )
+        }
+
+        // Steps 3–5: Assembly → Consumer → Result (shared with entity-based query).
+        let assemblyRequest = AssemblyRequest(
+            evidenceSet: evidenceSet,
+            purpose: contextPurpose,
+            budget: 500
+        )
+        let assemblyResult = await understandingSystem.contextAssembly.assemble(assemblyRequest)
+
+        guard case .success(let contextFrame) = assemblyResult else {
+            if case .rejected(let rejection) = assemblyResult {
+                return .assemblyRejected(reason: "\(rejection)")
+            }
+            return .assemblyRejected(reason: "unknown")
+        }
+
+        let consumerRequest = ConsumerRequest(
+            contextFrame: contextFrame,
+            outputSpecification: OutputSpecification(
+                purpose: contextPurpose,
+                outputClass: .human,
+                detailLevel: .standard,
+                profileContext: profileContext,
+                snippetText: snippetText,
+                semanticContext: semanticContext
+            ),
+            conversationState: conversationState
+        )
+        let consumerResult = await understandingSystem.consumerInvocation.invoke(consumerRequest)
+
+        switch consumerResult {
+        case .success(let understanding):
+            return .success(understanding)
+        case .failure(let failure):
+            return .consumerFailure(
+                mode: failure.mode.rawValue,
+                diagnostic: failure.diagnostic
+            )
+        }
+    }
+
+    /// Executes a snippet-based follow-up query.
+    func queryFollowUpBySnippet(
+        filePath: String,
+        startLine: Int,
+        endLine: Int,
+        question: String,
+        conversationState: ConversationState,
+        profileContext: String? = nil,
+        snippetText: String? = nil
+    ) async -> PipelineQueryResult {
+        let injectedState = injectQuestion(question, into: conversationState)
+        return await queryBySnippet(
+            filePath: filePath,
+            startLine: startLine,
+            endLine: endLine,
             purpose: "followup",
             questionHint: question,
             conversationState: injectedState,
