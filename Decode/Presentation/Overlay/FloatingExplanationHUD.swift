@@ -366,6 +366,7 @@ private struct HUDContentView: View {
     var onDismiss: () -> Void
 
     @FocusState private var isTextFieldFocused: Bool
+    @FocusState private var isFollowUpFocused: Bool
 
     init(viewModel: ExplanationHUDViewModel, onDismiss: @escaping () -> Void) {
         self.viewModel = viewModel
@@ -513,11 +514,25 @@ private struct HUDContentView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     ForEach(ExplanationTagParser.blocks(from: viewModel.explanationText)) { block in
                         switch block {
-                        case .inlineRun(_, let segments):
-                            Text(ExplanationTagParser.attributedString(from: segments))
-                                .font(.system(size: 13))
-                                .textSelection(.enabled)
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                        case .inlineRun(let id, let segments):
+                            if viewModel.displayState == .complete {
+                                SelectableTextView(
+                                    attributedString: ExplanationTagParser.attributedString(from: segments),
+                                    blockID: SelectableBlockID(source: .explanation, index: id),
+                                    activeSelectionBlockID: viewModel.activeSelectionBlockID,
+                                    onSelectionChange: { blockID, text in
+                                        viewModel.handleSelectionChange(blockID: blockID, text: text)
+                                    },
+                                    onReply: {
+                                        viewModel.activateReply()
+                                    }
+                                )
+                            } else {
+                                Text(ExplanationTagParser.attributedString(from: segments))
+                                    .font(.system(size: 13))
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
                         case .tldr(_, let content):
                             TLDRBlockView(content: content)
                         case .flow(_, let content):
@@ -588,11 +603,18 @@ private struct HUDContentView: View {
 
                     ForEach(ExplanationTagParser.blocks(from: viewModel.followUpAnswer)) { block in
                         switch block {
-                        case .inlineRun(_, let segments):
-                            Text(ExplanationTagParser.attributedString(from: segments))
-                                .font(.system(size: 13))
-                                .textSelection(.enabled)
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                        case .inlineRun(let id, let segments):
+                            SelectableTextView(
+                                attributedString: ExplanationTagParser.attributedString(from: segments),
+                                blockID: SelectableBlockID(source: .followUpAnswer, index: id),
+                                activeSelectionBlockID: viewModel.activeSelectionBlockID,
+                                onSelectionChange: { blockID, text in
+                                    viewModel.handleSelectionChange(blockID: blockID, text: text)
+                                },
+                                onReply: {
+                                    viewModel.activateReply()
+                                }
+                            )
                         case .tldr(_, let content):
                             TLDRBlockView(content: content)
                         case .flow(_, let content):
@@ -627,14 +649,43 @@ private struct HUDContentView: View {
 
             // Follow-up input
             if viewModel.canAskFollowUp || viewModel.isFollowUpLoading {
+                // Replying-to indicator when an anchored reply context is active.
+                if let selection = viewModel.anchoredResponseSelection {
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrowshape.turn.up.left.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                        Text("Replying to: \"\(selection.text.prefix(80))\(selection.text.count > 80 ? "\u{2026}" : "")\"")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                        Spacer()
+                        Button {
+                            viewModel.clearResponseSelection()
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.tertiary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.top, 2)
+                }
+
                 HStack(spacing: 8) {
-                    TextField("Ask a follow-up question...", text: $viewModel.followUpText)
+                    TextField(
+                        viewModel.anchoredResponseSelection != nil
+                            ? "Ask about this selection..."
+                            : "Ask a follow-up question...",
+                        text: $viewModel.followUpText
+                    )
                         .textFieldStyle(.plain)
                         .font(.system(size: 12))
                         .padding(.horizontal, 8)
                         .padding(.vertical, 6)
                         .background(Color(red: 0.95, green: 0.94, blue: 0.93))
                         .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .focused($isFollowUpFocused)
                         .onSubmit {
                             viewModel.askFollowUp()
                         }
@@ -655,6 +706,12 @@ private struct HUDContentView: View {
                     .disabled(!viewModel.canAskFollowUp)
                 }
                 .padding(.top, 4)
+                .onChange(of: viewModel.replyActivated) { _, activated in
+                    if activated {
+                        isFollowUpFocused = true
+                        viewModel.replyActivated = false
+                    }
+                }
             }
         }
     }

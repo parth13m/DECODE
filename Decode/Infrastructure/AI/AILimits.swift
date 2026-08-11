@@ -37,6 +37,10 @@ enum AILimits {
     /// Maximum characters for OCR output (Screenshot Mode).
     static let maxOCRTextCharacters = 10_000
 
+    /// Maximum characters for selected response text (Reply ↩ contextual follow-up).
+    /// The stored semantic selection is truncated to this limit.
+    static let maxResponseSelectionCharacters = 1_500
+
     // MARK: - Vision (Enhanced Explanation)
 
     /// Maximum tokens the vision model may generate.

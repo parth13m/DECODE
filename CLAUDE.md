@@ -251,6 +251,46 @@ Non-activating `NSPanel` on right screen edge. Capsule pills with magnification.
 
 ---
 
+## Anchored Follow-Up / Reply ↩
+
+**Status**: Complete, manually verified, production-ready. Frozen except for bug fixes or evidence-driven changes.
+
+Allows users to select a specific fragment of an AI-generated response, explicitly commit it via a "Reply ↩" button, and ask a follow-up question augmented with the selected fragment. Reuses the existing Follow-Up pipeline — no new backend, no new AI system, no persistence.
+
+**Implementation files**:
+- `Decode/Presentation/Overlay/SelectableTextView.swift` — NSTextView wrapper with Reply button, cross-block coordination.
+- `Decode/Presentation/Overlay/ExplanationHUDViewModel.swift` — State management: `responseSelection` (pending), `anchoredResponseSelection` (committed), `activeSelectionBlockID`, `replyActivated`.
+- `Decode/Presentation/Overlay/FloatingExplanationHUD.swift` — Passes `activeSelectionBlockID` to all `SelectableTextView` instances; renders replying-to indicator and placeholder from `anchoredResponseSelection`.
+- `Decode/Infrastructure/AI/AILimits.swift` — `maxResponseSelectionCharacters = 1_500`.
+- `DecodeTests/Presentation/AnchoredFollowUpTests.swift` — 27 tests covering all state transitions.
+
+**Architecture document**: `architecture/ANCHORED_FOLLOW_UP_REPLY_ARCHITECTURE.md` (30-section CTO-level document).
+
+**Three-state selection model**:
+- **Native selection**: AppKit NSTextView highlight. Visual only.
+- **Pending selection** (`responseSelection`): ViewModel record of highlighted text. Drives Reply button. Does NOT drive replying-to indicator, placeholder, or augmentation.
+- **Anchored selection** (`anchoredResponseSelection`): Committed reply context, created ONLY by clicking Reply. Drives replying-to indicator, placeholder, and `buildAugmentedQuestion()`.
+
+**Critical invariants** (do not violate):
+1. Selecting text does NOT activate Reply — only clicking Reply commits the selection.
+2. Only `anchoredResponseSelection` drives Follow-Up augmentation.
+3. Pending and anchored selections are independent and may coexist.
+4. Reply button is visible whenever a pending selection exists, regardless of existing anchored context.
+5. A new Reply replaces the previous anchored context.
+6. Only one native response selection may be visually highlighted at a time (`.onChange(of: activeSelectionBlockID)` coordination).
+7. Stale deselection callbacks cannot clear a newer selection (`suppressNextDeselection` + `activeSelectionBlockID` comparison).
+8. Selection state is transient — nothing is persisted.
+9. Existing Follow-Up pipeline is reused unchanged.
+10. No backend changes were introduced.
+
+**Bugs fixed during implementation**:
+- NSAttributedString bridging asymmetry causing spurious content resets (source `AttributedString` comparison on Coordinator).
+- Selection immediately activating reply mode (split into pending vs anchored states).
+- Multiple NSTextViews retaining visual selection (`.onChange` cross-block coordination replaced insufficient `updateNSView` approach).
+- Reply button suppressed when anchored context existed (removed `!replyAnchored` guard).
+
+---
+
 ## Improve Code Feature
 
 Post-explanation code improvement. Available in Selection and Session modes (not Screenshot).
@@ -518,6 +558,16 @@ Dashboard V2 is feature-complete. Analytics V2 API endpoints are stable. Do not 
 - Legacy dashboard at `/admin` (remains for backward compatibility).
 - Dual-write architecture (v2 `ai_requests` + legacy `request_logs` coexist).
 
+### Completed Anchored Follow-Up / Reply ↩ (Frozen)
+Anchored Follow-Up is complete and architecturally documented in `architecture/ANCHORED_FOLLOW_UP_REPLY_ARCHITECTURE.md`. Future work limited to bug fixes or explicitly approved changes. Do not modify:
+- Three-state selection model (native, pending, anchored).
+- Explicit intent requirement (selecting text ≠ replying to text).
+- Single native selection enforcement via `.onChange(of: activeSelectionBlockID)`.
+- Stale deselection protection (two-layer: `suppressNextDeselection` + `activeSelectionBlockID` comparison).
+- `buildAugmentedQuestion()` as the single augmentation point reading only `anchoredResponseSelection`.
+- Reuse of existing Follow-Up pipeline (no separate AI system or backend endpoint).
+- Transient selection state (no persistence).
+
 ### Session State Architecture
 13. **Workspace history vs session state separation** — `Workspace` (database) stores persistent history. `SessionState` (JSON file) stores transient runtime state. Do not add `isOpen` or similar state flags to the `Workspace` model. Do not conflate workspace history with application session state.
 14. **Incremental session state persistence** — `saveSessionState()` is called on every open/close/activate/pin mutation. Do not rely solely on `willTerminateNotification` for persistence — unexpected termination must not lose the current session.
@@ -595,7 +645,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
 Main branch: `main`. Build must pass before committing. Run `xcodegen generate` after adding/removing Swift files.
 
 ### Tests
-40 test files in `DecodeTests/`. Key coverage: `WorkspaceManager`, `WorkspaceResolver`, `WorkspaceResolverMultiFile`, `IndexingCoordinator`, `DirectoryWatcherService`, `NavigationState`, `ProjectExplorerTree`, `SessionState`, `SessionViewModelDirectory`, `SessionResolver`, `ExplanationTagParser`, `ExplainReasoningEngine`, `ImproveReasoningEngine`, `FollowUpReasoningEngine`, `SelectionModeCoordinator`, `SwiftSyntaxFrontend`, `TreeSitterFrontend`, `ModuleBoundaryPass`, `CrossFileResolutionPass`, `ModuleEmergentProperties`, `ModuleContextStrategy`, `ModuleObservation`, `ModuleIntelligenceValidation`, `VirtualSessionManager`.
+40+ test files in `DecodeTests/`. Key coverage: `WorkspaceManager`, `WorkspaceResolver`, `WorkspaceResolverMultiFile`, `IndexingCoordinator`, `DirectoryWatcherService`, `NavigationState`, `ProjectExplorerTree`, `SessionState`, `SessionViewModelDirectory`, `SessionResolver`, `ExplanationTagParser`, `ExplainReasoningEngine`, `ImproveReasoningEngine`, `FollowUpReasoningEngine`, `SelectionModeCoordinator`, `SwiftSyntaxFrontend`, `TreeSitterFrontend`, `ModuleBoundaryPass`, `CrossFileResolutionPass`, `ModuleEmergentProperties`, `ModuleContextStrategy`, `ModuleObservation`, `ModuleIntelligenceValidation`, `VirtualSessionManager`, `AnchoredFollowUpTests`.
 
 4 pre-existing test failures (see Known Limitations).
 
@@ -639,6 +689,9 @@ Main branch: `main`. Build must pass before committing. Run `xcodegen generate` 
 
 | Component | Status | Location |
 |-----------|--------|----------|
+| Anchored Follow-Up / Reply ↩ | Complete (uncommitted) | `SelectableTextView.swift`, `ExplanationHUDViewModel.swift`, `FloatingExplanationHUD.swift`, `AILimits.swift` |
+| Anchored Follow-Up Tests | Complete (uncommitted), 27 tests | `DecodeTests/Presentation/AnchoredFollowUpTests.swift` |
+| Anchored Follow-Up Architecture Doc | Complete (uncommitted) | `architecture/ANCHORED_FOLLOW_UP_REPLY_ARCHITECTURE.md` |
 | Billing Engine Architecture | Designed (not implemented) | Conversation output |
 | Token Economics Analysis | Complete (reference) | Conversation output |
 | Dashboard V2 (8 pages) | Complete (uncommitted) | `backend/app/static/v2/` |
@@ -651,13 +704,12 @@ Main branch: `main`. Build must pass before committing. Run `xcodegen generate` 
 ### Repository State
 
 - Branch: `main`.
-- All code builds successfully. 4 pre-existing test failures unchanged.
-- Uncommitted changes: CLAUDE.md, analytics_v2.py, app.js, components.js, design.css (Dashboard V2 from prior session).
-- No code changes were made during the 2026-08-05 session (analysis/design only).
+- All code builds successfully. 4 pre-existing test failures unchanged. CodeSign issue prevents `xcodebuild test` from CLI (pre-existing, unrelated to feature work).
+- Uncommitted changes: CLAUDE.md, project.pbxproj, ExplanationHUDViewModel.swift, FloatingExplanationHUD.swift, AILimits.swift (Anchored Follow-Up + prior sessions). New files: SelectableTextView.swift, AnchoredFollowUpTests.swift, ANCHORED_FOLLOW_UP_REPLY_ARCHITECTURE.md.
 
 ### Immediate Next Recommended Tasks
 
-1. **Commit Dashboard V2**: The uncommitted Dashboard V2 changes should be reviewed and committed.
+1. **Commit all uncommitted work**: Anchored Follow-Up feature, Dashboard V2, CLAUDE.md updates.
 2. **Implement Billing Engine Phase 1**: Add `credits` column to `request_logs`, implement `compute_credits()` in `_log_request()`, add `tier` to users table. See billing architecture in conversation for full spec.
 3. **Dashboard V2 Validation**: Browser testing, UX polish, edge case handling.
 4. **Project Intelligence M12 — Validation**: End-to-end validation of the complete Project Intelligence stack (M8–M11). See `PROJECT_INTELLIGENCE_IMPLEMENTATION_STATUS.md`.

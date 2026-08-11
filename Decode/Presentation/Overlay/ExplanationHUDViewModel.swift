@@ -18,6 +18,30 @@ enum HUDDisplayState: Sendable {
     case error
 }
 
+/// Identifies which response area a selectable block belongs to.
+/// Prevents ID collisions between explanation and follow-up answer blocks,
+/// since ExplanationTagParser assigns IDs 0,1,2... independently per call.
+enum SelectableBlockSource: Hashable, Sendable {
+    case explanation
+    case followUpAnswer
+}
+
+/// Unique identity for a selectable text block across the entire HUD.
+struct SelectableBlockID: Hashable, Sendable {
+    let source: SelectableBlockSource
+    let index: Int
+}
+
+/// The user's current text selection from an AI response.
+struct ResponseSelection: Sendable {
+    /// Which block the selection came from.
+    let blockID: SelectableBlockID
+    /// The selected text, truncated to AILimits.maxResponseSelectionCharacters.
+    let text: String
+    /// Whether the response was a follow-up answer (affects augmented question wording).
+    var isFollowUp: Bool { blockID.source == .followUpAnswer }
+}
+
 /// ViewModel for the floating explanation HUD.
 ///
 /// Manages the HUD's content state: text accumulation during streaming,
@@ -62,6 +86,81 @@ final class ExplanationHUDViewModel {
 
     /// Whether the HUD is currently receiving streamed content.
     var isStreaming: Bool { displayState == .loading || displayState == .streaming }
+
+    // MARK: - Response Selection (Reply ↩)
+
+    /// The user's current pending text selection from an AI response.
+    /// Set when the user highlights text; drives Reply button visibility.
+    /// Does NOT drive the replying-to indicator, placeholder, or augmentation.
+    private(set) var responseSelection: ResponseSelection?
+
+    /// The block ID of the most recent selection event. Used for stale-selection
+    /// protection: a deselection callback from block A must not clear a newer
+    /// selection from block B. Also used by SelectableTextView to clear native
+    /// selection in other blocks (single-selection enforcement).
+    private(set) var activeSelectionBlockID: SelectableBlockID?
+
+    /// The committed Reply context. Created ONLY when the user clicks Reply.
+    /// Drives: replying-to indicator, "Ask about this selection..." placeholder,
+    /// Follow-Up prompt augmentation, and Follow-Up focus.
+    private(set) var anchoredResponseSelection: ResponseSelection?
+
+    /// Set to true when Reply is tapped, observed by the view to transfer focus.
+    /// Reset to false after the view has consumed it.
+    var replyActivated: Bool = false
+
+    /// Called by SelectableTextView when the user's selection changes in a block.
+    ///
+    /// Stale-selection protection: if `text` is nil (deselection), only clear
+    /// the pending selection if the callback's blockID matches the active block.
+    func handleSelectionChange(blockID: SelectableBlockID, text: String?) {
+        if let text, !text.isEmpty {
+            let truncated = String(text.prefix(AILimits.maxResponseSelectionCharacters))
+            responseSelection = ResponseSelection(blockID: blockID, text: truncated)
+            activeSelectionBlockID = blockID
+            #if DEBUG
+            print("[AnchoredFollowUp] selection captured blockID=\(blockID.source):\(blockID.index) textLength=\(truncated.count)")
+            #endif
+        } else {
+            // Deselection: only clear if it's from the currently active block.
+            if activeSelectionBlockID == blockID {
+                #if DEBUG
+                print("[AnchoredFollowUp] genuine deselection from active block \(blockID.source):\(blockID.index)")
+                #endif
+                responseSelection = nil
+                activeSelectionBlockID = nil
+            } else {
+                #if DEBUG
+                print("[AnchoredFollowUp] stale deselection ignored from \(blockID.source):\(blockID.index), active=\(String(describing: activeSelectionBlockID))")
+                #endif
+            }
+        }
+    }
+
+    /// Activates the Reply flow: commits the pending selection as the anchored
+    /// reply context, clears the pending selection, and focuses the follow-up input.
+    func activateReply() {
+        guard let pending = responseSelection else { return }
+        anchoredResponseSelection = pending
+        responseSelection = nil
+        activeSelectionBlockID = nil
+        followUpText = ""
+        replyActivated = true
+        #if DEBUG
+        print("[AnchoredFollowUp] Reply activated textLength=\(pending.text.count) blockID=\(pending.blockID.source):\(pending.blockID.index)")
+        #endif
+    }
+
+    /// Clears both pending and anchored response selection state.
+    func clearResponseSelection() {
+        #if DEBUG
+        print("[AnchoredFollowUp] clearResponseSelection called, hadPending=\(responseSelection != nil) hadAnchored=\(anchoredResponseSelection != nil)")
+        #endif
+        responseSelection = nil
+        anchoredResponseSelection = nil
+        activeSelectionBlockID = nil
+        replyActivated = false
+    }
 
     // MARK: - Intent Collection State
 
@@ -116,6 +215,7 @@ final class ExplanationHUDViewModel {
         isFollowUpLoading = false
         followUpContext = nil
         resetImprovementState()
+        clearResponseSelection()
     }
 
     /// Suspend until the user submits their intent or cancels.
@@ -434,6 +534,7 @@ final class ExplanationHUDViewModel {
         isFollowUpLoading = false
         followUpContext = nil
         resetImprovementState()
+        clearResponseSelection()
     }
 
     /// Begin streaming an AI explanation into the HUD.
@@ -475,6 +576,7 @@ final class ExplanationHUDViewModel {
 
         // Reset improvement state.
         resetImprovementState()
+        clearResponseSelection()
 
         activeStreamTask = Task {
             // DIAG: HUD ViewModel streaming diagnostics
@@ -539,6 +641,20 @@ final class ExplanationHUDViewModel {
         }
     }
 
+    /// Builds the augmented question string when an anchored reply context exists.
+    private func buildAugmentedQuestion(_ question: String) -> String {
+        guard let selection = anchoredResponseSelection else {
+            return question
+        }
+        #if DEBUG
+        print("[AnchoredFollowUp] augmented question includes anchored selection selectionLength=\(selection.text.count) source=\(selection.blockID.source)")
+        #endif
+        let source = selection.isFollowUp
+            ? "your follow-up answer"
+            : "your previous response"
+        return "Regarding this specific part of \(source): \"\(selection.text)\"\n\n\(question)"
+    }
+
     /// Ask a follow-up question using the context from the original request.
     ///
     /// Attempts the pipeline path first when pipeline state is available
@@ -546,8 +662,12 @@ final class ExplanationHUDViewModel {
     /// Falls back to the legacy 3-message conversation path on pipeline
     /// failure or when pipeline state is absent.
     func askFollowUp() {
-        let question = followUpText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !question.isEmpty else { return }
+        let rawQuestion = followUpText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !rawQuestion.isEmpty else { return }
+        #if DEBUG
+        print("[AnchoredFollowUp] askFollowUp called anchoredPresent=\(anchoredResponseSelection != nil) anchoredLength=\(anchoredResponseSelection?.text.count ?? 0) questionLength=\(rawQuestion.count)")
+        #endif
+        let question = buildAugmentedQuestion(rawQuestion)
         guard let ctx = followUpContext else { return }
 
         // Check quota.
@@ -608,6 +728,7 @@ final class ExplanationHUDViewModel {
                         followUpContext?.pipelineConversationState = understanding.conversationState
                         isFollowUpLoading = false
                         followUpText = ""
+                        clearResponseSelection()
                     }
                     return
                 }
@@ -665,6 +786,7 @@ final class ExplanationHUDViewModel {
             if !Task.isCancelled {
                 isFollowUpLoading = false
                 followUpText = ""
+                clearResponseSelection()
             }
         } catch is CancellationError {
             isFollowUpLoading = false
@@ -983,6 +1105,7 @@ final class ExplanationHUDViewModel {
         followUpText = ""
         isFollowUpLoading = false
         resetImprovementState()
+        clearResponseSelection()
     }
 
     /// Dismiss the HUD and cancel any in-flight stream.
@@ -1011,5 +1134,6 @@ final class ExplanationHUDViewModel {
         noteSavedConfirmation = ""
         feedbackManager?.reset()
         resetImprovementState()
+        clearResponseSelection()
     }
 }
