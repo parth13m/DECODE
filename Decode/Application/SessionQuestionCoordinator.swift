@@ -38,6 +38,13 @@ final class SessionQuestionCoordinator {
     private let virtualSessionManager: VirtualSessionManager
     private let profileIntelligenceService: ProfileIntelligenceService?
 
+    // MARK: - Callbacks
+
+    /// Called when a Session Mode request resolves a target file within a directory workspace.
+    /// Used by AppDependencies to sync NavigationState so the Session Mode UI shows
+    /// the correct file's knowledge. Parameters: (filePath).
+    var onFileResolved: ((_ filePath: String) -> Void)?
+
     // MARK: - State
 
     private var listeningTask: Task<Void, Never>?
@@ -208,6 +215,11 @@ final class SessionQuestionCoordinator {
             effectiveEntities = managed.parsedEntities
         }
 
+        // Sync resolved file to NavigationState so the Session Mode UI shows this file.
+        if managed.workspace.kind == .directory, let resolvedPath = resolution.resolvedFilePath {
+            onFileResolved?(resolvedPath)
+        }
+
         #if DEBUG
         print("[SessionQuestion] Resolved workspace: \(effectiveFileName) (method=\(resolution.method), confidence=\(resolution.confidence), file=\(effectiveFileName))")
         #endif
@@ -276,16 +288,32 @@ final class SessionQuestionCoordinator {
         }
 
         // 10. Execute the pipeline.
+        // Look up pre-generated semantic understanding from FileIntelligence.
+        let semanticContext: String?
+        if managed.workspace.kind == .directory {
+            semanticContext = Self.formatSemanticContext(
+                managed.fileIntelligenceByFile[effectiveFilePath]?.semanticEnrichment
+            )
+        } else {
+            semanticContext = Self.formatSemanticContext(
+                managed.fileIntelligence?.semanticEnrichment
+            )
+        }
+
         let queryService = pipelineQueryService
         let hint = intentText.isEmpty ? nil : intentText
         let capturedProfileContext = profileContext
+        let capturedSnippet = snippetText
+        let capturedSemanticContext = semanticContext
         let pipelineResult = await Task.detached {
             await queryService.query(
                 filePath: effectiveFilePath,
                 entityName: entityName,
                 purpose: "explain",
                 questionHint: hint,
-                profileContext: capturedProfileContext
+                profileContext: capturedProfileContext,
+                snippetText: capturedSnippet,
+                semanticContext: capturedSemanticContext
             )
         }.value
 
@@ -390,6 +418,30 @@ final class SessionQuestionCoordinator {
         #if DEBUG
         print("[SessionQuestion] Pipeline: Understanding delivered — engine=\(understanding.metadata.engineIdentifier), completeness=\(understanding.metadata.completeness)")
         #endif
+    }
+
+    // MARK: - Semantic Context Formatting
+
+    /// Formats a `SemanticEnrichment` into a prompt-ready string for the reasoning engine.
+    /// Returns `nil` when no enrichment is available.
+    static func formatSemanticContext(_ enrichment: SemanticEnrichment?) -> String? {
+        guard let enrichment else { return nil }
+
+        var sections: [String] = []
+        sections.append("## File Understanding\n\n**Purpose:** \(enrichment.purpose)")
+
+        if let behavior = enrichment.behavior, !behavior.isEmpty {
+            sections.append("**Behavior:** \(behavior)")
+        }
+        if let safety = enrichment.safety, !safety.isEmpty {
+            sections.append("**Safety:** \(safety)")
+        }
+        if let design = enrichment.design, !design.isEmpty {
+            sections.append("**Design:** \(design)")
+        }
+
+        let result = sections.joined(separator: "\n\n")
+        return result.isEmpty ? nil : result
     }
 
     // MARK: - Virtual Session: InsightContext Construction

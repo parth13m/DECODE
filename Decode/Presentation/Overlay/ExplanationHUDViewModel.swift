@@ -559,6 +559,7 @@ final class ExplanationHUDViewModel {
                let filePath = ctx.pipelineFilePath,
                let entityName = ctx.pipelineEntityName {
                 let capturedProfileCtx = ctx.profileContext
+                let capturedSnippet = ctx.originalCode
 
                 let result = await Task.detached {
                     await service.queryFollowUp(
@@ -566,7 +567,8 @@ final class ExplanationHUDViewModel {
                         entityName: entityName,
                         question: question,
                         conversationState: conversationState,
-                        profileContext: capturedProfileCtx
+                        profileContext: capturedProfileCtx,
+                        snippetText: capturedSnippet
                     )
                 }.value
 

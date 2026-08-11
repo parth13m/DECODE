@@ -36,14 +36,24 @@ final class SessionViewModel {
         workspaceManager.activeWorkspace
     }
 
-    /// The file name of the active workspace.
+    /// The file name of the active workspace (or selected file within a directory workspace).
     var fileName: String {
-        activeWorkspace?.workspace.rootFileName ?? "No file selected"
+        if let workspace = activeWorkspace,
+           workspace.workspace.kind == .directory,
+           let activePath = navigationState.activeFilePath {
+            return (activePath as NSString).lastPathComponent
+        }
+        return activeWorkspace?.workspace.rootFileName ?? "No file selected"
     }
 
-    /// Parsed entities from the active workspace.
+    /// Parsed entities from the active workspace (or selected file within a directory workspace).
     var parsedEntities: [ParsedEntity] {
-        activeWorkspace?.parsedEntities ?? []
+        if let workspace = activeWorkspace,
+           workspace.workspace.kind == .directory,
+           let activePath = navigationState.activeFilePath {
+            return workspace.parsedEntitiesByFile[activePath] ?? []
+        }
+        return activeWorkspace?.parsedEntities ?? []
     }
 
     /// Whether the active workspace's file watcher is running.
@@ -79,9 +89,14 @@ final class SessionViewModel {
 
     // MARK: - Knowledge Inspector Accessors
 
-    /// File intelligence for the active workspace.
+    /// File intelligence for the active workspace (or selected file within a directory workspace).
     var intelligence: FileIntelligence? {
-        activeWorkspace?.fileIntelligence
+        if let workspace = activeWorkspace,
+           workspace.workspace.kind == .directory,
+           let activePath = navigationState.activeFilePath {
+            return workspace.fileIntelligenceByFile[activePath]
+        }
+        return activeWorkspace?.fileIntelligence
     }
 
     /// Semantic enrichment (nil until the first question triggers LLM enrichment).

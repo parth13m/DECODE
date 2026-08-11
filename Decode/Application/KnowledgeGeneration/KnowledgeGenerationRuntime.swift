@@ -116,6 +116,11 @@ final class KnowledgeGenerationRuntime {
     /// The artifact store for persisting results.
     private let store: KnowledgeArtifactStore
 
+    /// Callback fired after each successful artifact is persisted.
+    /// Parameters: (workspaceId, filePath, jobIdentifier, artifactData).
+    /// Used by AppDependencies to hydrate FileIntelligence with generated enrichment.
+    var onArtifactGenerated: ((_ workspaceId: UUID, _ filePath: String, _ jobIdentifier: String, _ data: Data) -> Void)?
+
     // MARK: - Init
 
     /// Creates the runtime with its dependencies.
@@ -357,6 +362,14 @@ final class KnowledgeGenerationRuntime {
         let durationMs = Int((CFAbsoluteTimeGetCurrent() - startTime) * 1000)
         recordTelemetry(item: item, durationMs: durationMs, success: true)
         updateState()
+
+        // Notify listeners that an artifact was generated.
+        onArtifactGenerated?(
+            item.input.workspaceId,
+            item.input.filePath,
+            item.jobIdentifier,
+            output.data
+        )
 
         #if DEBUG
         print("[KnowledgeRuntime] Completed \(item.jobIdentifier) for \((item.input.filePath as NSString).lastPathComponent) in \(durationMs)ms")

@@ -94,6 +94,12 @@ final class WorkspaceManager {
          _ fileIntelligences: [String: FileIntelligence]) -> Void
     )?
 
+    /// Callback to load an existing File Understanding artifact from the KnowledgeArtifactStore.
+    /// Set by AppDependencies so WorkspaceManager can hydrate FileIntelligence on creation/restore
+    /// without depending on the store directly.
+    /// Parameters: (filePath, fileHash) → SemanticEnrichment if cached.
+    var loadExistingEnrichment: ((_ filePath: String, _ fileHash: String) -> SemanticEnrichment?)?
+
     /// File extensions that receive full SwiftSyntax AST parsing.
     private static let swiftExtensions: Set<String> = ["swift"]
 
@@ -278,7 +284,7 @@ final class WorkspaceManager {
                 let result = parseFile(source: source, url: url)
                 let currentHash = sha256(source)
 
-                let intelligence = buildFileIntelligence(
+                var intelligence = buildFileIntelligence(
                     workspaceId: persisted.id,
                     fileName: persisted.rootFileName,
                     filePath: persisted.rootPath,
@@ -286,6 +292,12 @@ final class WorkspaceManager {
                     parseResult: result,
                     source: source
                 )
+
+                // Hydrate from existing KGR artifact if available.
+                if let existing = loadExistingEnrichment?(persisted.rootPath, currentHash) {
+                    intelligence.semanticEnrichment = existing
+                }
+
                 let managed = ManagedWorkspace(
                     workspace: persisted,
                     parsedEntities: result.entities,
@@ -333,14 +345,21 @@ final class WorkspaceManager {
             try await db.createWorkspace(workspace)
         }
 
-        let intelligence = buildFileIntelligence(
+        let fileHash = sha256(source)
+        var intelligence = buildFileIntelligence(
             workspaceId: workspace.id,
             fileName: workspace.rootFileName,
             filePath: workspace.rootPath,
-            fileHash: sha256(source),
+            fileHash: fileHash,
             parseResult: result,
             source: source
         )
+
+        // Hydrate from existing KGR artifact if available (e.g., after app restart).
+        if let existing = loadExistingEnrichment?(workspace.rootPath, fileHash) {
+            intelligence.semanticEnrichment = existing
+        }
+
         let managed = ManagedWorkspace(
             workspace: workspace,
             parsedEntities: result.entities,
@@ -583,7 +602,7 @@ final class WorkspaceManager {
                         workspaceForIntelligence = updated
                     }
 
-                    let intelligence = buildFileIntelligence(
+                    var intelligence = buildFileIntelligence(
                         workspaceId: workspaceForIntelligence.id,
                         fileName: workspaceForIntelligence.rootFileName,
                         filePath: workspaceForIntelligence.rootPath,
@@ -591,6 +610,12 @@ final class WorkspaceManager {
                         parseResult: result,
                         source: source
                     )
+
+                    // Hydrate from existing KGR artifact if available.
+                    if let existing = loadExistingEnrichment?(workspaceForIntelligence.rootPath, currentHash) {
+                        intelligence.semanticEnrichment = existing
+                    }
+
                     workspaces[stored.id]?.fileIntelligence = intelligence
                 } catch {
                     #if DEBUG
@@ -738,7 +763,7 @@ final class WorkspaceManager {
                 let result = self.parseFile(source: source, url: url)
                 let fileName = url.lastPathComponent
 
-                let intelligence = self.buildFileIntelligence(
+                var intelligence = self.buildFileIntelligence(
                     workspaceId: workspaceId,
                     fileName: fileName,
                     filePath: filePath,
@@ -746,6 +771,12 @@ final class WorkspaceManager {
                     parseResult: result,
                     source: source
                 )
+
+                // Hydrate from existing KGR artifact if available (e.g., after app restart).
+                if let existing = self.loadExistingEnrichment?(filePath, hash) {
+                    intelligence.semanticEnrichment = existing
+                }
+
                 intelligences[filePath] = intelligence
 
                 // Also populate parsedEntitiesByFile for workspace resolution.
@@ -782,6 +813,27 @@ final class WorkspaceManager {
         }
 
         onKnowledgeGenerationNeeded?(workspaceId, filePaths, fileHashes, intelligences)
+    }
+
+    // MARK: - Knowledge Hydration
+
+    /// Hydrate a generated SemanticEnrichment back into the corresponding FileIntelligence.
+    ///
+    /// Called by AppDependencies when the KGR completes a FileUnderstandingJob.
+    /// Updates the in-memory FileIntelligence so the Session Mode UI and reasoning
+    /// pipeline can consume the generated knowledge without a separate lookup.
+    func hydrateSemanticEnrichment(
+        workspaceId: UUID,
+        filePath: String,
+        enrichment: SemanticEnrichment
+    ) {
+        guard let managed = workspaces[workspaceId] else { return }
+
+        if managed.workspace.kind == .directory {
+            managed.fileIntelligenceByFile[filePath]?.semanticEnrichment = enrichment
+        } else if managed.workspace.rootPath == filePath {
+            managed.fileIntelligence?.semanticEnrichment = enrichment
+        }
     }
 
     // MARK: - Helpers

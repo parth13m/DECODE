@@ -32,13 +32,26 @@ public struct OutputSpecification: Sendable {
     /// Produced by ``ProfilePromptFormatter``. `nil` means no profile available.
     public let profileContext: String?
 
+    /// Optional raw selected source code snippet from the user's editor.
+    /// Included in the user prompt so the LLM can see the actual code alongside
+    /// structured DIR evidence. `nil` when no specific snippet was selected.
+    public let snippetText: String?
+
+    /// Optional pre-generated semantic understanding (behavior, safety, design)
+    /// from the Knowledge Generation Runtime. Included in the user prompt so the
+    /// reasoning engine can leverage proactively computed File Understanding.
+    /// `nil` when no semantic enrichment is available for the target file.
+    public let semanticContext: String?
+
     public init(
         purpose: ContextPurpose,
         outputClass: OutputClass = .human,
         maxLength: Int? = nil,
         detailLevel: DetailLevel = .standard,
         isFollowUp: Bool = false,
-        profileContext: String? = nil
+        profileContext: String? = nil,
+        snippetText: String? = nil,
+        semanticContext: String? = nil
     ) {
         self.purpose = purpose
         self.outputClass = outputClass
@@ -46,6 +59,8 @@ public struct OutputSpecification: Sendable {
         self.detailLevel = detailLevel
         self.isFollowUp = isFollowUp
         self.profileContext = profileContext
+        self.snippetText = snippetText
+        self.semanticContext = semanticContext
     }
 }
 

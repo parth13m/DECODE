@@ -541,6 +541,32 @@ final class AppDependencies {
             }
         }
 
+        // 2f. Wire KGR artifact hydration: when a knowledge artifact is generated,
+        //     decode it and hydrate the workspace's FileIntelligence so UI updates immediately.
+        kgRuntime.onArtifactGenerated = { [weak wsManager] workspaceId, filePath, jobIdentifier, data in
+            guard jobIdentifier == "file-understanding" else { return }
+            guard let enrichment = FileUnderstandingJob.decodeEnrichment(from: data) else { return }
+            wsManager?.hydrateSemanticEnrichment(workspaceId: workspaceId, filePath: filePath, enrichment: enrichment)
+        }
+
+        // 2g. Wire existing artifact loading: when WorkspaceManager builds FileIntelligence
+        //     for a file, check if KGR already has a cached artifact for that file hash.
+        wsManager.loadExistingEnrichment = { [weak artifactStore] filePath, fileHash in
+            guard let artifactStore else { return nil }
+            guard let entry = artifactStore.lookup(
+                jobIdentifier: "file-understanding",
+                filePath: filePath,
+                contentHash: fileHash
+            ) else { return nil }
+            return FileUnderstandingJob.decodeEnrichment(from: entry.data)
+        }
+
+        // 2h. Wire resolved file sync: when SessionQuestionCoordinator resolves a file
+        //     within a directory workspace, update NavigationState so the UI reflects it.
+        sqCoordinator.onFileResolved = { [weak self] filePath in
+            self?.sessionViewModel?.navigationState.selectFile(path: filePath)
+        }
+
         // 2d. Start understanding pipeline (IAG-004 §8.1: called from performDeferredStartup).
         // Runs async — does not block deferred startup. No @MainActor on pipeline (IAG-003 §6.3).
         // After startup, register reasoning engines (DDS-009 PC-2).

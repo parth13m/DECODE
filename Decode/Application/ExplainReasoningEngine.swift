@@ -178,6 +178,13 @@ struct ExplainReasoningEngine: ReasoningEngine, Sendable {
     ) -> String {
         var sections: [String] = []
 
+        // Include the user's selected code snippet when available.
+        // This is the user's entry point — structured evidence augments it,
+        // not replaces it.
+        if let snippet = outputSpecification.snippetText, !snippet.isEmpty {
+            sections.append("## Selected Code\n```\n\(snippet)\n```")
+        }
+
         // M11: Inject system observations first (broadest framing).
         if let systemObservations {
             sections.append(systemObservations.formatForPrompt())
@@ -211,11 +218,17 @@ struct ExplainReasoningEngine: ReasoningEngine, Sendable {
             sections.append(relSection)
         }
 
+        // Include pre-generated semantic understanding (behavior, safety, design)
+        // from the Knowledge Generation Runtime when available.
+        if let semantic = outputSpecification.semanticContext, !semantic.isEmpty {
+            sections.append(semantic)
+        }
+
         if sections.isEmpty {
             return "Explain the code based on the available evidence."
         }
 
-        return "Explain the following code structure:\n\n" + sections.joined(separator: "\n")
+        return "Explain the following code:\n\n" + sections.joined(separator: "\n")
     }
 
     // MARK: - Deterministic Fallback
