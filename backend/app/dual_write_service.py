@@ -68,27 +68,23 @@ def decompose_mode(compound_mode: str | None) -> tuple[str | None, str]:
 # Dual-write: AI requests
 # ---------------------------------------------------------------------------
 
-def log_ai_request(
+def _sync_log_ai_request(
     user_id: str,
-    *,
     success: bool,
     latency_ms: int,
-    error_type: str | None = None,
-    mode: str | None = None,
-    ai_provider: str | None = None,
-    ai_model: str | None = None,
-    context_tier: str | None = None,
-    explanation_profile: str | None = None,
-    language: str | None = None,
-    prompt_tokens: int | None = None,
-    completion_tokens: int | None = None,
-    total_tokens: int | None = None,
-    prompt_character_count: int | None = None,
+    error_type: str | None,
+    mode: str | None,
+    ai_provider: str | None,
+    ai_model: str | None,
+    context_tier: str | None,
+    explanation_profile: str | None,
+    language: str | None,
+    prompt_tokens: int | None,
+    completion_tokens: int | None,
+    total_tokens: int | None,
+    prompt_character_count: int | None,
 ) -> None:
-    """Write an AI request to both legacy and v2 tables.
-
-    Uses independent sessions so failures in one table don't affect the other.
-    """
+    """Synchronous dual-write implementation.  Runs in a thread pool."""
     from app.database import SessionLocal
 
     legacy_id: str | None = None
@@ -167,6 +163,39 @@ def log_ai_request(
         v2_db.rollback()
     finally:
         v2_db.close()
+
+
+def log_ai_request(
+    user_id: str,
+    *,
+    success: bool,
+    latency_ms: int,
+    error_type: str | None = None,
+    mode: str | None = None,
+    ai_provider: str | None = None,
+    ai_model: str | None = None,
+    context_tier: str | None = None,
+    explanation_profile: str | None = None,
+    language: str | None = None,
+    prompt_tokens: int | None = None,
+    completion_tokens: int | None = None,
+    total_tokens: int | None = None,
+    prompt_character_count: int | None = None,
+) -> None:
+    """Write an AI request to both legacy and v2 tables.
+
+    Dispatches to a thread pool so synchronous psycopg2 I/O does not
+    block the async event loop.  Fire-and-forget — callers do not await.
+    """
+    from app.database import _db_executor
+
+    _db_executor.submit(
+        _sync_log_ai_request,
+        user_id, success, latency_ms, error_type, mode,
+        ai_provider, ai_model, context_tier, explanation_profile,
+        language, prompt_tokens, completion_tokens, total_tokens,
+        prompt_character_count,
+    )
 
 
 # ---------------------------------------------------------------------------

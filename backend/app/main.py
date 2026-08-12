@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
 from app.routers import admin, analytics_v2, auth, gateway
+from app import gateway_service
 
 logger = logging.getLogger(__name__)
 _STATIC_DIR = Path(__file__).parent / "static"
@@ -48,7 +49,9 @@ def _validate_config() -> None:
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan handler for startup/shutdown hooks."""
     _validate_config()
+    gateway_service.init_http_client()
     yield
+    await gateway_service.close_http_client()
 
 
 app = FastAPI(

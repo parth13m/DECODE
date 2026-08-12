@@ -26,6 +26,42 @@ logger = logging.getLogger(__name__)
 _TIMEOUT = 120.0
 _MAX_TOKENS = 4096
 
+# ── Shared httpx client ───────────────────────────────────────────────
+# Reused across all AI requests within a worker process.  Created at app
+# startup via init_http_client() and closed at shutdown via
+# close_http_client().  Using a single client enables HTTP/2 connection
+# multiplexing and avoids per-request TLS handshake overhead.
+
+_http_client: httpx.AsyncClient | None = None
+
+
+def init_http_client() -> None:
+    """Create the shared httpx client.  Called from app lifespan startup."""
+    global _http_client
+    _http_client = httpx.AsyncClient(
+        timeout=httpx.Timeout(_TIMEOUT),
+        limits=httpx.Limits(
+            max_connections=40,
+            max_keepalive_connections=20,
+        ),
+    )
+
+
+async def close_http_client() -> None:
+    """Close the shared httpx client.  Called from app lifespan shutdown."""
+    global _http_client
+    if _http_client is not None:
+        await _http_client.aclose()
+        _http_client = None
+
+
+def _get_client() -> httpx.AsyncClient:
+    """Return the shared client, or create a fallback if not yet initialized."""
+    if _http_client is not None:
+        return _http_client
+    # Fallback for edge cases (tests, manual script usage).
+    return httpx.AsyncClient(timeout=httpx.Timeout(_TIMEOUT))
+
 # ── Default URLs for OpenAI-compatible providers ────────────────────────
 # Used when AI_API_URL is empty.  Add new providers here — one line each.
 _OPENAI_COMPAT_URLS: dict[str, str] = {
@@ -264,17 +300,17 @@ async def _http_post(url: str, *, headers: dict[str, str], payload: dict[str, An
 
     Maps provider HTTP errors to GatewayError with a classified error_type.
     """
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        try:
-            response = await client.post(url, json=payload, headers=headers)
-        except httpx.TimeoutException:
-            logger.error("AI API timeout after %.0fs", _TIMEOUT)
-            raise GatewayError("Request timed out", error_type="timeout") from None
-        except httpx.HTTPError as exc:
-            logger.error("AI API network error: %s", exc)
-            raise GatewayError(
-                "Failed to reach AI service", error_type="network_error"
-            ) from exc
+    client = _get_client()
+    try:
+        response = await client.post(url, json=payload, headers=headers)
+    except httpx.TimeoutException:
+        logger.error("AI API timeout after %.0fs", _TIMEOUT)
+        raise GatewayError("Request timed out", error_type="timeout") from None
+    except httpx.HTTPError as exc:
+        logger.error("AI API network error: %s", exc)
+        raise GatewayError(
+            "Failed to reach AI service", error_type="network_error"
+        ) from exc
 
     if response.status_code != 200:
         error_type = "api_error"
@@ -658,76 +694,76 @@ async def _stream_anthropic(
     _diag_chunk_count = 0
     _diag_total_chunk_bytes = 0
 
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        try:
-            async with client.stream("POST", api_url, json=payload, headers=headers) as response:
-                if response.status_code != 200:
-                    # Read the error body for logging before raising.
-                    await response.aread()
-                    error_type = "api_error"
-                    if response.status_code == 401:
-                        error_type = "auth_error"
-                    elif response.status_code == 429:
-                        error_type = "rate_limit"
-                    elif response.status_code >= 500:
-                        error_type = "server_error"
-                    logger.error(
-                        "AI API streaming error: status=%d type=%s body=%s",
-                        response.status_code, error_type, response.text[:500],
-                    )
-                    raise GatewayError("AI service returned an error", error_type=error_type)
+    client = _get_client()
+    try:
+        async with client.stream("POST", api_url, json=payload, headers=headers) as response:
+            if response.status_code != 200:
+                # Read the error body for logging before raising.
+                await response.aread()
+                error_type = "api_error"
+                if response.status_code == 401:
+                    error_type = "auth_error"
+                elif response.status_code == 429:
+                    error_type = "rate_limit"
+                elif response.status_code >= 500:
+                    error_type = "server_error"
+                logger.error(
+                    "AI API streaming error: status=%d type=%s body=%s",
+                    response.status_code, error_type, response.text[:500],
+                )
+                raise GatewayError("AI service returned an error", error_type=error_type)
 
-                # Parse Anthropic SSE events line by line.
-                event_type = ""
-                async for raw_line in response.aiter_lines():
-                    line = raw_line.strip()
+            # Parse Anthropic SSE events line by line.
+            event_type = ""
+            async for raw_line in response.aiter_lines():
+                line = raw_line.strip()
 
-                    if line.startswith("event: "):
-                        event_type = line[7:]
-                        continue
+                if line.startswith("event: "):
+                    event_type = line[7:]
+                    continue
 
-                    if not line.startswith("data: "):
-                        continue
+                if not line.startswith("data: "):
+                    continue
 
-                    data = json.loads(line[6:])
+                data = json.loads(line[6:])
 
-                    if event_type == "message_start":
-                        # Extract input token count from the initial message.
-                        usage = data.get("message", {}).get("usage", {})
-                        token_usage["prompt_tokens"] = usage.get("input_tokens")
+                if event_type == "message_start":
+                    # Extract input token count from the initial message.
+                    usage = data.get("message", {}).get("usage", {})
+                    token_usage["prompt_tokens"] = usage.get("input_tokens")
 
-                    elif event_type == "content_block_delta":
-                        delta = data.get("delta", {})
-                        text = delta.get("text", "")
-                        if text:
-                            # ── DIAG: track Anthropic chunks ──
-                            _diag_chunk_count += 1
-                            _diag_total_chunk_bytes += len(text)
-                            if _diag_first_chunk_time is None:
-                                _diag_first_chunk_time = time.monotonic()
-                                logger.info(
-                                    "DIAG_ANTHROPIC first_chunk_ms=%.0f",
-                                    (_diag_first_chunk_time - _diag_request_start) * 1000,
-                                )
-                            yield ("token", text)
+                elif event_type == "content_block_delta":
+                    delta = data.get("delta", {})
+                    text = delta.get("text", "")
+                    if text:
+                        # ── DIAG: track Anthropic chunks ──
+                        _diag_chunk_count += 1
+                        _diag_total_chunk_bytes += len(text)
+                        if _diag_first_chunk_time is None:
+                            _diag_first_chunk_time = time.monotonic()
+                            logger.info(
+                                "DIAG_ANTHROPIC first_chunk_ms=%.0f",
+                                (_diag_first_chunk_time - _diag_request_start) * 1000,
+                            )
+                        yield ("token", text)
 
-                    elif event_type == "message_delta":
-                        # Final event — contains output token count.
-                        usage = data.get("usage", {})
-                        token_usage["completion_tokens"] = usage.get("output_tokens")
-                        if token_usage["prompt_tokens"] is not None and token_usage["completion_tokens"] is not None:
-                            token_usage["total_tokens"] = token_usage["prompt_tokens"] + token_usage["completion_tokens"]
+                elif event_type == "message_delta":
+                    # Final event — contains output token count.
+                    usage = data.get("usage", {})
+                    token_usage["completion_tokens"] = usage.get("output_tokens")
+                    if token_usage["prompt_tokens"] is not None and token_usage["completion_tokens"] is not None:
+                        token_usage["total_tokens"] = token_usage["prompt_tokens"] + token_usage["completion_tokens"]
 
-                    elif event_type == "error":
-                        error_msg = data.get("error", {}).get("message", "Unknown streaming error")
-                        raise GatewayError(error_msg, error_type="stream_error")
+                elif event_type == "error":
+                    error_msg = data.get("error", {}).get("message", "Unknown streaming error")
+                    raise GatewayError(error_msg, error_type="stream_error")
 
-        except httpx.TimeoutException:
-            logger.error("AI API streaming timeout after %.0fs", _TIMEOUT)
-            raise GatewayError("Request timed out", error_type="timeout") from None
-        except httpx.HTTPError as exc:
-            logger.error("AI API streaming network error: %s", exc)
-            raise GatewayError("Failed to reach AI service", error_type="network_error") from exc
+    except httpx.TimeoutException:
+        logger.error("AI API streaming timeout after %.0fs", _TIMEOUT)
+        raise GatewayError("Request timed out", error_type="timeout") from None
+    except httpx.HTTPError as exc:
+        logger.error("AI API streaming network error: %s", exc)
+        raise GatewayError("Failed to reach AI service", error_type="network_error") from exc
 
     # ── DIAG: summary ──
     _diag_elapsed = (time.monotonic() - _diag_request_start) * 1000
