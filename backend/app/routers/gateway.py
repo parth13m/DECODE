@@ -53,7 +53,7 @@ async def chat(
 
     try:
         content, latency_ms, token_usage, ai_provider, ai_model = await call_llm(
-            messages, system_prompt=body.system_prompt,
+            messages, system_prompt=body.system_prompt, mode=body.mode,
         )
     except GatewayError as exc:
         latency_ms = int((time.monotonic() - start) * 1000)
@@ -121,7 +121,7 @@ async def chat_stream(
         _diag_sse_count = 0
 
         try:
-            async for event_type, data in stream_llm(messages, system_prompt=body.system_prompt):
+            async for event_type, data in stream_llm(messages, system_prompt=body.system_prompt, mode=body.mode):
                 if event_type == "meta":
                     # Capture resolved provider/model for logging.
                     ai_provider = data.get("_resolved_provider", ai_provider)

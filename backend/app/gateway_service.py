@@ -326,11 +326,45 @@ def _resolve_adapter(adapter_name: str):
     )
 
 
+# ── Mode-based provider routing ────────────────────────────────────────
+
+# Modes that should be routed to Groq (background/knowledge work) when
+# Groq credentials are configured.  All other modes use the default
+# AI_ADAPTER (typically Anthropic for premium reasoning).
+_GROQ_MODES = frozenset({"enrichment", "compression"})
+
+
+def _resolve_for_mode(mode: str | None):
+    """Resolve provider config for the given request mode.
+
+    Returns (api_key, model, adapter_name, adapter_fn, api_url).
+
+    Background modes (enrichment, compression) are routed to Groq when
+    GROQ_API_KEY is available; otherwise they fall back to the default
+    adapter.
+    """
+    if mode in _GROQ_MODES:
+        groq_key = settings.resolve_groq_key()
+        if groq_key:
+            groq_model = settings.resolve_groq_model()
+            adapter_name, adapter_fn = _resolve_adapter("groq")
+            api_url = _resolve_api_url(adapter_name, groq_model)
+            return groq_key, groq_model, adapter_name, adapter_fn, api_url
+
+    # Default path: use global AI_ADAPTER.
+    api_key = _resolve_api_key()
+    model = _resolve_model()
+    adapter_name, adapter_fn = _resolve_adapter(settings.AI_ADAPTER)
+    api_url = _resolve_api_url(adapter_name, model)
+    return api_key, model, adapter_name, adapter_fn, api_url
+
+
 # ── Public interface ───────────────────────────────────────────────────
 
 async def call_llm(
     messages: list[dict[str, str]],
     system_prompt: str | None = None,
+    mode: str | None = None,
 ) -> tuple[str, int, dict[str, int | None], str, str]:
     """Call the configured AI provider.
 
@@ -340,22 +374,23 @@ async def call_llm(
     ``token_usage`` contains provider-reported token counts with normalized keys:
     ``prompt_tokens``, ``completion_tokens``, ``total_tokens``.
     Values are ``None`` when the provider does not report them.
+
+    When *mode* is ``"enrichment"`` or ``"compression"`` and Groq is
+    configured, the request is routed to Groq regardless of AI_ADAPTER.
     """
-    api_key = _resolve_api_key()
-    model = _resolve_model()
-    adapter_name, adapter_fn = _resolve_adapter(settings.AI_ADAPTER)
-    api_url = _resolve_api_url(adapter_name, model)
+    api_key, model, adapter_name, adapter_fn, api_url = _resolve_for_mode(mode)
 
     total_chars = sum(len(m["content"]) for m in messages)
     if system_prompt:
         total_chars += len(system_prompt)
     logger.info(
-        "AI request: adapter=%s model=%s url=%s messages=%d total_chars=%d",
-        settings.AI_ADAPTER,
+        "AI request: adapter=%s model=%s url=%s messages=%d total_chars=%d mode=%s",
+        adapter_name,
         model,
         api_url.split("?")[0],  # strip API key from Gemini URLs in logs
         len(messages),
         total_chars,
+        mode,
     )
 
     start = time.monotonic()
@@ -717,6 +752,7 @@ _STREAM_ADAPTERS: dict[str, Any] = {
 async def stream_llm(
     messages: list[dict[str, str]],
     system_prompt: str | None = None,
+    mode: str | None = None,
 ) -> AsyncGenerator[tuple[str, Any], None]:
     """Stream tokens from the configured AI provider.
 
@@ -736,10 +772,7 @@ async def stream_llm(
 
     Raises GatewayError on failure (before or during streaming).
     """
-    api_key = _resolve_api_key()
-    model = _resolve_model()
-    adapter_name, _ = _resolve_adapter(settings.AI_ADAPTER)
-    api_url = _resolve_api_url(adapter_name, model)
+    api_key, model, adapter_name, _, api_url = _resolve_for_mode(mode)
 
     total_chars = sum(len(m["content"]) for m in messages)
     if system_prompt:
@@ -766,7 +799,7 @@ async def stream_llm(
             yield (event_type, data)
     else:
         # Fallback: non-streaming adapter — yield complete response as one token.
-        content, _latency_ms, token_usage, _, _ = await call_llm(messages, system_prompt)
+        content, _latency_ms, token_usage, _, _ = await call_llm(messages, system_prompt, mode=mode)
         yield ("token", content)
         token_usage["_resolved_provider"] = adapter_name
         token_usage["_resolved_model"] = model

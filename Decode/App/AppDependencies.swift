@@ -279,6 +279,8 @@ final class AppDependencies {
         rebuildAIProvider()
 
         // 1a. Wire AI provider into virtual session manager for compression.
+        // Routes through the backend gateway; the gateway uses the mode
+        // ("compression") to select the appropriate provider server-side.
         virtualSessionManager.aiProvider = { [weak self] in self?.aiProvider }
 
         // 1b. Create shared usage tracker.
@@ -313,8 +315,10 @@ final class AppDependencies {
         artifactStore.loadFromDisk()
         self.knowledgeArtifactStore = artifactStore
 
-        // Primary executor: routes through the Decode Gateway → Claude.
-        let primaryExecutor: CapabilityExecutor = { [weak self] userContent, systemPrompt, capability, mode in
+        // All KGR jobs route through the Decode Gateway. The backend uses
+        // the mode (e.g. "enrichment") to select the appropriate provider
+        // (Groq for background work, Anthropic for premium reasoning).
+        let gatewayExecutor: CapabilityExecutor = { [weak self] userContent, systemPrompt, capability, mode in
             guard let provider = await MainActor.run(body: { self?.aiProvider }) else {
                 throw KnowledgeGenerationError.noProvider
             }
@@ -325,29 +329,7 @@ final class AppDependencies {
             )
         }
 
-        // Build the capability resolver: routed if Groq is available, uniform otherwise.
-        let capabilityResolver: KnowledgeCapabilityResolver
-        if groqProvider.isAvailable {
-            // Knowledge executor: routes directly to Groq for background work.
-            let knowledgeExecutor: CapabilityExecutor = { userContent, systemPrompt, capability, mode in
-                return try await groqProvider.generateCompletion(
-                    userContent: userContent,
-                    systemPrompt: systemPrompt,
-                    mode: mode
-                )
-            }
-
-            capabilityResolver = KnowledgeCapabilityResolver.routed(
-                routes: [
-                    .fileSummarization: knowledgeExecutor,
-                    .moduleSummarization: knowledgeExecutor,
-                    .architectureSummarization: knowledgeExecutor,
-                ],
-                fallback: primaryExecutor
-            )
-        } else {
-            capabilityResolver = KnowledgeCapabilityResolver.uniform(executor: primaryExecutor)
-        }
+        let capabilityResolver = KnowledgeCapabilityResolver.uniform(executor: gatewayExecutor)
 
         let planner = KnowledgePlanner(resolver: capabilityResolver)
         self.knowledgePlanner = planner
@@ -492,6 +474,8 @@ final class AppDependencies {
         self.floatingLauncher = launcher
         launcher.show()
 
+        // Semantic enrichment routes through the backend gateway; the gateway
+        // uses the mode ("enrichment") to select the appropriate provider.
         let enrichment = SemanticEnrichmentService(
             aiProvider: { [weak self] in self?.aiProvider }
         )
