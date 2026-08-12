@@ -348,7 +348,7 @@ def _resolve_for_mode(mode: str | None):
         if groq_key:
             groq_model = settings.resolve_groq_model()
             adapter_name, adapter_fn = _resolve_adapter("groq")
-            api_url = _resolve_api_url(adapter_name, groq_model)
+            api_url = _OPENAI_COMPAT_URLS["groq"]
             return groq_key, groq_model, adapter_name, adapter_fn, api_url
 
     # Default path: use global AI_ADAPTER.
