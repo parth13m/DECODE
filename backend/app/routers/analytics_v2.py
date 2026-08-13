@@ -370,6 +370,105 @@ def get_user_detail(
         AIRequest.user_id == user_id
     ).order_by(AIRequest.created_at.desc()).limit(recent_limit).all()
 
+    # ── Per-mode detailed analytics ──
+    # Group by (origin_mode, request_type) to get every distinct AI mode.
+    # Uses a single aggregation query for efficiency.
+    mode_detail_rows = db.query(
+        sa_func.coalesce(AIRequest.origin_mode, "_none_").label("origin_mode"),
+        AIRequest.request_type.label("request_type"),
+        sa_func.count().label("total"),
+        sa_func.count().filter(AIRequest.success.is_(True)).label("successful"),
+        sa_func.count().filter(AIRequest.success.is_(False)).label("failed"),
+        sa_func.avg(AIRequest.latency_ms).filter(
+            AIRequest.success.is_(True)
+        ).label("avg_latency"),
+        sa_func.sum(AIRequest.prompt_tokens).label("prompt_tokens"),
+        sa_func.sum(AIRequest.completion_tokens).label("completion_tokens"),
+        sa_func.sum(AIRequest.total_tokens).label("total_tokens"),
+        sa_func.sum(AIRequest.estimated_cost_usd).label("cost"),
+        sa_func.max(AIRequest.created_at).label("last_used"),
+    ).filter(*filters).group_by("origin_mode", "request_type").order_by(
+        sa_func.count().desc()
+    ).all()
+
+    # Resolve dominant provider/model per (origin_mode, request_type).
+    # Uses a separate query to avoid complicating the main aggregation.
+    provider_rows = db.query(
+        sa_func.coalesce(AIRequest.origin_mode, "_none_").label("origin_mode"),
+        AIRequest.request_type.label("request_type"),
+        AIRequest.ai_provider.label("provider"),
+        AIRequest.ai_model.label("model"),
+        sa_func.count().label("cnt"),
+    ).filter(*filters).group_by(
+        "origin_mode", "request_type", "provider", "model"
+    ).order_by(sa_func.count().desc()).all()
+
+    # Build a map: (origin_mode, request_type) → (provider, model) of most frequent
+    provider_map: dict[tuple[str, str], tuple[str, str]] = {}
+    for pr in provider_rows:
+        key = (pr.origin_mode, pr.request_type)
+        if key not in provider_map:
+            provider_map[key] = (pr.provider, pr.model)
+
+    # p95 latency per mode — use percentile_cont grouped by mode.
+    # PostgreSQL supports this via within_group.
+    p95_rows = db.query(
+        sa_func.coalesce(AIRequest.origin_mode, "_none_").label("origin_mode"),
+        AIRequest.request_type.label("request_type"),
+        sa_func.percentile_cont(0.95).within_group(
+            AIRequest.latency_ms
+        ).label("p95"),
+    ).filter(*filters, AIRequest.success.is_(True)).group_by(
+        "origin_mode", "request_type"
+    ).all()
+
+    p95_map: dict[tuple[str, str], float] = {
+        (r.origin_mode, r.request_type): r.p95
+        for r in p95_rows
+    }
+
+    # Human-readable display name for each (origin_mode, request_type) combo
+    _DISPLAY_NAMES = {
+        ("selection", "explain"): "Selection Explain",
+        ("screenshot", "explain"): "Screenshot Explain",
+        ("session", "explain"): "Session Explain",
+        ("selection", "followup"): "Selection Follow-Up",
+        ("screenshot", "followup"): "Screenshot Follow-Up",
+        ("session", "followup"): "Session Follow-Up",
+        ("selection", "improve"): "Selection Improve",
+        ("screenshot", "improve"): "Screenshot Improve",
+        ("session", "improve"): "Session Improve",
+        ("_none_", "vision"): "Vision",
+        ("_none_", "enrichment"): "Semantic Enrichment",
+        ("_none_", "enrichment_kgr"): "File Understanding (KGR)",
+        ("_none_", "compression"): "VS Memory Compression",
+    }
+
+    mode_detail = []
+    for r in mode_detail_rows:
+        key = (r.origin_mode, r.request_type)
+        prov, model = provider_map.get(key, (None, None))
+        om = None if r.origin_mode == "_none_" else r.origin_mode
+        display = _DISPLAY_NAMES.get(key, f"{om or ''} {r.request_type}".strip().title())
+        mode_detail.append({
+            "display_name": display,
+            "origin_mode": om,
+            "request_type": r.request_type,
+            "total": r.total,
+            "successful": r.successful,
+            "failed": r.failed,
+            "success_rate": round(r.successful / r.total * 100, 1) if r.total else 0,
+            "avg_latency_ms": round(r.avg_latency) if r.avg_latency else 0,
+            "p95_latency_ms": round(p95_map.get(key, 0)),
+            "prompt_tokens": r.prompt_tokens or 0,
+            "completion_tokens": r.completion_tokens or 0,
+            "total_tokens": r.total_tokens or 0,
+            "estimated_cost_usd": round(r.cost, 4) if r.cost else 0,
+            "provider": prov,
+            "model": model,
+            "last_used": str(r.last_used) if r.last_used else None,
+        })
+
     return {
         "user": {
             "id": str(user.id),
@@ -384,6 +483,7 @@ def get_user_detail(
         "success_rate": round(successful / total * 100, 1) if total else 0,
         "by_mode": [{"mode": r.mode, "count": r.count} for r in mode_rows],
         "by_request_type": [{"request_type": r.type, "count": r.count} for r in type_rows],
+        "mode_detail": mode_detail,
         "daily_trend": [
             {"date": str(r.day), "requests": r.requests}
             for r in daily
@@ -1102,10 +1202,14 @@ def get_token_breakdown(
               AIRequest.request_type == "improve"), "session_improve"),
         (and_(AIRequest.origin_mode == "selection",
               AIRequest.request_type == "followup"), "selection_followup"),
+        (and_(AIRequest.origin_mode == "screenshot",
+              AIRequest.request_type == "followup"), "screenshot_followup"),
         (AIRequest.origin_mode == "selection", "selection"),
         (AIRequest.origin_mode == "session", "session"),
         (AIRequest.origin_mode == "screenshot", "screenshot"),
         (AIRequest.request_type == "enrichment", "enrichment"),
+        (AIRequest.request_type == "enrichment_kgr", "enrichment_kgr"),
+        (AIRequest.request_type == "compression", "compression"),
         else_="other",
     )
 

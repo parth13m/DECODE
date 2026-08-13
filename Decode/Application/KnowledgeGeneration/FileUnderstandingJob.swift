@@ -85,7 +85,7 @@ struct FileUnderstandingJob: KnowledgeJobDescriptor, Sendable {
             userMessage,
             systemPrompt,
             .fileSummarization,
-            "enrichment"
+            "enrichment_kgr"
         )
 
         let trimmed = response.trimmingCharacters(in: .whitespacesAndNewlines)

@@ -367,7 +367,7 @@ def _resolve_adapter(adapter_name: str):
 # Modes that should be routed to Groq (background/knowledge work) when
 # Groq credentials are configured.  All other modes use the default
 # AI_ADAPTER (typically Anthropic for premium reasoning).
-_GROQ_MODES = frozenset({"enrichment", "compression"})
+_GROQ_MODES = frozenset({"enrichment", "enrichment_kgr", "compression"})
 
 
 def _resolve_for_mode(mode: str | None):

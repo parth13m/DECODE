@@ -1651,6 +1651,7 @@ App.pages.users = {
       const u = detail.user || {};
       const recentReqs = detail.recent_requests || [];
       const dailyTrend = detail.daily_trend || [];
+      const modeDetail = detail.mode_detail || [];
 
       D.drillDown.open(`${u.name || u.email || 'User'}`, `
         ${D.statRow([
@@ -1664,10 +1665,45 @@ App.pages.users = {
           <div style="height:120px"><canvas id="user-drill-trend" style="width:100%;height:120px"></canvas></div>
         </div>
 
-        ${detail.by_mode?.length ? `
+        ${modeDetail.length ? `
           <div class="d-mt-6">
-            ${D.sectionHeader('Mode Usage')}
-            ${D.horizontalBars(detail.by_mode.map(m => ({ label: m.mode, value: m.count, color: '#e87830' })))}
+            ${D.sectionHeader('AI Usage by Mode')}
+            <div style="overflow-x:auto">
+            ${D.table({
+              headers: [
+                'Mode',
+                { label: 'Calls', align: 'right' },
+                { label: 'OK', align: 'right' },
+                { label: 'Fail', align: 'right' },
+                { label: 'Success', align: 'right' },
+                { label: 'Avg Latency', align: 'right' },
+                { label: 'P95', align: 'right' },
+                { label: 'In Tokens', align: 'right' },
+                { label: 'Out Tokens', align: 'right' },
+                { label: 'Cost', align: 'right' },
+                'Provider',
+                'Model',
+                'Last Used',
+              ],
+              rows: modeDetail.map(m => ({
+                cells: [
+                  `<strong>${D.fmt.escapeHtml(m.display_name)}</strong>`,
+                  D.fmt.num(m.total),
+                  D.fmt.num(m.successful),
+                  m.failed > 0 ? D.badge(String(m.failed), 'danger') : '0',
+                  D.badge(D.fmt.pct(m.success_rate), m.success_rate >= 95 ? 'success' : m.success_rate >= 80 ? 'warning' : 'danger'),
+                  D.fmt.latency(m.avg_latency_ms),
+                  D.fmt.latency(m.p95_latency_ms),
+                  D.fmt.num(m.prompt_tokens),
+                  D.fmt.num(m.completion_tokens),
+                  D.fmt.usd(m.estimated_cost_usd),
+                  m.provider ? D.badge(m.provider, m.provider === 'groq' ? 'info' : 'neutral') : '—',
+                  m.model ? `<span style="font-size:11px;opacity:0.8">${D.fmt.escapeHtml(m.model)}</span>` : '—',
+                  m.last_used ? D.fmt.timeAgo(m.last_used) : '—',
+                ],
+              })),
+            })}
+            </div>
           </div>
         ` : ''}
 
@@ -1675,12 +1711,14 @@ App.pages.users = {
           <div class="d-mt-6">
             ${D.sectionHeader('Recent Requests')}
             ${D.table({
-              headers: ['Type', 'Status', { label: 'Latency', align: 'right' }, 'Time'],
+              headers: ['Type', 'Provider', 'Status', { label: 'Latency', align: 'right' }, { label: 'Cost', align: 'right' }, 'Time'],
               rows: recentReqs.slice(0, 15).map(r => ({
                 cells: [
                   r.request_type,
+                  r.ai_provider ? D.badge(r.ai_provider, r.ai_provider === 'groq' ? 'info' : 'neutral') : '—',
                   r.success ? D.badge('OK', 'success') : D.badge(r.error_type || 'FAIL', 'danger'),
                   D.fmt.latency(r.latency_ms),
+                  D.fmt.usd(r.estimated_cost_usd),
                   D.fmt.timeAgo(r.created_at),
                 ],
               })),

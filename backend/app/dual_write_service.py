@@ -56,9 +56,17 @@ def decompose_mode(compound_mode: str | None) -> tuple[str | None, str]:
     if compound_mode == "vision":
         return (None, "vision")
 
-    # Enrichment background requests
+    # Enrichment — reactive (on-demand semantic enrichment)
     if compound_mode == "enrichment":
         return (None, "enrichment")
+
+    # Enrichment KGR — proactive (File Understanding / Knowledge Generation)
+    if compound_mode == "enrichment_kgr":
+        return (None, "enrichment_kgr")
+
+    # Virtual Session memory compression
+    if compound_mode == "compression":
+        return (None, "compression")
 
     # Unknown — preserve the raw value as origin_mode
     return (compound_mode, "unknown")
