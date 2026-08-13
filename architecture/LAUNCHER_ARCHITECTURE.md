@@ -1,9 +1,10 @@
 # Decode Launcher Architecture
 
-**Status**: Architecture Specification (Proposed)
+**Status**: ⚠️ SUPERSEDED — This document predates the orbital redesign (2026-08-12) and History integration. The canonical architecture document is now [`DECODE_LAUNCHER_ARCHITECTURE_AND_IMPLEMENTATION.md`](../DECODE_LAUNCHER_ARCHITECTURE_AND_IMPLEMENTATION.md) in the repository root. This file is retained for historical reference only.
+
 **Date**: 2026-08-11
 **Author**: Architecture specification derived from codebase inspection
-**Scope**: Launcher feature — persistent UI surface for workspace content intake
+**Scope**: Launcher feature — persistent UI surface for workspace content intake (pre-orbital layout)
 
 ---
 

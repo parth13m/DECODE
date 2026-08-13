@@ -24,6 +24,10 @@ The next engineering epic is **Project Intelligence** — understanding the whol
 
 **Screenshot Mode Investigation** — product validation concluded that Screenshot Mode (OCR-based) does not currently provide sufficient explanation improvement to justify its latency and complexity. The feature is researched, validated, and closed. No further engineering effort should be invested unless a future product direction introduces fundamentally different use cases (e.g., debugger state capture, compiler diagnostics, runtime UI inspection).
 
+**History** — local explanation history — is **complete** and production-ready. Persists the 10 most recent successful explanation requests with their follow-up conversations in a local JSON file. Integrated with the Launcher (third action button), the Explanation HUD (recording callbacks), and the Anchored Follow-Up system (Reply ↩ within historical explanations). Cleared on logout. Zero ICU cost to open. Architecture: `DECODE_LAUNCHER_ARCHITECTURE_AND_IMPLEMENTATION.md` (§8 History Integration).
+
+**Launcher** — persistent floating interaction surface — has been **redesigned** with orbital geometry. The Decode button is the visual center; Folder, File, and History are positioned on a circular arc around it using trigonometric orbital positioning. A dashed ring rotates continuously around the Decode button. Architecture: `DECODE_LAUNCHER_ARCHITECTURE_AND_IMPLEMENTATION.md`.
+
 The architecture is fully specified across three document layers (DAS → DDS → Feature Architecture). All specifications are frozen. Implementation follows these documents exactly. Architecture changes require an RFC (see `architecture/README.md` § Architectural Modification Process).
 
 ### Completed Platform
@@ -302,6 +306,36 @@ Post-explanation code improvement. Available in Selection and Session modes (not
 
 ---
 
+## History
+
+Local explanation history. Stores the 10 most recent successful explanation requests with their follow-up conversations. Local-only — no backend, no AI cost to open.
+
+- **HistoryRequest / HistoryFollowUp**: Domain models (`Codable`, `Sendable`, value types). `HistoryRequest` contains mode, original code, explanation, optional metadata (sourceAppName, fileName, language, explanationProfile), and an ordered list of `HistoryFollowUp` (question + answer pairs).
+- **HistoryPersistence**: Atomic JSON file writes to `~/Library/Application Support/Decode/history.json`. ISO 8601 date encoding. Graceful handling of corrupt/missing files.
+- **HistoryManager**: `@MainActor @Observable`. In-memory array loaded once at startup (`restore()`), persisted on every mutation. Newest first by original creation time. Follow-ups do NOT reorder their parent request. Maximum 10 items; oldest evicted on overflow. Cleared on logout (`clear()`).
+- **Recording**: `ExplanationHUDViewModel` has `onExplanationRecorded` and `onFollowUpRecorded` callbacks, wired by `AppDependencies.wireHistoryRecording()`. Only successful completions are recorded. `activeHistoryRequestId` (on AppDependencies) correlates follow-ups to their parent request.
+- **FloatingHistoryHUD**: Non-activating `NSPanel` (520×600, resizable). Scrollable list of history items. Original code collapsed by default. Explanation rendered via `ExplanationTagParser`. Follow-up Q&A display. Follow-up input with streaming AI responses. Full Anchored Follow-Up / Reply ↩ integration with block ID scheme (`itemIndex * 1000` base offset). Analytics: `history_opened` on show, `history_followup` on successful follow-up.
+- **Launcher integration**: History is the third action button on the Launcher's orbital arc. `onHistory` callback toggles `FloatingHistoryHUD`.
+- **Privacy**: All history cleared on sign-out via `authService.onSignOut` callback. History HUD hidden on sign-out.
+- **Files**: `Decode/Domain/Models/HistoryRequest.swift`, `Decode/Application/HistoryManager.swift`, `Decode/Presentation/Overlay/FloatingHistoryHUD.swift`, `DecodeTests/Application/HistoryManagerTests.swift` (28 tests).
+
+---
+
+## Launcher
+
+Persistent floating panel anchored to the left screen edge. Provides one-click access to Decode's primary actions from any application context.
+
+- **Orbital geometry**: Central Decode button with three action buttons (Folder, File, History) positioned on a circular arc using trigonometric positioning (`cos/sin × orbitRadius × buttonsProgress`). Orbit radius: 56px. Angles: Folder -50°, File 0°, History +50°.
+- **Dashed orbital ring**: Circle stroke (radius 34, lineWidth 1.5, dash [5, 4]) centered on the Decode button. Rotates continuously (20s/revolution, `.linear.repeatForever`). Only the ring rotates; buttons and Decode icon remain stationary.
+- **Panel**: `NSPanel` (170×180), non-activating, floating, borderless, transparent background, `.canJoinAllSpaces`. Anchored to screen left edge. Collapsed: 22px peek. Expanded: full panel visible.
+- **Expansion**: Phased animation — panel slides out (0.35s), main circle morphs (spring 0.38s), action buttons emerge (spring 0.5s, 0.18s delayed). Collapse reverses in opposite phase order. `isAnimating` guard prevents re-entrancy.
+- **Mouse tracking**: `NSTrackingArea` with `.activeAlways` for hover detection even when Decode is not the active app. Collapse delayed 0.45s after mouse exit (cancelable on re-enter).
+- **Callbacks**: `onAddFile` → `handleOpenSession()` (NSOpenPanel for files), `onAddFolder` → `handleOpenWorkspace()` (NSOpenPanel for directories), `onHistory` → `floatingHistoryHUD.toggle()`, `onLauncherTapped` → `NSApp.activate()`.
+- **Architecture**: `DECODE_LAUNCHER_ARCHITECTURE_AND_IMPLEMENTATION.md` (29-section CTO-level document).
+- **File**: `Decode/Presentation/Overlay/FloatingLauncher.swift` (all components in one file: `LauncherState`, `FloatingLauncher`, `LauncherPanel`, `LauncherTrackingView`, `LauncherContentView`).
+
+---
+
 ## Analytics
 
 **Request analytics** (`request_logs`): `user_id`, `mode`, `success`, `latency_ms`, `error_type`, `ai_provider`, `ai_model`, `context_tier`, `explanation_profile`, `prompt_tokens`, `completion_tokens`, `total_tokens`, `prompt_character_count`, `language`, `created_at`.
@@ -466,6 +500,8 @@ Verification is binary: builds succeed or fail, tests pass or fail, strict concu
 8. ~~**Enhanced Explanation**~~ — **Complete.** Visual context extraction for Selection Mode. WindowSelector for reliable content window selection. Edge cropping for image token optimization. Backend vision gateway integration. Vision prompt redesigned for downstream explanation quality. Architecture: `architecture/VISUAL_CONTEXT_ARCHITECTURE.md`.
 9. ~~**Screenshot Mode Investigation**~~ — **Complete (researched and closed).** Product validation concluded insufficient explanation improvement for the latency and complexity cost. No further work planned.
 10. ~~**Dashboard V2**~~ — **Complete (feature-frozen).** Founder-grade operational intelligence dashboard with 8 pages, Analytics V2 API (10 endpoints), comprehensive token analytics (per-feature efficiency, trends, percentiles, forecasts, cross-tabulations), 6 chart types, drill-down drawers, global search, keyboard shortcuts. Future work: bug fixes, UX polish, validation, browser compatibility.
+11. ~~**History**~~ — **Complete.** Local explanation history (10 most recent requests + follow-ups). HistoryManager, FloatingHistoryHUD, Anchored Reply integration, Launcher integration, logout clearing. Local-only, zero ICU cost. Architecture: `DECODE_LAUNCHER_ARCHITECTURE_AND_IMPLEMENTATION.md`.
+12. ~~**Launcher Redesign**~~ — **Complete.** Orbital visual geometry with central Decode button, circular-arc action buttons (Folder, File, History), rotating dashed ring. Architecture: `DECODE_LAUNCHER_ARCHITECTURE_AND_IMPLEMENTATION.md`.
 
 ### Implementation Status Tracking
 
@@ -486,13 +522,21 @@ Visual Context architecture is specified in `architecture/VISUAL_CONTEXT_ARCHITE
 8. **Directory watcher monitors root FD only** — relies on FSEvents propagation for deeply nested changes.
 9. **No persistent NavigationState** — active file/entity within directory workspaces resets on app restart. `SessionState` provides the foundation for persisting this (add `activeFilePaths: [UUID: String]` to `SessionState`) but this is not yet implemented.
 
-### Pre-Existing Test Failures (4)
+### Pre-Existing Test Failures (12)
 
-These failures predate the Workspace Mode implementation and are unrelated:
+These failures predate the History/Launcher work and are unrelated. As of 2026-08-13 (1169 tests total, 12 failing):
 1. `streamChatFormatsMessages` (AINetworkClientTests) — `emptyResponse` error
 2. `showStreamHandlesError` (ExplanationHUDViewModelTests) — display state mismatch
 3. `emptyTagSkipped` (ExplanationTagParserTests) — segment parsing difference
-4. `SwiftSyntaxFrontend: Contains output uses file: prefix` — entity qualified name format
+4. `explainSelectionStreamsToHUD` (SelectionModeCoordinatorTests) — mock timing / Intent Bar changes
+5. `showsErrorInHUDWhenStreamChatThrows` (SelectionModeCoordinatorTests) — display state mismatch
+6. `systemPromptIncludesSourceApp` (SelectionModeCoordinatorTests) — provider mock nil
+7. `systemPromptOmitsSourceAppWhenNil` (SelectionModeCoordinatorTests) — provider mock nil
+8. `captureUsesProvidedPID` (ScreenshotModeCoordinatorTests) — capture mock
+9. `Contains output uses file: prefix` (SwiftSyntaxFrontendTests) — entity qualified name format
+10. `Handler produces import outputs` (SwiftSyntaxFrontendTests) — import parsing
+11. `Handler produces import outputs from Python source` (TreeSitterFrontendTests) — import parsing
+12. `Falls back to first sentence when no paragraph boundary` (FilePurposeDeriverTests) — text extraction
 
 ---
 
@@ -567,6 +611,24 @@ Anchored Follow-Up is complete and architecturally documented in `architecture/A
 - `buildAugmentedQuestion()` as the single augmentation point reading only `anchoredResponseSelection`.
 - Reuse of existing Follow-Up pipeline (no separate AI system or backend endpoint).
 - Transient selection state (no persistence).
+
+### Completed History (Frozen)
+History is complete and documented in `DECODE_LAUNCHER_ARCHITECTURE_AND_IMPLEMENTATION.md` (§8). Future work limited to bug fixes or explicitly approved changes. Do not modify:
+- 10-request cap with oldest eviction on overflow.
+- Newest-first ordering by original creation time (follow-ups do NOT reorder parent).
+- Only successful completions recorded (no partial/failed/cancelled).
+- Local-only persistence (`~/Library/Application Support/Decode/history.json`).
+- Logout clearing via `authService.onSignOut`.
+- Callback-based recording via `onExplanationRecorded` / `onFollowUpRecorded` on `ExplanationHUDViewModel`.
+- Separation from Virtual Session (History is replay, Virtual Session is active investigation memory).
+
+### Completed Launcher Redesign (Frozen)
+Launcher orbital geometry is complete and documented in `DECODE_LAUNCHER_ARCHITECTURE_AND_IMPLEMENTATION.md`. Future work limited to bug fixes or explicitly approved changes. Do not modify:
+- Central geometry model (all positions derived from Decode center via `orbitRadius` + angles).
+- Trigonometric orbital positioning (`cos/sin × radius × progress`).
+- Callback-only external interface (`onAddFile`, `onAddFolder`, `onHistory`, `onLauncherTapped`).
+- Non-activating panel behavior (must not steal focus from user's IDE).
+- Ring rotation independence (ring rotates; buttons and Decode icon remain stationary).
 
 ### Session State Architecture
 13. **Workspace history vs session state separation** — `Workspace` (database) stores persistent history. `SessionState` (JSON file) stores transient runtime state. Do not add `isOpen` or similar state flags to the `Workspace` model. Do not conflate workspace history with application session state.
@@ -645,71 +707,73 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
 Main branch: `main`. Build must pass before committing. Run `xcodegen generate` after adding/removing Swift files.
 
 ### Tests
-40+ test files in `DecodeTests/`. Key coverage: `WorkspaceManager`, `WorkspaceResolver`, `WorkspaceResolverMultiFile`, `IndexingCoordinator`, `DirectoryWatcherService`, `NavigationState`, `ProjectExplorerTree`, `SessionState`, `SessionViewModelDirectory`, `SessionResolver`, `ExplanationTagParser`, `ExplainReasoningEngine`, `ImproveReasoningEngine`, `FollowUpReasoningEngine`, `SelectionModeCoordinator`, `SwiftSyntaxFrontend`, `TreeSitterFrontend`, `ModuleBoundaryPass`, `CrossFileResolutionPass`, `ModuleEmergentProperties`, `ModuleContextStrategy`, `ModuleObservation`, `ModuleIntelligenceValidation`, `VirtualSessionManager`, `AnchoredFollowUpTests`.
+40+ test files in `DecodeTests/`. Key coverage: `WorkspaceManager`, `WorkspaceResolver`, `WorkspaceResolverMultiFile`, `IndexingCoordinator`, `DirectoryWatcherService`, `NavigationState`, `ProjectExplorerTree`, `SessionState`, `SessionViewModelDirectory`, `SessionResolver`, `ExplanationTagParser`, `ExplainReasoningEngine`, `ImproveReasoningEngine`, `FollowUpReasoningEngine`, `SelectionModeCoordinator`, `SwiftSyntaxFrontend`, `TreeSitterFrontend`, `ModuleBoundaryPass`, `CrossFileResolutionPass`, `ModuleEmergentProperties`, `ModuleContextStrategy`, `ModuleObservation`, `ModuleIntelligenceValidation`, `VirtualSessionManager`, `AnchoredFollowUpTests`, `HistoryManagerTests`.
 
-4 pre-existing test failures (see Known Limitations).
+12 pre-existing test failures (see Known Limitations). 1169 total tests as of 2026-08-13.
 
 ---
 
-## Session Handoff (2026-08-05)
+## Session Handoff (2026-08-13)
 
 ### What Was Completed
 
-**Billing Engine Architecture** (design, not yet implemented):
-- Complete 9-part architecture delivered in conversation. Atomic metering model: each LLM call is independently billed. One formula: `credits = max(1, ceil((input_tokens × input_rate + output_tokens × output_rate) / 1M))`. 1 credit = $0.001.
-- 14 atomic LLM operations traced from all `generateCompletion`, `streamChat`, `generateVisionCompletion` call sites.
-- Weekly billing periods (Monday reset). Three tiers: Free (750 credits), Medium (1500), Higher (2500).
-- Server-authoritative, client-decorative (percentage bar only). Metering point: inside existing `_log_request()`.
-- Implementation requires: add `credits` column to `request_logs`, add `tier` to `users`, add `compute_credits()` function. No new tables needed at alpha scale.
-- Architecture survives 50+ future features, new models (one line in PricingTable), new tiers (two lines).
-- Key finding: client already receives token usage in SSE `done` events (`SSEUsage` struct in `DecodeGatewayProvider.swift:474`) but explicitly discards it. Server logs all token data to `request_logs`.
+**History Feature** (complete, uncommitted):
+- Local explanation history: 10 most recent requests with follow-up conversations, persisted to JSON.
+- `HistoryManager` (`@MainActor @Observable`): in-memory array, `restore()` on startup, `clear()` on logout.
+- `HistoryRequest` / `HistoryFollowUp` domain models (Codable, Sendable, Equatable).
+- `FloatingHistoryHUD`: non-activating NSPanel (520×600), follow-up from history, analytics events.
+- Recording via callbacks: `onExplanationRecorded` / `onFollowUpRecorded` on `ExplanationHUDViewModel`.
+- Privacy clearing: `authService.onSignOut` callback clears history + active request ID + hides HUD.
+- 28 tests across 3 suites in `DecodeTests/Application/HistoryManagerTests.swift`.
+- Files: `HistoryManager.swift`, `HistoryRequest.swift`, `FloatingHistoryHUD.swift`, `HistoryManagerTests.swift`, `AppDependencies.swift`, `AuthService.swift`.
 
-**Token Economics Analysis** (analysis, not implementation):
-- Complete measurement of all prompt sizes, token counts, and costs across all three modes.
-- Production model: claude-haiku-4-5-20251001 ($0.80/$4.00 per Mtok input/output).
-- Session Mode 2-5x cheaper than Selection/Screenshot (structured facts vs raw code).
-- Output tokens dominate cost (66-84%) despite being minority of token volume.
+**Launcher Redesign** (complete, uncommitted):
+- Vertical button column replaced with orbital/circular-arc layout around central Decode button.
+- Three action buttons (Folder, File, History) on right-side arc at -50°, 0°, +50°.
+- Rotating dashed ring (radius 34, continuous 20s rotation via `.linear.repeatForever`).
+- Trigonometric positioning: `cos(angle) × orbitRadius × buttonsProgress`, `sin(angle) × orbitRadius × buttonsProgress`.
+- Panel dimensions: 170×180 (was 132×210). Peek amount: 22px.
+- Two-phase animation: `mainProgress` (Decode button morph), `buttonsProgress` (action button emergence), staggered timing.
+- File: `Decode/Presentation/Overlay/FloatingLauncher.swift`.
 
-**Credit System Design** (design, not implementation):
-- Invisible credit system. Users see percentage bar only.
-- Post-hoc metering of actual token consumption. No predictions.
-- Three tiers optimized for adoption (first 4-5 months), not profit.
+**Launcher Architecture Document** (complete):
+- 29-section CTO/founder-facing architecture and implementation handoff document.
+- File: `DECODE_LAUNCHER_ARCHITECTURE_AND_IMPLEMENTATION.md`.
 
-**Dashboard V2** (prior session, uncommitted):
-- 8-page operational intelligence dashboard. Analytics V2 API with 10 endpoints.
-- Files: `backend/app/routers/analytics_v2.py`, `backend/app/static/v2/{index.html,app.js,components.js,design.css}`.
-- Status: Feature-complete. Changes are uncommitted in working tree.
-
-**Previous sessions (2026-08-02 / 2026-08-03):**
-- Enhanced Explanation (Visual Context pipeline, Intent Bar, Conditional Vision, ExplanationExecutionContext).
-- Backend vision gateway with provider-agnostic dispatch.
-- Screenshot Mode Investigation researched and closed.
+**Prior sessions (2026-08-05 / 2026-08-11):**
+- Billing Engine Architecture designed (not implemented). 14 LLM atoms, weekly credits, server-authoritative.
+- Token Economics Analysis complete (reference).
+- Anchored Follow-Up / Reply ↩ feature complete.
+- Dashboard V2 (8 pages) and Analytics V2 API (10 endpoints) complete.
+- Enhanced Explanation (Visual Context pipeline, Intent Bar, Conditional Vision) complete.
 
 ### Current Implementation Status
 
 | Component | Status | Location |
 |-----------|--------|----------|
+| History Feature | Complete (uncommitted) | `HistoryManager.swift`, `HistoryRequest.swift`, `FloatingHistoryHUD.swift`, `AppDependencies.swift` |
+| History Tests | Complete (uncommitted), 28 tests | `DecodeTests/Application/HistoryManagerTests.swift` |
+| Launcher Redesign (Orbital) | Complete (uncommitted) | `FloatingLauncher.swift` |
+| Launcher Architecture Doc | Complete | `DECODE_LAUNCHER_ARCHITECTURE_AND_IMPLEMENTATION.md` |
 | Anchored Follow-Up / Reply ↩ | Complete (uncommitted) | `SelectableTextView.swift`, `ExplanationHUDViewModel.swift`, `FloatingExplanationHUD.swift`, `AILimits.swift` |
 | Anchored Follow-Up Tests | Complete (uncommitted), 27 tests | `DecodeTests/Presentation/AnchoredFollowUpTests.swift` |
 | Anchored Follow-Up Architecture Doc | Complete (uncommitted) | `architecture/ANCHORED_FOLLOW_UP_REPLY_ARCHITECTURE.md` |
-| Billing Engine Architecture | Designed (not implemented) | Conversation output |
-| Token Economics Analysis | Complete (reference) | Conversation output |
+| Billing Engine Architecture | Designed (not implemented) | Conversation output (2026-08-05) |
 | Dashboard V2 (8 pages) | Complete (uncommitted) | `backend/app/static/v2/` |
 | Analytics V2 API | Complete (uncommitted) | `backend/app/routers/analytics_v2.py` |
-| Intent Bar (onEditingStarted) | Complete | `ExplanationHUDViewModel.swift`, `FloatingExplanationHUD.swift` |
-| Conditional Vision (SelectionMode) | Complete | `Decode/Application/SelectionModeCoordinator.swift` |
+| Intent Bar / Conditional Vision | Complete | `ExplanationHUDViewModel.swift`, `SelectionModeCoordinator.swift` |
 | ExplanationExecutionContext | Complete | `Decode/Domain/Models/ExplanationExecutionContext.swift` |
 | Visual Context Architecture | Complete | `architecture/VISUAL_CONTEXT_ARCHITECTURE.md` |
 
 ### Repository State
 
 - Branch: `main`.
-- All code builds successfully. 4 pre-existing test failures unchanged. CodeSign issue prevents `xcodebuild test` from CLI (pre-existing, unrelated to feature work).
-- Uncommitted changes: CLAUDE.md, project.pbxproj, ExplanationHUDViewModel.swift, FloatingExplanationHUD.swift, AILimits.swift (Anchored Follow-Up + prior sessions). New files: SelectableTextView.swift, AnchoredFollowUpTests.swift, ANCHORED_FOLLOW_UP_REPLY_ARCHITECTURE.md.
+- All code builds successfully. 12 pre-existing test failures (see Known Limitations). CodeSign issue prevents `xcodebuild test` from CLI (pre-existing, unrelated to feature work).
+- Significant uncommitted changes across multiple features (History, Launcher, Anchored Follow-Up, Dashboard V2, CLAUDE.md).
 
 ### Immediate Next Recommended Tasks
 
-1. **Commit all uncommitted work**: Anchored Follow-Up feature, Dashboard V2, CLAUDE.md updates.
-2. **Implement Billing Engine Phase 1**: Add `credits` column to `request_logs`, implement `compute_credits()` in `_log_request()`, add `tier` to users table. See billing architecture in conversation for full spec.
+1. **Commit all uncommitted work**: History feature, Launcher redesign, Anchored Follow-Up, Dashboard V2, CLAUDE.md updates.
+2. **Implement Billing Engine Phase 1**: Add `credits` column to `request_logs`, implement `compute_credits()` in `_log_request()`, add `tier` to users table. See billing architecture in 2026-08-05 conversation.
 3. **Dashboard V2 Validation**: Browser testing, UX polish, edge case handling.
 4. **Project Intelligence M12 — Validation**: End-to-end validation of the complete Project Intelligence stack (M8–M11). See `PROJECT_INTELLIGENCE_IMPLEMENTATION_STATUS.md`.
