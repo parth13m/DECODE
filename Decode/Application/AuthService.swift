@@ -31,6 +31,9 @@ final class AuthService {
     private let keychain: KeychainService
     private let session: URLSession
 
+    /// Called after sign-out completes. Set by AppDependencies to clear user data.
+    var onSignOut: (() -> Void)?
+
     // MARK: - Constants
 
     private static let tokenKeychainAccount = "decode-access-token"
@@ -249,6 +252,7 @@ final class AuthService {
         clearToken()
         accountInfo = nil
         state = .needsInvite
+        onSignOut?()
     }
 
     // MARK: - Networking Helpers

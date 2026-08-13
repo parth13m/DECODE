@@ -32,9 +32,9 @@ final class FloatingLauncher {
 
     // MARK: - Configuration
 
-    /// Full panel dimensions (accommodates expanded circle + action buttons).
-    private static let panelWidth: CGFloat = 132
-    private static let panelHeight: CGFloat = 164
+    /// Full panel dimensions (accommodates expanded orbital layout).
+    private static let panelWidth: CGFloat = 170
+    private static let panelHeight: CGFloat = 180
     /// How many pixels of the panel peek on-screen when collapsed.
     private static let peekAmount: CGFloat = 22
     /// Delay before collapsing after mouse exit.
@@ -54,6 +54,7 @@ final class FloatingLauncher {
 
     var onAddFile: (() -> Void)?
     var onAddFolder: (() -> Void)?
+    var onHistory: (() -> Void)?
     var onLauncherTapped: (() -> Void)?
 
     // MARK: - Show / Hide
@@ -221,13 +222,18 @@ final class FloatingLauncher {
             },
             onAddFile: { [weak self] in
                 self?.onAddFile?()
-                // Collapse after a short pause so the click feels acknowledged.
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
                     self?.collapse()
                 }
             },
             onAddFolder: { [weak self] in
                 self?.onAddFolder?()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                    self?.collapse()
+                }
+            },
+            onHistory: { [weak self] in
+                self?.onHistory?()
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
                     self?.collapse()
                 }
@@ -298,16 +304,35 @@ private final class LauncherTrackingView: NSView {
 /// Single persistent view that morphs continuously between collapsed and
 /// expanded states. No view swapping — all elements are always in the
 /// hierarchy; only their animatable properties change.
+///
+/// The three action buttons are positioned on a circular orbit around
+/// the central Decode button (right-side arc), not in a vertical column.
+/// A dashed orbital ring rotates continuously around the Decode button.
 private struct LauncherContentView: View {
 
     let state: LauncherState
     let onMainTap: () -> Void
     let onAddFile: () -> Void
     let onAddFolder: () -> Void
+    let onHistory: () -> Void
 
     // Decode palette
     private let accentOrange = Color(red: 0.91, green: 0.47, blue: 0.18)
-    private let glassBorder = Color.white.opacity(0.22)
+
+    // MARK: - Orbital Geometry
+
+    /// Distance from Decode center to action button centers.
+    private let orbitRadius: CGFloat = 56
+    /// Dashed ring radius — sits between button edge and action buttons.
+    private let ringRadius: CGFloat = 34
+    /// Angular positions for the three action buttons (degrees from +X axis).
+    /// Negative = upper-right, 0 = right, positive = lower-right.
+    private let folderAngle: Double = -50
+    private let fileAngle: Double = 0
+    private let historyAngle: Double = 50
+
+    /// Continuous ring rotation driven by `.onAppear`.
+    @State private var ringRotation: Angle = .zero
 
     // MARK: - Derived Animation Values
 
@@ -315,12 +340,12 @@ private struct LauncherContentView: View {
     private var mainSize: CGFloat { 42 + 10 * state.mainProgress }
     /// Main circle opacity: 0.22 → 1.0.
     private var mainOpacity: Double { 0.22 + 0.78 * state.mainProgress }
-    /// Main circle X position within the 132-wide panel.
-    /// Collapsed: circle centered at x=110 (near right edge of panel, since panel is off-screen left).
-    /// Expanded: circle centered at x=36.
-    private var mainX: CGFloat { 110 - 74 * state.mainProgress }
-    /// Main circle Y position — always vertically centered.
-    private var mainY: CGFloat { 82 }
+    /// Main circle X position within the 170-wide panel.
+    /// Collapsed: 148 (near right edge, mostly off-screen).
+    /// Expanded: 52 (orbit fits to the right).
+    private var mainX: CGFloat { 148 - 96 * state.mainProgress }
+    /// Main circle Y position — vertically centered in 180-tall panel.
+    private var mainY: CGFloat { 90 }
     /// Icon opacity: 0.4 → 1.0.
     private var iconOpacity: Double { 0.4 + 0.6 * state.mainProgress }
     /// Icon size: 12 → 16.
@@ -335,16 +360,35 @@ private struct LauncherContentView: View {
     // Action button derived values
     private var buttonScale: CGFloat { 0.35 + 0.65 * state.buttonsProgress }
     private var buttonOpacity: Double { Double(state.buttonsProgress) }
-    /// Buttons emerge from the main circle center outward.
-    private var folderX: CGFloat { mainX + 56 * state.buttonsProgress }
-    private var folderY: CGFloat { mainY - 48 * state.buttonsProgress }
-    private var fileX: CGFloat { mainX + 56 * state.buttonsProgress }
-    private var fileY: CGFloat { mainY + 48 * state.buttonsProgress }
+
+    /// Orbital X position for a button at the given angle.
+    /// Buttons emerge from the Decode center outward along their angular path.
+    private func orbitX(angleDeg: Double) -> CGFloat {
+        mainX + cos(angleDeg * .pi / 180) * orbitRadius * state.buttonsProgress
+    }
+
+    /// Orbital Y position for a button at the given angle.
+    private func orbitY(angleDeg: Double) -> CGFloat {
+        mainY + sin(angleDeg * .pi / 180) * orbitRadius * state.buttonsProgress
+    }
+
+    /// Dashed ring opacity — fades in with the main morph.
+    private var ringOpacity: Double { 0.55 * state.mainProgress }
 
     // MARK: - Body
 
     var body: some View {
         ZStack {
+            // Dashed orbital ring — centered on Decode, rotates continuously.
+            Circle()
+                .stroke(
+                    style: StrokeStyle(lineWidth: 1.5, lineCap: .round, dash: [5, 4])
+                )
+                .foregroundStyle(accentOrange.opacity(ringOpacity))
+                .frame(width: ringRadius * 2, height: ringRadius * 2)
+                .rotationEffect(ringRotation)
+                .position(x: mainX, y: mainY)
+
             // Main launcher circle — always present
             Button(action: onMainTap) {
                 ZStack {
@@ -371,7 +415,7 @@ private struct LauncherContentView: View {
             .opacity(mainOpacity)
             .position(x: mainX, y: mainY)
 
-            // Add Folder — upper right of main circle
+            // Folder — upper-right orbital position
             actionButton(
                 icon: "folder.badge.plus",
                 label: "Folder",
@@ -379,9 +423,9 @@ private struct LauncherContentView: View {
             )
             .scaleEffect(buttonScale)
             .opacity(buttonOpacity)
-            .position(x: folderX, y: folderY)
+            .position(x: orbitX(angleDeg: folderAngle), y: orbitY(angleDeg: folderAngle))
 
-            // Add File — lower right of main circle
+            // File — right orbital position
             actionButton(
                 icon: "doc.badge.plus",
                 label: "File",
@@ -389,9 +433,24 @@ private struct LauncherContentView: View {
             )
             .scaleEffect(buttonScale)
             .opacity(buttonOpacity)
-            .position(x: fileX, y: fileY)
+            .position(x: orbitX(angleDeg: fileAngle), y: orbitY(angleDeg: fileAngle))
+
+            // History — lower-right orbital position
+            actionButton(
+                icon: "clock.arrow.circlepath",
+                label: "History",
+                action: onHistory
+            )
+            .scaleEffect(buttonScale)
+            .opacity(buttonOpacity)
+            .position(x: orbitX(angleDeg: historyAngle), y: orbitY(angleDeg: historyAngle))
         }
-        .frame(width: 132, height: 164)
+        .frame(width: 170, height: 180)
+        .onAppear {
+            withAnimation(.linear(duration: 20).repeatForever(autoreverses: false)) {
+                ringRotation = .degrees(360)
+            }
+        }
     }
 
     // MARK: - Action Button

@@ -354,6 +354,7 @@ final class ExplanationHUDViewModel {
     /// Dedicated system prompt for follow-up questions. Unlike the explanation
     /// prompt, this instructs the model to answer concisely without regenerating
     /// Purpose/Flow/Example/Important Lines/Summary sections.
+    /// Also used by History follow-ups via ``historyFollowUpSystemPrompt``.
     private static let followUpSystemPrompt = """
         You are Decode, a code explanation assistant. The user already received \
         a full explanation of their code. Now they are asking a follow-up question.
@@ -380,6 +381,24 @@ final class ExplanationHUDViewModel {
         - Do NOT use <flow>, <tldr>, <tip>, <note>, or <analogy> tags.
         - Do NOT use markdown headings (## or ###).
         """
+
+    /// The follow-up system prompt, exposed for use by History follow-ups.
+    static let historyFollowUpSystemPrompt: String = followUpSystemPrompt
+
+    // MARK: - History Recording
+
+    /// Callback invoked when an explanation completes successfully.
+    /// Parameters: mode, originalCode, explanation, sourceAppName, fileName, language, explanationProfile.
+    /// Set by AppDependencies to record the explanation in HistoryManager.
+    var onExplanationRecorded: ((@MainActor (
+        _ mode: String, _ originalCode: String, _ explanation: String,
+        _ sourceAppName: String?, _ fileName: String?,
+        _ language: String?, _ explanationProfile: String?
+    ) -> Void))?
+
+    /// Callback invoked when a follow-up completes successfully.
+    /// Set by AppDependencies to record the follow-up in HistoryManager.
+    var onFollowUpRecorded: ((@MainActor (_ question: String, _ answer: String) -> Void))?
 
     // MARK: - Improvement State
 
@@ -618,6 +637,19 @@ final class ExplanationHUDViewModel {
                     displayState = .complete
                     onComplete?(explanationText)
 
+                    // Record in History.
+                    let historyCode = followUpContext?.originalCode
+                        ?? followUpContext?.sourceContent ?? ""
+                    onExplanationRecorded?(
+                        modeName ?? "unknown",
+                        historyCode,
+                        explanationText,
+                        sourceAppName,
+                        sessionFileName,
+                        followUpContext?.language,
+                        explanationProfile
+                    )
+
                     // Trigger feedback scheduling for explanations.
                     feedbackManager?.recordExplanation(metadata: buildFeedbackMetadata())
                 }
@@ -717,7 +749,7 @@ final class ExplanationHUDViewModel {
                     }.value
                 } else {
                     // No snippet or entity info — fall through to legacy.
-                    await askFollowUpLegacy(question: question, ctx: ctx)
+                    await askFollowUpLegacy(question: question, rawQuestion: rawQuestion, ctx: ctx)
                     return
                 }
 
@@ -727,6 +759,10 @@ final class ExplanationHUDViewModel {
                         // Update conversation state for subsequent follow-ups.
                         followUpContext?.pipelineConversationState = understanding.conversationState
                         isFollowUpLoading = false
+
+                        // Record in History.
+                        onFollowUpRecorded?(rawQuestion, understanding.content)
+
                         followUpText = ""
                         clearResponseSelection()
                     }
@@ -740,12 +776,12 @@ final class ExplanationHUDViewModel {
             }
 
             // Legacy path: 3-message conversation via streamChat.
-            await askFollowUpLegacy(question: question, ctx: ctx)
+            await askFollowUpLegacy(question: question, rawQuestion: rawQuestion, ctx: ctx)
         }
     }
 
     /// Legacy follow-up path: builds a 3-message conversation and streams the response.
-    private func askFollowUpLegacy(question: String, ctx: FollowUpContext) async {
+    private func askFollowUpLegacy(question: String, rawQuestion: String, ctx: FollowUpContext) async {
         let messages: [AIMessage] = [
             AIMessage(role: .user, content: ctx.sourceContent),
             AIMessage(role: .assistant, content: explanationText),
@@ -785,6 +821,12 @@ final class ExplanationHUDViewModel {
 
             if !Task.isCancelled {
                 isFollowUpLoading = false
+
+                // Record in History (use rawQuestion, not the augmented prompt).
+                if !followUpAnswer.isEmpty {
+                    onFollowUpRecorded?(rawQuestion, followUpAnswer)
+                }
+
                 followUpText = ""
                 clearResponseSelection()
             }

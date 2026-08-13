@@ -89,6 +89,19 @@ final class AppDependencies {
     /// Created at init (lightweight). Restored during deferred startup.
     let virtualSessionManager: VirtualSessionManager
 
+    // MARK: - History
+
+    /// Manages the 10 most recent explanation requests and their follow-ups.
+    /// Created at init (lightweight). Restored during deferred startup.
+    let historyManager = HistoryManager()
+
+    /// The History HUD panel, separate from the Explanation HUD.
+    private(set) var floatingHistoryHUD: FloatingHistoryHUD?
+
+    /// The active history request ID, set when an explanation completes.
+    /// Used to associate subsequent follow-ups with the correct history item.
+    private var activeHistoryRequestId: UUID?
+
     // MARK: - Profile Intelligence
 
     /// Records user behavior observations and derives a learning profile.
@@ -274,6 +287,17 @@ final class AppDependencies {
 
         // 0c. Restore virtual session state.
         virtualSessionManager.restore()
+
+        // 0d. Restore history and wire recording callbacks.
+        historyManager.restore()
+        wireHistoryRecording()
+
+        // 0e. Clear history on sign-out (privacy).
+        authService.onSignOut = { [weak self] in
+            self?.historyManager.clear()
+            self?.activeHistoryRequestId = nil
+            self?.floatingHistoryHUD?.hide()
+        }
 
         // 1. Build AI provider (Keychain access).
         rebuildAIProvider()
@@ -465,6 +489,9 @@ final class AppDependencies {
         launcher.onAddFolder = { [weak self] in
             self?.handleOpenWorkspace()
         }
+        launcher.onHistory = { [weak self] in
+            self?.floatingHistoryHUD?.toggle()
+        }
         launcher.onLauncherTapped = {
             NSApp.activate(ignoringOtherApps: true)
             if let mainWindow = NSApp.windows.first(where: { !($0 is NSPanel) }) {
@@ -473,6 +500,12 @@ final class AppDependencies {
         }
         self.floatingLauncher = launcher
         launcher.show()
+
+        // 2e. Floating History HUD.
+        let historyHUD = FloatingHistoryHUD(historyManager: historyManager)
+        historyHUD.aiProviderClosure = { [weak self] in self?.aiProvider }
+        historyHUD.usageTracker = usageTracker
+        self.floatingHistoryHUD = historyHUD
 
         // Semantic enrichment routes through the backend gateway; the gateway
         // uses the mode ("enrichment") to select the appropriate provider.
@@ -801,6 +834,39 @@ final class AppDependencies {
 
     /// Rebuild the AI provider using the Decode Gateway.
     ///
+    // MARK: - History Recording
+
+    /// Wire the HUD's explanation/follow-up completion callbacks to HistoryManager.
+    ///
+    /// Uses `activeHistoryRequestId` to associate follow-ups with the correct
+    /// parent request. Only successful completions are recorded.
+    private func wireHistoryRecording() {
+        let historyMgr = historyManager
+
+        hud.viewModel.onExplanationRecorded = { [weak self] mode, originalCode, explanation, sourceAppName, fileName, language, explanationProfile in
+            guard let self else { return }
+            let id = historyMgr.recordExplanation(
+                mode: mode,
+                originalCode: originalCode,
+                explanation: explanation,
+                sourceAppName: sourceAppName,
+                fileName: fileName,
+                language: language,
+                explanationProfile: explanationProfile
+            )
+            self.activeHistoryRequestId = id
+        }
+
+        hud.viewModel.onFollowUpRecorded = { [weak self] question, answer in
+            guard let self, let requestId = self.activeHistoryRequestId else { return }
+            historyMgr.recordFollowUp(
+                requestId: requestId,
+                question: question,
+                answer: answer
+            )
+        }
+    }
+
     /// Creates a ``DecodeGatewayProvider`` that authenticates via the user's
     /// access token. Sets `aiProvider` to `nil` if no token is stored.
     ///
