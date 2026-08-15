@@ -572,18 +572,19 @@ App.pages.product = {
       </div>`;
 
     try {
-      const [product, exec] = await Promise.all([
+      const [product, exec, history] = await Promise.all([
         D.api.fetch(D.api.url('/api/v2/analytics/product')),
         D.api.fetch(D.api.url('/api/v2/analytics/executive')),
+        D.api.fetch(D.api.url('/api/v2/analytics/history')),
       ]);
-      this._lastData = { product, exec };
-      this._renderLive(el, product, exec);
+      this._lastData = { product, exec, history };
+      this._renderLive(el, product, exec, history);
     } catch (err) {
       el.innerHTML = `${D.globalFilterBar()}${D.error('Failed to load product data', err.message, "App.pages.product.render()")}`;
     }
   },
 
-  _renderLive(el, product, exec) {
+  _renderLive(el, product, exec, history) {
     const modes = product.by_mode || [];
     const types = product.by_request_type || [];
     const profiles = product.by_profile || [];
@@ -685,6 +686,56 @@ App.pages.product = {
         </div>
       ` : ''}
 
+      ${(history && (history.history_opens > 0 || history.history_followups > 0)) ? `
+        <div class="d-section d-mt-6">
+          ${D.sectionHeader('History Analytics')}
+          ${D.kpiGrid([
+            D.kpi({ label: 'History Users', value: D.fmt.num(history.history_users), sub: history.adoption !== null ? D.fmt.pct(history.adoption) + ' adoption' : 'No active users', accent: 'brand' }),
+            D.kpi({ label: 'History Opens', value: D.fmt.num(history.history_opens), accent: 'info' }),
+            D.kpi({ label: 'History Follow-Ups', value: D.fmt.num(history.history_followups), sub: history.followup_rate !== null ? D.fmt.pct(history.followup_rate) + ' rate' : '', accent: 'success' }),
+            D.kpi({ label: 'History Clears', value: D.fmt.num(history.history_clears), accent: 'warning' }),
+          ], 4)}
+
+          <div class="d-mt-4">
+            ${D.kpiGrid([
+              D.kpi({ label: 'Avg Depth', value: history.avg_depth !== null ? history.avg_depth : '\u2014' }),
+              D.kpi({ label: 'Avg Follow-Ups / Open', value: history.avg_followups_per_open !== null ? history.avg_followups_per_open : '\u2014' }),
+            ], 2)}
+          </div>
+
+          ${Object.keys(history.depth_distribution || {}).length > 0 ? `
+            <div class="d-mt-4">
+              <div class="d-chart-card" style="padding:var(--d-sp-5)">
+                <h4 style="margin:0 0 12px;font-size:0.85rem;font-weight:600">Follow-Up Depth Distribution</h4>
+                ${D.horizontalBars(Object.entries(history.depth_distribution).sort((a,b) => parseInt(a[0]) - parseInt(b[0])).map((e, i) => ({
+                  label: 'Depth ' + e[0],
+                  value: e[1],
+                  color: ['#e87830','#3b82f6','#10b981','#8b5cf6','#f59e0b'][i % 5],
+                })))}
+              </div>
+            </div>
+          ` : ''}
+
+          ${Object.keys(history.selection_source || {}).length > 0 ? `
+            <div class="d-mt-4">
+              <div class="d-chart-card" style="padding:var(--d-sp-5)">
+                <h4 style="margin:0 0 12px;font-size:0.85rem;font-weight:600">Selection Source</h4>
+                ${D.horizontalBars(Object.entries(history.selection_source).map((e, i) => {
+                  const labels = { explanation: 'Explanation', followup_question: 'Follow-Up Question', followup_answer: 'Follow-Up Answer' };
+                  return { label: labels[e[0]] || e[0], value: e[1], color: ['#e87830','#3b82f6','#10b981'][i % 3] };
+                }))}
+              </div>
+            </div>
+          ` : ''}
+
+          ${(history.daily_trend || []).length > 0 ? `
+            <div class="d-mt-4">
+              ${D.chartCard({ title: 'History Usage Trend', canvasId: 'history-trend-chart', height: 200, placeholder: false })}
+            </div>
+          ` : ''}
+        </div>
+      ` : ''}
+
       <div class="d-section d-mt-6" style="text-align:center;padding:var(--d-sp-4)">
         <button class="d-btn d-btn-ghost" onclick="App.navigate('executive')">&#x2190; Executive Overview</button>
         <button class="d-btn d-btn-ghost" onclick="App.navigate('ai')">AI Platform &#x2192;</button>
@@ -705,6 +756,22 @@ App.pages.product = {
         const body = typeCanvas.closest('.d-chart-body');
         body.innerHTML = `<div class="d-donut-wrap"><canvas id="product-donut-type" style="width:180px;height:180px"></canvas>${D.donutLegend(typeSegments, typeTotal)}</div>`;
         D.renderDonutChart('product-donut-type', typeSegments, { height: 180, centerLabel: D.fmt.num(typeTotal), centerSub: 'requests' });
+      }
+
+      // History trend chart
+      const historyTrendCanvas = document.getElementById('history-trend-chart');
+      if (historyTrendCanvas && history && (history.daily_trend || []).length > 0) {
+        const trend = history.daily_trend;
+        const body = historyTrendCanvas.closest('.d-chart-body');
+        body.innerHTML = `<canvas id="history-trend-chart" style="width:100%;height:200px"></canvas>`;
+        D.renderAreaChart('history-trend-chart', {
+          labels: trend.map(d => d.date),
+          datasets: [
+            { label: 'Opens', data: trend.map(d => d.opens), color: '#e87830' },
+            { label: 'Follow-Ups', data: trend.map(d => d.followups), color: '#3b82f6' },
+            { label: 'Clears', data: trend.map(d => d.clears), color: '#ef4444' },
+          ],
+        }, { height: 200 });
       }
     });
   },
@@ -1704,6 +1771,32 @@ App.pages.users = {
               })),
             })}
             </div>
+          </div>
+        ` : ''}
+
+        ${detail.history_breakdown ? `
+          <div class="d-mt-6">
+            ${D.sectionHeader('History')}
+            ${D.statRow([
+              { label: 'Opens', value: D.fmt.num(detail.history_breakdown.history_opens) },
+              { label: 'Follow-Ups', value: D.fmt.num(detail.history_breakdown.history_followups) },
+              { label: 'FU Rate', value: detail.history_breakdown.history_followup_rate !== null ? D.fmt.pct(detail.history_breakdown.history_followup_rate) : '\u2014' },
+              { label: 'Clears', value: D.fmt.num(detail.history_breakdown.history_clears) },
+            ])}
+            ${D.statRow([
+              { label: 'Avg Depth', value: detail.history_breakdown.avg_depth !== null ? detail.history_breakdown.avg_depth : '\u2014' },
+              { label: 'Max Depth', value: detail.history_breakdown.max_depth !== null ? detail.history_breakdown.max_depth : '\u2014' },
+              { label: 'First Activity', value: detail.history_breakdown.first_activity ? D.fmt.timeAgo(detail.history_breakdown.first_activity) : '\u2014' },
+              { label: 'Last Activity', value: detail.history_breakdown.last_activity ? D.fmt.timeAgo(detail.history_breakdown.last_activity) : '\u2014' },
+            ])}
+            ${Object.keys(detail.history_breakdown.selection_source || {}).length > 0 ? `
+              <div class="d-mt-3">
+                ${D.horizontalBars(Object.entries(detail.history_breakdown.selection_source).map((e, i) => {
+                  const labels = { explanation: 'Explanation', followup_question: 'Follow-Up Q', followup_answer: 'Follow-Up A' };
+                  return { label: labels[e[0]] || e[0], value: e[1], color: ['#e87830','#3b82f6','#10b981'][i % 3] };
+                }))}
+              </div>
+            ` : ''}
           </div>
         ` : ''}
 

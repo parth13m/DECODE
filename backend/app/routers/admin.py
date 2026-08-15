@@ -125,6 +125,15 @@ class AnalyticsResponse(BaseModel):
     followup_avg_completion_tokens: float | None = None
     followup_avg_total_tokens: float | None = None
     followup_estimated_cost_usd: float | None = None
+    # History analytics (from analytics_events)
+    history_opens: int = 0
+    history_users: int = 0
+    history_followups: int = 0
+    history_followup_rate: float | None = None
+    history_clears: int = 0
+    history_avg_depth: float | None = None
+    history_selection_source: dict | None = None
+    history_depth_distribution: dict | None = None
     analytics_coverage: float | None
     estimated_total_cost_usd: float | None
     provider_analytics: list[ProviderAnalytics]
@@ -498,6 +507,62 @@ def get_analytics(
     followup_avg_total_tokens = round(followup_tok_stats[2], 1) if followup_tok_stats[2] is not None else None
     followup_estimated_cost = round(followup_tok_stats[3], 4) if followup_tok_stats[3] is not None else None
 
+    # ── History analytics (from analytics_events) ──
+    history_opens = (
+        db.query(sa_func.count(AnalyticsEvent.id))
+        .filter(AnalyticsEvent.event_type == "history_opened")
+        .scalar()
+    ) or 0
+    history_users = (
+        db.query(sa_func.count(sa_func.distinct(AnalyticsEvent.user_id)))
+        .filter(AnalyticsEvent.event_type.in_(["history_opened", "history_followup", "history_cleared"]))
+        .scalar()
+    ) or 0
+    history_followups = (
+        db.query(sa_func.count(AnalyticsEvent.id))
+        .filter(AnalyticsEvent.event_type == "history_followup")
+        .scalar()
+    ) or 0
+    # History follow-up rate = history follow-ups / history opens.
+    history_followup_rate = (
+        round(history_followups / history_opens * 100, 1)
+        if history_opens > 0 else None
+    )
+    history_clears = (
+        db.query(sa_func.count(AnalyticsEvent.id))
+        .filter(AnalyticsEvent.event_type == "history_cleared")
+        .scalar()
+    ) or 0
+    # Average follow-up depth from metadata.
+    history_depth_rows = (
+        db.query(AnalyticsEvent.metadata_["followup_depth"])
+        .filter(
+            AnalyticsEvent.event_type == "history_followup",
+            AnalyticsEvent.metadata_["followup_depth"].isnot(None),
+        )
+        .all()
+    )
+    depth_values = [int(r[0]) for r in history_depth_rows if r[0] is not None]
+    history_avg_depth = round(sum(depth_values) / len(depth_values), 1) if depth_values else None
+    # Depth distribution.
+    history_depth_distribution = {}
+    for d in depth_values:
+        history_depth_distribution[str(d)] = history_depth_distribution.get(str(d), 0) + 1
+    # Selection source distribution from metadata.
+    history_source_rows = (
+        db.query(
+            AnalyticsEvent.metadata_["selection_source"].as_string(),
+            sa_func.count(AnalyticsEvent.id),
+        )
+        .filter(
+            AnalyticsEvent.event_type == "history_followup",
+            AnalyticsEvent.metadata_["selection_source"].isnot(None),
+        )
+        .group_by(AnalyticsEvent.metadata_["selection_source"].as_string())
+        .all()
+    )
+    history_selection_source = {src: cnt for src, cnt in history_source_rows} if history_source_rows else None
+
     # ── Latency percentiles (PostgreSQL percentile_cont) ──
     lat_q = db.query(
         sa_func.percentile_cont(0.5).within_group(RequestLog.latency_ms),
@@ -650,6 +715,14 @@ def get_analytics(
         followup_avg_completion_tokens=followup_avg_completion_tokens,
         followup_avg_total_tokens=followup_avg_total_tokens,
         followup_estimated_cost_usd=followup_estimated_cost,
+        history_opens=history_opens,
+        history_users=history_users,
+        history_followups=history_followups,
+        history_followup_rate=history_followup_rate,
+        history_clears=history_clears,
+        history_avg_depth=history_avg_depth,
+        history_selection_source=history_selection_source,
+        history_depth_distribution=history_depth_distribution,
         avg_prompt_tokens=avg_prompt_tokens,
         avg_completion_tokens=avg_completion_tokens,
         avg_total_tokens=avg_total_tokens,
@@ -855,6 +928,18 @@ class UserFollowUpBreakdown(BaseModel):
     estimated_cost_usd: float | None = None
 
 
+class UserHistoryBreakdown(BaseModel):
+    history_opens: int = 0
+    history_followups: int = 0
+    history_followup_rate: float | None = None
+    history_clears: int = 0
+    avg_depth: float | None = None
+    max_depth: int | None = None
+    selection_source: dict | None = None
+    last_activity: datetime | None = None
+    first_activity: datetime | None = None
+
+
 class UserProfileIntelligence(BaseModel):
     """Derived Profile Intelligence snapshot synced from the macOS client."""
     available: bool = False
@@ -868,6 +953,7 @@ class UserDetailResponse(BaseModel):
     mode_breakdown: UserModeBreakdown
     improve_breakdown: UserImproveBreakdown = UserImproveBreakdown()
     followup_breakdown: UserFollowUpBreakdown = UserFollowUpBreakdown()
+    history_breakdown: UserHistoryBreakdown = UserHistoryBreakdown()
     token_breakdown: UserTokenBreakdown
     cost_breakdown: UserCostBreakdown
     daily: list[UserDailyRecord]
@@ -955,6 +1041,89 @@ def _user_followup_breakdown(db: Session, user_id: str) -> UserFollowUpBreakdown
         avg_completion_tokens=round(followup_stats[2], 1) if followup_stats[2] is not None else None,
         avg_total_tokens=round(followup_stats[3], 1) if followup_stats[3] is not None else None,
         estimated_cost_usd=estimated_cost,
+    )
+
+
+def _user_history_breakdown(db: Session, user_id: str) -> UserHistoryBreakdown:
+    """Compute per-user History metrics from analytics_events."""
+    history_opens = (
+        db.query(sa_func.count(AnalyticsEvent.id))
+        .filter(AnalyticsEvent.user_id == user_id, AnalyticsEvent.event_type == "history_opened")
+        .scalar()
+    ) or 0
+
+    history_followups = (
+        db.query(sa_func.count(AnalyticsEvent.id))
+        .filter(AnalyticsEvent.user_id == user_id, AnalyticsEvent.event_type == "history_followup")
+        .scalar()
+    ) or 0
+
+    history_followup_rate = (
+        round(history_followups / history_opens * 100, 1)
+        if history_opens > 0 else None
+    )
+
+    history_clears = (
+        db.query(sa_func.count(AnalyticsEvent.id))
+        .filter(AnalyticsEvent.user_id == user_id, AnalyticsEvent.event_type == "history_cleared")
+        .scalar()
+    ) or 0
+
+    # Depth metrics from metadata.
+    depth_rows = (
+        db.query(AnalyticsEvent.metadata_["followup_depth"])
+        .filter(
+            AnalyticsEvent.user_id == user_id,
+            AnalyticsEvent.event_type == "history_followup",
+            AnalyticsEvent.metadata_["followup_depth"].isnot(None),
+        )
+        .all()
+    )
+    depth_values = [int(r[0]) for r in depth_rows if r[0] is not None]
+    avg_depth = round(sum(depth_values) / len(depth_values), 1) if depth_values else None
+    max_depth = max(depth_values) if depth_values else None
+
+    # Selection source distribution.
+    source_rows = (
+        db.query(
+            AnalyticsEvent.metadata_["selection_source"].as_string(),
+            sa_func.count(AnalyticsEvent.id),
+        )
+        .filter(
+            AnalyticsEvent.user_id == user_id,
+            AnalyticsEvent.event_type == "history_followup",
+            AnalyticsEvent.metadata_["selection_source"].isnot(None),
+        )
+        .group_by(AnalyticsEvent.metadata_["selection_source"].as_string())
+        .all()
+    )
+    selection_source = {src: cnt for src, cnt in source_rows} if source_rows else None
+
+    # First and last History activity timestamps.
+    activity_range = (
+        db.query(
+            sa_func.min(AnalyticsEvent.created_at),
+            sa_func.max(AnalyticsEvent.created_at),
+        )
+        .filter(
+            AnalyticsEvent.user_id == user_id,
+            AnalyticsEvent.event_type.in_(["history_opened", "history_followup", "history_cleared"]),
+        )
+        .one()
+    )
+    first_activity = activity_range[0]
+    last_activity = activity_range[1]
+
+    return UserHistoryBreakdown(
+        history_opens=history_opens,
+        history_followups=history_followups,
+        history_followup_rate=history_followup_rate,
+        history_clears=history_clears,
+        avg_depth=avg_depth,
+        max_depth=max_depth,
+        selection_source=selection_source,
+        first_activity=first_activity,
+        last_activity=last_activity,
     )
 
 
@@ -1076,6 +1245,7 @@ def get_user_detail(
         ),
         improve_breakdown=_user_improve_breakdown(db, user.id),
         followup_breakdown=_user_followup_breakdown(db, user.id),
+        history_breakdown=_user_history_breakdown(db, user.id),
         token_breakdown=UserTokenBreakdown(
             avg_prompt_tokens=round(token_stats[0], 1) if token_stats[0] is not None else None,
             avg_completion_tokens=round(token_stats[1], 1) if token_stats[1] is not None else None,

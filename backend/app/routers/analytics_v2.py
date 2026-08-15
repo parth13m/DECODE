@@ -469,6 +469,79 @@ def get_user_detail(
             "last_used": str(r.last_used) if r.last_used else None,
         })
 
+    # ── Per-user History analytics (from analytics_events) ──
+    history_event_types = ["history_opened", "history_followup", "history_cleared"]
+    hist_date_filters = _date_filter(AnalyticsEvent, start_date, end_date)
+
+    hist_counts = dict(
+        db.query(AnalyticsEvent.event_type, sa_func.count(AnalyticsEvent.id))
+        .filter(
+            *hist_date_filters,
+            AnalyticsEvent.user_id == user_id,
+            AnalyticsEvent.event_type.in_(history_event_types),
+        )
+        .group_by(AnalyticsEvent.event_type)
+        .all()
+    )
+    hist_opens = hist_counts.get("history_opened", 0)
+    hist_followups = hist_counts.get("history_followup", 0)
+    hist_clears = hist_counts.get("history_cleared", 0)
+
+    hist_depth_rows = (
+        db.query(AnalyticsEvent.metadata_["followup_depth"])
+        .filter(
+            *hist_date_filters,
+            AnalyticsEvent.user_id == user_id,
+            AnalyticsEvent.event_type == "history_followup",
+            AnalyticsEvent.metadata_["followup_depth"].isnot(None),
+        )
+        .all()
+    )
+    hist_depths = [int(r[0]) for r in hist_depth_rows if r[0] is not None]
+    hist_avg_depth = round(sum(hist_depths) / len(hist_depths), 1) if hist_depths else None
+    hist_max_depth = max(hist_depths) if hist_depths else None
+
+    hist_source_rows = (
+        db.query(
+            AnalyticsEvent.metadata_["selection_source"].as_string(),
+            sa_func.count(AnalyticsEvent.id),
+        )
+        .filter(
+            *hist_date_filters,
+            AnalyticsEvent.user_id == user_id,
+            AnalyticsEvent.event_type == "history_followup",
+            AnalyticsEvent.metadata_["selection_source"].isnot(None),
+        )
+        .group_by(AnalyticsEvent.metadata_["selection_source"].as_string())
+        .all()
+    )
+    hist_selection_source = {src: cnt for src, cnt in hist_source_rows} if hist_source_rows else {}
+
+    hist_activity = (
+        db.query(
+            sa_func.min(AnalyticsEvent.created_at),
+            sa_func.max(AnalyticsEvent.created_at),
+        )
+        .filter(
+            *hist_date_filters,
+            AnalyticsEvent.user_id == user_id,
+            AnalyticsEvent.event_type.in_(history_event_types),
+        )
+        .one()
+    )
+
+    history_breakdown = {
+        "history_opens": hist_opens,
+        "history_followups": hist_followups,
+        "history_followup_rate": round(hist_followups / hist_opens * 100, 1) if hist_opens > 0 else None,
+        "history_clears": hist_clears,
+        "avg_depth": hist_avg_depth,
+        "max_depth": hist_max_depth,
+        "selection_source": hist_selection_source,
+        "first_activity": str(hist_activity[0]) if hist_activity[0] else None,
+        "last_activity": str(hist_activity[1]) if hist_activity[1] else None,
+    } if (hist_opens + hist_followups + hist_clears) > 0 else None
+
     return {
         "user": {
             "id": str(user.id),
@@ -484,6 +557,7 @@ def get_user_detail(
         "by_mode": [{"mode": r.mode, "count": r.count} for r in mode_rows],
         "by_request_type": [{"request_type": r.type, "count": r.count} for r in type_rows],
         "mode_detail": mode_detail,
+        "history_breakdown": history_breakdown,
         "daily_trend": [
             {"date": str(r.day), "requests": r.requests}
             for r in daily
@@ -1589,5 +1663,155 @@ def get_feedback_analytics(
                 "dislikes": (r.total or 0) - (r.likes or 0),
             }
             for r in daily
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# History analytics
+# ---------------------------------------------------------------------------
+
+
+@router.get("/history")
+def get_history_analytics(
+    days: int | None = Query(None, ge=1, le=365),
+    start: date | None = None,
+    end: date | None = None,
+    db: Session = Depends(get_db),
+):
+    """History feature analytics: opens, follow-ups, clears, depth, selection source."""
+    start_date, end_date = _parse_date_range(days, start, end)
+    date_filters = _date_filter(AnalyticsEvent, start_date, end_date)
+
+    history_types = ["history_opened", "history_followup", "history_cleared"]
+
+    # ── Aggregate counts ──
+    counts = dict(
+        db.query(AnalyticsEvent.event_type, sa_func.count(AnalyticsEvent.id))
+        .filter(*date_filters, AnalyticsEvent.event_type.in_(history_types))
+        .group_by(AnalyticsEvent.event_type)
+        .all()
+    )
+    history_opens = counts.get("history_opened", 0)
+    history_followups = counts.get("history_followup", 0)
+    history_clears = counts.get("history_cleared", 0)
+
+    # ── Unique users ──
+    history_users = (
+        db.query(sa_func.count(sa_func.distinct(AnalyticsEvent.user_id)))
+        .filter(*date_filters, AnalyticsEvent.event_type.in_(history_types))
+        .scalar()
+    ) or 0
+
+    # ── Active users for adoption rate ──
+    # Count unique users who made any AI request in the period.
+    active_users = (
+        db.query(sa_func.count(sa_func.distinct(RequestLog.user_id)))
+        .filter(_date_filter(RequestLog, start_date, end_date))
+        .scalar()
+    ) or 0
+    adoption = round(history_users / active_users * 100, 1) if active_users > 0 else None
+
+    # ── Follow-up rate ──
+    followup_rate = round(history_followups / history_opens * 100, 1) if history_opens > 0 else None
+
+    # ── Average follow-ups per open ──
+    avg_followups_per_open = round(history_followups / history_opens, 1) if history_opens > 0 else None
+
+    # ── Depth metrics ──
+    depth_rows = (
+        db.query(AnalyticsEvent.metadata_["followup_depth"])
+        .filter(
+            *date_filters,
+            AnalyticsEvent.event_type == "history_followup",
+            AnalyticsEvent.metadata_["followup_depth"].isnot(None),
+        )
+        .all()
+    )
+    depth_values = [int(r[0]) for r in depth_rows if r[0] is not None]
+    avg_depth = round(sum(depth_values) / len(depth_values), 1) if depth_values else None
+    depth_distribution = {}
+    for d in depth_values:
+        depth_distribution[str(d)] = depth_distribution.get(str(d), 0) + 1
+
+    # ── Selection source distribution ──
+    source_rows = (
+        db.query(
+            AnalyticsEvent.metadata_["selection_source"].as_string(),
+            sa_func.count(AnalyticsEvent.id),
+        )
+        .filter(
+            *date_filters,
+            AnalyticsEvent.event_type == "history_followup",
+            AnalyticsEvent.metadata_["selection_source"].isnot(None),
+        )
+        .group_by(AnalyticsEvent.metadata_["selection_source"].as_string())
+        .all()
+    )
+    selection_source = {src: cnt for src, cnt in source_rows} if source_rows else {}
+
+    # ── Daily trend ──
+    daily = (
+        db.query(
+            cast(AnalyticsEvent.created_at, Date).label("day"),
+            sa_func.count().filter(AnalyticsEvent.event_type == "history_opened").label("opens"),
+            sa_func.count().filter(AnalyticsEvent.event_type == "history_followup").label("followups"),
+            sa_func.count().filter(AnalyticsEvent.event_type == "history_cleared").label("clears"),
+            sa_func.count(sa_func.distinct(AnalyticsEvent.user_id)).label("users"),
+        )
+        .filter(*date_filters, AnalyticsEvent.event_type.in_(history_types))
+        .group_by("day")
+        .order_by("day")
+        .all()
+    )
+
+    # ── Per-user breakdown (top users by History activity) ──
+    top_users = (
+        db.query(
+            AnalyticsEvent.user_id,
+            sa_func.count().label("total"),
+            sa_func.count().filter(AnalyticsEvent.event_type == "history_opened").label("opens"),
+            sa_func.count().filter(AnalyticsEvent.event_type == "history_followup").label("followups"),
+            sa_func.count().filter(AnalyticsEvent.event_type == "history_cleared").label("clears"),
+        )
+        .filter(*date_filters, AnalyticsEvent.event_type.in_(history_types))
+        .group_by(AnalyticsEvent.user_id)
+        .order_by(sa_func.count().desc())
+        .limit(20)
+        .all()
+    )
+
+    return {
+        "period": {"start": str(start_date), "end": str(end_date)},
+        "history_users": history_users,
+        "active_users": active_users,
+        "adoption": adoption,
+        "history_opens": history_opens,
+        "history_followups": history_followups,
+        "history_clears": history_clears,
+        "followup_rate": followup_rate,
+        "avg_followups_per_open": avg_followups_per_open,
+        "avg_depth": avg_depth,
+        "depth_distribution": depth_distribution,
+        "selection_source": selection_source,
+        "daily_trend": [
+            {
+                "date": str(r.day),
+                "opens": r.opens or 0,
+                "followups": r.followups or 0,
+                "clears": r.clears or 0,
+                "users": r.users or 0,
+            }
+            for r in daily
+        ],
+        "top_users": [
+            {
+                "user_id": str(r.user_id),
+                "total": r.total,
+                "opens": r.opens or 0,
+                "followups": r.followups or 0,
+                "clears": r.clears or 0,
+            }
+            for r in top_users
         ],
     }

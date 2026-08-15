@@ -304,6 +304,9 @@ _ALLOWED_EVENT_TYPES = frozenset({
     "improve_dismiss",
     "improve_no_change",
     "feedback",
+    "history_opened",
+    "history_followup",
+    "history_cleared",
 })
 
 

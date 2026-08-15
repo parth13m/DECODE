@@ -837,6 +837,15 @@
         <div class="stats stats-3" id="followup-stats-grid"></div>
       </div>
 
+      <div class="section" id="history-section" style="display:none">
+        <div class="section-header">
+          <h2>History</h2>
+          <span class="section-desc">History usage, engagement depth, and selection patterns</span>
+        </div>
+        <div class="stats stats-3" id="history-stats-grid"></div>
+        <div id="history-details" style="margin-top:1rem"></div>
+      </div>
+
       <div class="section" id="mode-section" style="display:none">
         <div class="section-header">
           <h2>Mode Analytics</h2>
@@ -1101,6 +1110,14 @@
           <h2>Follow-Up Questions</h2>
         </div>
         <div class="stats" id="detail-followup"></div>
+      </div>
+
+      <div class="section" id="detail-history-section" style="display:none">
+        <div class="section-header">
+          <h2>History</h2>
+        </div>
+        <div class="stats" id="detail-history"></div>
+        <div id="detail-history-details" style="margin-top:0.75rem"></div>
       </div>
 
       <div class="section">
@@ -1456,6 +1473,49 @@ async function loadAnalytics() {
         ${statCard('Avg Total Tokens', fmtNum(data.followup_avg_total_tokens))}
         ${statCard('Total Follow-Up Cost', data.followup_estimated_cost_usd !== null ? '$' + data.followup_estimated_cost_usd.toFixed(4) : '\u2014', 'accent-info')}
       `;
+    }
+
+    // ── History section ──
+    const historySection = document.getElementById('history-section');
+    const historyGrid = document.getElementById('history-stats-grid');
+    const historyDetails = document.getElementById('history-details');
+    if (data.history_opens > 0 || data.history_followups > 0) {
+      historySection.style.display = 'block';
+      // Adoption = history users / active users.
+      const adoption = data.active_users > 0
+        ? (data.history_users / data.active_users * 100).toFixed(1) + '%'
+        : '\u2014';
+      historyGrid.innerHTML = `
+        ${statCard('History Users', data.history_users)}
+        ${statCard('Adoption', adoption, 'accent-success')}
+        ${statCard('History Opens', fmtNum(data.history_opens))}
+        ${statCard('History Follow-Ups', fmtNum(data.history_followups))}
+        ${statCard('Follow-Up Rate', data.history_followup_rate !== null ? data.history_followup_rate + '%' : '\u2014')}
+        ${statCard('History Clears', fmtNum(data.history_clears))}
+        ${statCard('Avg Depth', data.history_avg_depth !== null ? data.history_avg_depth : '\u2014')}
+        ${statCard('Avg Follow-Ups / Open', data.history_opens > 0 ? (data.history_followups / data.history_opens).toFixed(1) : '\u2014')}
+      `;
+      // Depth distribution and selection source tables.
+      let detailsHtml = '';
+      if (data.history_depth_distribution && Object.keys(data.history_depth_distribution).length > 0) {
+        detailsHtml += '<h3 style="font-size:0.85rem;margin-bottom:0.5rem">Follow-Up Depth Distribution</h3>';
+        detailsHtml += '<table><thead><tr><th>Depth</th><th style="text-align:right">Count</th></tr></thead><tbody>';
+        const depths = Object.entries(data.history_depth_distribution).sort((a, b) => parseInt(a[0]) - parseInt(b[0]));
+        for (const [depth, count] of depths) {
+          detailsHtml += `<tr><td>${depth}</td><td style="text-align:right">${count}</td></tr>`;
+        }
+        detailsHtml += '</tbody></table>';
+      }
+      if (data.history_selection_source && Object.keys(data.history_selection_source).length > 0) {
+        const sourceLabels = { explanation: 'Explanation', followup_question: 'Follow-Up Question', followup_answer: 'Follow-Up Answer' };
+        detailsHtml += '<h3 style="font-size:0.85rem;margin:0.75rem 0 0.5rem">Selection Source</h3>';
+        detailsHtml += '<table><thead><tr><th>Source</th><th style="text-align:right">Count</th></tr></thead><tbody>';
+        for (const [src, count] of Object.entries(data.history_selection_source)) {
+          detailsHtml += `<tr><td>${sourceLabels[src] || src}</td><td style="text-align:right">${count}</td></tr>`;
+        }
+        detailsHtml += '</tbody></table>';
+      }
+      historyDetails.innerHTML = detailsHtml;
     }
 
     // ── Mode analytics table ──
@@ -1957,6 +2017,33 @@ async function loadUserDetail(userId) {
         ${statCard('Avg Total Tokens', fmtNum(fb.avg_total_tokens))}
         ${statCard('Cost', fb.estimated_cost_usd !== null ? '$' + fb.estimated_cost_usd.toFixed(4) : '\u2014', 'accent-info')}
       `;
+    }
+
+    // History breakdown
+    const hb = data.history_breakdown;
+    if (hb && (hb.history_opens > 0 || hb.history_followups > 0)) {
+      document.getElementById('detail-history-section').style.display = 'block';
+      document.getElementById('detail-history').innerHTML = `
+        ${statCard('Opens', hb.history_opens)}
+        ${statCard('Follow-Ups', hb.history_followups)}
+        ${statCard('Follow-Up Rate', hb.history_followup_rate !== null ? hb.history_followup_rate + '%' : '\u2014')}
+        ${statCard('Avg Depth', hb.avg_depth !== null ? hb.avg_depth : '\u2014')}
+        ${statCard('Max Depth', hb.max_depth !== null ? hb.max_depth : '\u2014')}
+        ${statCard('Clears', hb.history_clears)}
+        ${statCard('Last Activity', hb.last_activity ? formatDate(hb.last_activity) : '\u2014')}
+        ${statCard('First Activity', hb.first_activity ? formatDate(hb.first_activity) : '\u2014')}
+      `;
+      // Selection source for this user.
+      let detailHistoryHtml = '';
+      if (hb.selection_source && Object.keys(hb.selection_source).length > 0) {
+        const sourceLabels = { explanation: 'Explanation', followup_question: 'Follow-Up Question', followup_answer: 'Follow-Up Answer' };
+        detailHistoryHtml += '<table><thead><tr><th>Selection Source</th><th style="text-align:right">Count</th></tr></thead><tbody>';
+        for (const [src, count] of Object.entries(hb.selection_source)) {
+          detailHistoryHtml += `<tr><td>${sourceLabels[src] || src}</td><td style="text-align:right">${count}</td></tr>`;
+        }
+        detailHistoryHtml += '</tbody></table>';
+      }
+      document.getElementById('detail-history-details').innerHTML = detailHistoryHtml;
     }
 
     // Token breakdown

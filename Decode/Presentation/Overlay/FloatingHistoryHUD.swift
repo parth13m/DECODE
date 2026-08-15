@@ -451,10 +451,17 @@ private struct HistoryContentView: View {
         pendingFollowUpQuestion = nil
         streamingFollowUpAnswer = ""
 
+        // Capture count before clearing for analytics.
+        let itemCount = historyManager.items.count
+
         // Delegate to HistoryManager (clears in-memory + deletes file).
         historyManager.clear()
 
-        AnalyticsEventService.send(eventType: "history_cleared", mode: nil)
+        AnalyticsEventService.send(
+            eventType: "history_cleared",
+            mode: nil,
+            metadata: ["item_count": itemCount]
+        )
     }
 
     // MARK: - Follow-Up Submission
@@ -607,9 +614,23 @@ private struct HistoryContentView: View {
                     streamingFollowUpAnswer = ""
                     clearResponseSelection()
 
+                    // Analytics: selection_source from the anchored block source,
+                    // followup_depth from the follow-up index (-1 = main explanation).
+                    let selectionSource: String = {
+                        guard let sel = self.anchoredResponseSelection else { return "unknown" }
+                        switch sel.blockID.source {
+                        case .explanation: return "explanation"
+                        case .followUpQuestion: return "followup_question"
+                        case .followUpAnswer: return "followup_answer"
+                        }
+                    }()
                     AnalyticsEventService.send(
                         eventType: "history_followup",
-                        mode: followUpMode
+                        mode: followUpMode,
+                        metadata: [
+                            "selection_source": selectionSource,
+                            "followup_depth": followUpScope < 0 ? 0 : followUpScope + 1,
+                        ]
                     )
                 }
 
