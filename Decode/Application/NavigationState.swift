@@ -20,11 +20,35 @@ final class NavigationState {
     /// `nil` when no entity is selected.
     var activeEntityId: UUID?
 
+    /// The relative path of the currently selected folder in the project explorer.
+    /// `nil` when no folder is selected (a file is selected instead).
+    var selectedFolderPath: String?
+
+    /// Which folders are expanded in the project explorer tree.
+    var expandedFolders: Set<String> = []
+
     /// Select a file within the workspace.
     func selectFile(path: String?) {
         activeFilePath = path
+        selectedFolderPath = nil
         // Clear entity selection when switching files.
         activeEntityId = nil
+    }
+
+    /// Select a folder in the project explorer.
+    func selectFolder(relativePath: String?) {
+        selectedFolderPath = relativePath
+        activeFilePath = nil
+        activeEntityId = nil
+    }
+
+    /// Toggle folder expansion without changing selection.
+    func toggleFolderExpansion(relativePath: String) {
+        if expandedFolders.contains(relativePath) {
+            expandedFolders.remove(relativePath)
+        } else {
+            expandedFolders.insert(relativePath)
+        }
     }
 
     /// Select an entity within the current file.

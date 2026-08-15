@@ -50,9 +50,18 @@ final class AuthService {
 
     /// Check authentication state on app launch.
     ///
-    /// 1. Check Keychain for stored token
-    /// 2. If token exists, validate with backend
-    /// 3. Set state accordingly
+    /// When a locally stored token exists, the UI is made available
+    /// immediately (`.authenticated`) while server validation runs in
+    /// the background. This removes the Railway round-trip (~5s) from
+    /// the user-visible startup critical path.
+    ///
+    /// If no token exists → `.needsInvite` (unchanged).
+    /// If validation fails → state transitions to the correct failure
+    /// state (`.needsInvite`, `.disabled`, `.offline`).
+    ///
+    /// Security: all server requests authenticate via Bearer token in
+    /// HTTP headers, validated server-side on every request. The client
+    /// `AuthState` is a UI gate, not a security boundary.
     func checkAuthOnLaunch() async {
         authLog.notice("[DIAG] checkAuthOnLaunch — START")
 
@@ -66,7 +75,14 @@ final class AuthService {
             return
         }
 
-        authLog.notice("[DIAG] checkAuthOnLaunch — token found, calling validateToken")
+        // Optimistic: a locally stored token means the user was previously
+        // authenticated. Show the application shell immediately while
+        // Railway validation runs. If validation fails, the state will
+        // transition to the appropriate failure state.
+        authLog.notice("[DIAG] checkAuthOnLaunch — token found, setting .authenticated (optimistic)")
+        state = .authenticated
+
+        authLog.notice("[DIAG] checkAuthOnLaunch — calling validateToken (background)")
         await validateToken(token)
         authLog.notice("[DIAG] checkAuthOnLaunch — END, state=\(String(describing: self.state))")
     }

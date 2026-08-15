@@ -173,6 +173,64 @@ final class SessionViewModel {
         activeWorkspace?.indexingCoordinator?.discoveredFiles ?? []
     }
 
+    /// The root path of the active workspace (for computing relative paths).
+    var rootPath: String {
+        activeWorkspace?.workspace.rootPath ?? ""
+    }
+
+    /// The root directory name of the active workspace.
+    var rootName: String {
+        activeWorkspace?.workspace.rootFileName ?? "Project"
+    }
+
+    /// Contents of the selected folder: immediate child folders and files.
+    ///
+    /// Derived from `discoveredFiles` by filtering paths that start with the
+    /// selected folder's prefix and grouping by immediate children. No filesystem
+    /// access — purely a projection of already-indexed data.
+    func folderContents(relativePath: String) -> FolderContents {
+        let rootPrefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+        let folderPrefix = relativePath.isEmpty ? rootPrefix : rootPrefix + relativePath + "/"
+
+        var childFolders: [String: Int] = [:] // folder name → file count
+        var childFiles: [(name: String, fullPath: String)] = []
+
+        for path in discoveredFiles {
+            guard path.hasPrefix(folderPrefix) else { continue }
+            let remainder = String(path.dropFirst(folderPrefix.count))
+            let components = remainder.split(separator: "/").map(String.init)
+            guard !components.isEmpty else { continue }
+
+            if components.count == 1 {
+                childFiles.append((name: components[0], fullPath: path))
+            } else {
+                childFolders[components[0], default: 0] += 1
+            }
+        }
+
+        let folders = childFolders.keys.sorted().map { name in
+            FolderContents.Item(
+                name: name,
+                isDirectory: true,
+                fullPath: nil,
+                relativePath: relativePath.isEmpty ? name : relativePath + "/" + name,
+                fileCount: childFolders[name] ?? 0
+            )
+        }
+
+        let files = childFiles.sorted { $0.name < $1.name }.map { item in
+            FolderContents.Item(
+                name: item.name,
+                isDirectory: false,
+                fullPath: item.fullPath,
+                relativePath: nil,
+                fileCount: 0
+            )
+        }
+
+        return FolderContents(folders: folders, files: files)
+    }
+
     // MARK: - Derived Visualizations (computed from existing data, no new parsing)
 
     /// Entry points: entities that call others but are never called within this file.
@@ -328,5 +386,24 @@ final class SessionViewModel {
         } else {
             workspaceManager.pinWorkspace(id: id)
         }
+    }
+}
+
+// MARK: - Folder Contents Model
+
+/// Immediate children of a folder, derived from the indexed file list.
+struct FolderContents {
+    let folders: [Item]
+    let files: [Item]
+
+    var isEmpty: Bool { folders.isEmpty && files.isEmpty }
+
+    struct Item: Identifiable {
+        let id = UUID()
+        let name: String
+        let isDirectory: Bool
+        let fullPath: String?
+        let relativePath: String?
+        let fileCount: Int
     }
 }

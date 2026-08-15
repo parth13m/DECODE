@@ -207,34 +207,60 @@ final class KnowledgeArtifactStore: KnowledgeArtifactStoreReading {
 
     // MARK: - Persistence
 
-    /// Load artifacts from disk.
+    /// Load artifacts from disk synchronously.
     ///
-    /// Called once during startup. If the file doesn't exist or is
-    /// corrupted, starts with an empty cache (clean slate).
+    /// Retained for tests and fallback. Prefer ``loadFromDiskAsync()``
+    /// during startup to avoid blocking the main actor.
     func loadFromDisk() {
-        guard FileManager.default.fileExists(atPath: persistenceURL.path) else {
+        let loaded = Self.readArtifactsFromDisk(url: persistenceURL)
+        if let loaded {
+            cache = loaded
+            isDirty = false
+        }
+    }
+
+    /// Load artifacts from disk without blocking the main actor.
+    ///
+    /// File I/O and JSON decoding run on a background thread.
+    /// The decoded cache is published back to `@MainActor` on completion.
+    func loadFromDiskAsync() async {
+        let url = persistenceURL
+        let loaded: [KnowledgeCacheKey: KnowledgeArtifactEntry]? = await Task.detached {
+            Self.readArtifactsFromDisk(url: url)
+        }.value
+
+        if let loaded {
+            cache = loaded
+            isDirty = false
+        }
+    }
+
+    /// Pure file I/O: reads and decodes the artifact JSON file.
+    ///
+    /// `nonisolated static` so it can run from any isolation context.
+    /// Returns `nil` if the file does not exist or is corrupted.
+    nonisolated private static func readArtifactsFromDisk(
+        url: URL
+    ) -> [KnowledgeCacheKey: KnowledgeArtifactEntry]? {
+        guard FileManager.default.fileExists(atPath: url.path) else {
             #if DEBUG
             print("[KnowledgeArtifactStore] No artifact file found — starting fresh")
             #endif
-            return
+            return nil
         }
 
         do {
-            let data = try Data(contentsOf: persistenceURL)
+            let data = try Data(contentsOf: url)
             let entries = try JSONDecoder().decode([KnowledgeArtifactEntry].self, from: data)
-            cache = Dictionary(
-                uniqueKeysWithValues: entries.map { ($0.key, $0) }
-            )
-            isDirty = false
-
             #if DEBUG
             print("[KnowledgeArtifactStore] Loaded \(entries.count) artifacts from disk")
             #endif
+            return Dictionary(uniqueKeysWithValues: entries.map { ($0.key, $0) })
         } catch {
             #if DEBUG
             print("[KnowledgeArtifactStore] Failed to load artifacts: \(error) — starting fresh")
             #endif
-            cache = [:]
+            return nil
         }
     }
 

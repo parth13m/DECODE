@@ -138,19 +138,27 @@ struct SessionView: View {
 
     private var mainContent: some View {
         HSplitView {
-            sessionListPanel
-                .frame(minWidth: 150, idealWidth: 180, maxWidth: 240)
-
             if viewModel.isDirectoryWorkspace {
+                // Directory workspace: 3-pane IDE-like layout
                 projectExplorerPanel
-                    .frame(minWidth: 180, idealWidth: 220, maxWidth: 300)
+                    .frame(minWidth: 200, idealWidth: 250, maxWidth: 320)
+
+                contextualContentPanel
+                    .frame(minWidth: 320, idealWidth: 480)
+
+                detailPanel
+                    .frame(minWidth: 280, idealWidth: 380)
+            } else {
+                // Single-file workspace: 3-pane with sessions list
+                sessionListPanel
+                    .frame(minWidth: 150, idealWidth: 180, maxWidth: 240)
+
+                knowledgeContentPanel
+                    .frame(minWidth: 320, idealWidth: 440)
+
+                detailPanel
+                    .frame(minWidth: 280, idealWidth: 380)
             }
-
-            knowledgeContentPanel
-                .frame(minWidth: 320, idealWidth: 440)
-
-            detailPanel
-                .frame(minWidth: 280, idealWidth: 380)
         }
     }
 
@@ -159,32 +167,277 @@ struct SessionView: View {
     @ViewBuilder
     private var projectExplorerPanel: some View {
         VStack(alignment: .leading, spacing: 0) {
+            // Workspace switcher (compact)
+            if viewModel.allWorkspaces.count > 1 {
+                workspaceSwitcher
+                Divider().overlay(cardBorder)
+            }
+
+            // Project explorer header
             HStack {
                 Image(systemName: "folder.fill")
                     .font(.system(size: 12))
                     .foregroundStyle(accentOrange)
-                Text("Project Files")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(textPrimary)
+                Text("Explorer")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(textSecondary)
+                    .textCase(.uppercase)
                 Spacer()
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 10)
+            .padding(.vertical, 8)
 
             Divider().overlay(cardBorder)
 
             if let workspace = viewModel.activeWorkspace {
                 ProjectExplorerView(
                     rootPath: workspace.workspace.rootPath,
+                    rootName: viewModel.rootName,
                     filePaths: viewModel.discoveredFiles,
                     activeFilePath: viewModel.navigationState.activeFilePath,
+                    selectedFolderPath: viewModel.navigationState.selectedFolderPath,
+                    expandedFolders: viewModel.navigationState.expandedFolders,
                     onSelectFile: { path in
                         viewModel.navigationState.selectFile(path: path)
+                    },
+                    onSelectFolder: { relativePath in
+                        viewModel.navigationState.selectFolder(relativePath: relativePath)
+                    },
+                    onToggleFolder: { relativePath in
+                        viewModel.navigationState.toggleFolderExpansion(relativePath: relativePath)
                     }
                 )
             }
         }
         .background(warmBackground.opacity(0.95))
+    }
+
+    // MARK: - Workspace Switcher (compact, for multi-workspace)
+
+    private var workspaceSwitcher: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 4) {
+                ForEach(viewModel.allWorkspaces) { managed in
+                    let isActive = viewModel.activeWorkspaceId == managed.workspace.id
+
+                    Button {
+                        viewModel.switchToWorkspace(id: managed.workspace.id)
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: managed.workspace.kind == .directory ? "folder.fill" : "doc.fill")
+                                .font(.system(size: 9))
+                            Text(managed.workspace.rootFileName)
+                                .font(.system(size: 11, weight: isActive ? .semibold : .medium))
+                                .lineLimit(1)
+                        }
+                        .foregroundStyle(isActive ? accentOrange : textSecondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(
+                            RoundedRectangle(cornerRadius: 5)
+                                .fill(isActive ? accentOrange.opacity(0.1) : Color.clear)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+        }
+    }
+
+    // MARK: - Contextual Content Panel (Pane 2)
+
+    @ViewBuilder
+    private var contextualContentPanel: some View {
+        if viewModel.navigationState.selectedFolderPath != nil {
+            folderContentsPanel
+        } else if viewModel.navigationState.activeFilePath != nil {
+            knowledgeContentPanel
+        } else {
+            // No selection — prompt user
+            VStack(spacing: 12) {
+                Image(systemName: "sidebar.left")
+                    .font(.system(size: 28, weight: .light))
+                    .foregroundStyle(textSecondary.opacity(0.4))
+                Text("Select a file or folder in the explorer")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(textSecondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(warmBackground)
+        }
+    }
+
+    // MARK: - Folder Contents Panel
+
+    private var folderContentsPanel: some View {
+        let relativePath = viewModel.navigationState.selectedFolderPath ?? ""
+        let folderName = relativePath.isEmpty
+            ? viewModel.rootName
+            : (relativePath as NSString).lastPathComponent
+        let contents = viewModel.folderContents(relativePath: relativePath)
+
+        return VStack(alignment: .leading, spacing: 0) {
+            // Breadcrumb header
+            folderBreadcrumb(relativePath: relativePath)
+
+            Divider().overlay(cardBorder)
+
+            if contents.isEmpty {
+                VStack(spacing: 10) {
+                    Image(systemName: "folder")
+                        .font(.system(size: 24, weight: .light))
+                        .foregroundStyle(textSecondary.opacity(0.4))
+                    Text("This folder has no indexed files")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(textSecondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        // Folders first
+                        ForEach(contents.folders) { item in
+                            folderContentRow(item: item)
+                            Divider().overlay(cardBorder.opacity(0.3)).padding(.leading, 40)
+                        }
+
+                        // Then files
+                        ForEach(contents.files) { item in
+                            fileContentRow(item: item)
+                            Divider().overlay(cardBorder.opacity(0.3)).padding(.leading, 40)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+        }
+        .background(warmBackground)
+    }
+
+    // MARK: - Folder Breadcrumb
+
+    private func folderBreadcrumb(relativePath: String) -> some View {
+        let components: [String]
+        if relativePath.isEmpty {
+            components = [viewModel.rootName]
+        } else {
+            components = [viewModel.rootName] + relativePath.split(separator: "/").map(String.init)
+        }
+
+        return ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 4) {
+                ForEach(Array(components.enumerated()), id: \.offset) { index, component in
+                    if index > 0 {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 8, weight: .medium))
+                            .foregroundStyle(textSecondary.opacity(0.5))
+                    }
+
+                    let targetPath: String = {
+                        if index == 0 { return "" }
+                        let pathComponents = relativePath.split(separator: "/").map(String.init)
+                        return pathComponents.prefix(index).joined(separator: "/")
+                    }()
+
+                    let isLast = index == components.count - 1
+
+                    Button {
+                        viewModel.navigationState.selectFolder(relativePath: targetPath)
+                    } label: {
+                        HStack(spacing: 3) {
+                            if index == 0 {
+                                Image(systemName: "folder.fill")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(accentOrange.opacity(0.7))
+                            }
+                            Text(component)
+                                .font(.system(size: 12, weight: isLast ? .semibold : .medium))
+                                .foregroundStyle(isLast ? textPrimary : accentOrange)
+                                .lineLimit(1)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isLast)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+        }
+    }
+
+    // MARK: - Folder/File Content Rows
+
+    private func folderContentRow(item: FolderContents.Item) -> some View {
+        Button {
+            if let rp = item.relativePath {
+                viewModel.navigationState.selectFolder(relativePath: rp)
+                // Also expand in tree
+                if !viewModel.navigationState.expandedFolders.contains(rp) {
+                    viewModel.navigationState.toggleFolderExpansion(relativePath: rp)
+                }
+            }
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "folder.fill")
+                    .font(.system(size: 16))
+                    .foregroundStyle(accentOrange.opacity(0.7))
+                    .frame(width: 24)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.name)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(textPrimary)
+                        .lineLimit(1)
+                    Text("\(item.fileCount) file\(item.fileCount == 1 ? "" : "s")")
+                        .font(.system(size: 11))
+                        .foregroundStyle(textSecondary)
+                }
+
+                Spacer()
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(textSecondary.opacity(0.4))
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Folder: \(item.name), \(item.fileCount) files")
+    }
+
+    private func fileContentRow(item: FolderContents.Item) -> some View {
+        let isActive = item.fullPath == viewModel.navigationState.activeFilePath
+
+        return Button {
+            if let path = item.fullPath {
+                viewModel.navigationState.selectFile(path: path)
+            }
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: ProjectExplorerView.iconForExtension(item.name))
+                    .font(.system(size: 14))
+                    .foregroundStyle(isActive ? accentOrange : textSecondary)
+                    .frame(width: 24)
+
+                Text(item.name)
+                    .font(.system(size: 13, weight: isActive ? .semibold : .regular))
+                    .foregroundStyle(isActive ? accentOrange : textPrimary)
+                    .lineLimit(1)
+
+                Spacer()
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(isActive ? accentOrange.opacity(0.06) : Color.clear)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("File: \(item.name)")
+        .accessibilityAddTraits(isActive ? .isSelected : [])
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

@@ -184,6 +184,8 @@ final class AppDependencies {
         keychain: KeychainService = KeychainService(),
         networkClient: AINetworkClient = AINetworkClient()
     ) {
+        let initStart = ContinuousClock.now
+
         self.keychain = keychain
         self.networkClient = networkClient
         self.authService = AuthService(keychain: keychain)
@@ -212,8 +214,10 @@ final class AppDependencies {
         self.understandingSystem = UnderstandingSystem(snapshotDirectory: snapshotDir)
         self.pipelineQueryService = PipelineQueryService(understandingSystem: understandingSystem)
 
+        let initDuration = ContinuousClock.now - initStart
+        startupLog.notice("[DIAG] AppDependencies.init — \(initDuration)")
         #if DEBUG
-        print("[DEBUG Startup] AppDependencies.init complete")
+        print("[DEBUG Startup] AppDependencies.init complete in \(initDuration)")
         #endif
     }
 
@@ -231,6 +235,8 @@ final class AppDependencies {
         guard !hasPerformedDeferredStartup else { return }
         hasPerformedDeferredStartup = true
 
+        let deferredStartTime = ContinuousClock.now
+
         startupLog.notice("[DIAG] performDeferredStartup — BEGIN")
 
         #if DEBUG
@@ -242,8 +248,10 @@ final class AppDependencies {
         // token is available for the provider.
         Task { [weak self] in
             startupLog.notice("[DIAG] auth Task — START (inside Task)")
+            let authStart = ContinuousClock.now
             await self?.authService.checkAuthOnLaunch()
-            startupLog.notice("[DIAG] auth Task — checkAuthOnLaunch returned, rebuilding provider")
+            let authDuration = ContinuousClock.now - authStart
+            startupLog.notice("[DIAG] auth Task — checkAuthOnLaunch returned in \(authDuration), rebuilding provider")
             self?.rebuildAIProvider()
 
             // Request Accessibility permission only after authentication succeeds.
@@ -258,12 +266,16 @@ final class AppDependencies {
         }
 
         // 0b. Initialize database.
+        let dbStart = ContinuousClock.now
         do {
             database = try DatabaseService()
+            let dbDuration = ContinuousClock.now - dbStart
+            startupLog.notice("[DIAG] DatabaseService init — \(dbDuration)")
             #if DEBUG
-            print("[DEBUG Startup] Database initialized successfully")
+            print("[DEBUG Startup] Database initialized in \(dbDuration)")
             #endif
         } catch {
+            startupLog.error("[DIAG] DatabaseService init FAILED — \(error)")
             #if DEBUG
             print("[DEBUG Startup] Database initialization failed: \(error)")
             #endif
@@ -285,11 +297,25 @@ final class AppDependencies {
         // 0b4. Wire feedback manager to HUD.
         hud.viewModel.feedbackManager = feedbackManager
 
-        // 0c. Restore virtual session state.
-        virtualSessionManager.restore()
+        // 0c. Restore virtual session state (non-blocking).
+        // File I/O runs on a background thread; session logic runs on
+        // @MainActor after the read completes.
+        Task { [weak self] in
+            let vsStart = ContinuousClock.now
+            await self?.virtualSessionManager.restoreAsync()
+            let vsDuration = ContinuousClock.now - vsStart
+            startupLog.notice("[DIAG] VirtualSession restore — \(vsDuration)")
+        }
 
-        // 0d. Restore history and wire recording callbacks.
-        historyManager.restore()
+        // 0d. Restore history (non-blocking) and wire recording callbacks.
+        // File I/O runs on a background thread; loaded items published
+        // on @MainActor only if no mutation occurred during the read.
+        Task { [weak self] in
+            let histStart = ContinuousClock.now
+            await self?.historyManager.restoreAsync()
+            let histDuration = ContinuousClock.now - histStart
+            startupLog.notice("[DIAG] History restore — \(histDuration)")
+        }
         wireHistoryRecording()
 
         // 0e. Clear history on sign-out (privacy).
@@ -299,8 +325,9 @@ final class AppDependencies {
             self?.floatingHistoryHUD?.hide()
         }
 
-        // 1. Build AI provider (Keychain access).
-        rebuildAIProvider()
+        // 1. AI provider is built by the auth Task (line 255) after
+        // checkAuthOnLaunch() returns — no need to build it eagerly here.
+        // All consumers access aiProvider lazily via closures.
 
         // 1a. Wire AI provider into virtual session manager for compression.
         // Routes through the backend gateway; the gateway uses the mode
@@ -336,8 +363,17 @@ final class AppDependencies {
 
         // 1d. Knowledge Generation Runtime.
         let artifactStore = KnowledgeArtifactStore()
-        artifactStore.loadFromDisk()
         self.knowledgeArtifactStore = artifactStore
+
+        // Load persisted artifacts in background. If workspace restoration
+        // queries the store before loading completes, the empty cache returns
+        // nil — the KGR will schedule regeneration (wasteful but correct).
+        Task {
+            let artifactStart = ContinuousClock.now
+            await artifactStore.loadFromDiskAsync()
+            let artifactDuration = ContinuousClock.now - artifactStart
+            startupLog.notice("[DIAG] KnowledgeArtifactStore load — \(artifactDuration)")
+        }
 
         // All KGR jobs route through the Decode Gateway. The backend uses
         // the mode (e.g. "enrichment") to select the appropriate provider
@@ -443,7 +479,10 @@ final class AppDependencies {
 
         // Restore workspaces from database.
         Task { [weak wsManager] in
+            let wsRestoreStart = ContinuousClock.now
             await wsManager?.restoreWorkspaces()
+            let wsRestoreDuration = ContinuousClock.now - wsRestoreStart
+            startupLog.notice("[DIAG] Workspace restore — \(wsRestoreDuration)")
         }
 
         // 2c. Session Dock: floating panel for workspace visibility.
@@ -595,6 +634,7 @@ final class AppDependencies {
         let followUpEngine = FollowUpReasoningEngine(aiProvider: aiProviderClosure)
 
         understandingStartupTask = Task.detached { [understandingSystem] in
+            let pipelineStart = ContinuousClock.now
             await understandingSystem.start()
 
             // Register reasoning engines (DDS-009 PC-2).
@@ -708,8 +748,10 @@ final class AppDependencies {
                 #endif
             }
 
+            let pipelineDuration = ContinuousClock.now - pipelineStart
+            startupLog.notice("[DIAG] UnderstandingSystem startup — \(pipelineDuration)")
             #if DEBUG
-            print("[DEBUG Startup] UnderstandingSystem started, engines + frontends + strategies registered")
+            print("[DEBUG Startup] UnderstandingSystem started in \(pipelineDuration), engines + frontends + strategies registered")
             #endif
         }
 
@@ -748,8 +790,10 @@ final class AppDependencies {
         ssCoordinator.startListening(hotkeyStream: ssStream)
         sqCoordinator.startListening(hotkeyStream: sqStream)
 
+        let deferredDuration = ContinuousClock.now - deferredStartTime
+        startupLog.notice("[DIAG] performDeferredStartup synchronous portion — \(deferredDuration)")
         #if DEBUG
-        print("[DEBUG Startup] performDeferredStartup — COMPLETE — AI=\(isConfigured), AX=\(selectionCapture.hasAccessibilityPermission()), selectionCoordinator=\(selectionCoordinator != nil), screenshotCoordinator=\(screenshotCoordinator != nil), sessionQuestionCoordinator=\(sessionQuestionCoordinator != nil)")
+        print("[DEBUG Startup] performDeferredStartup — COMPLETE in \(deferredDuration) — AI=\(isConfigured), AX=\(selectionCapture.hasAccessibilityPermission()), selectionCoordinator=\(selectionCoordinator != nil), screenshotCoordinator=\(screenshotCoordinator != nil), sessionQuestionCoordinator=\(sessionQuestionCoordinator != nil)")
         #endif
     }
 
@@ -843,7 +887,7 @@ final class AppDependencies {
     private func wireHistoryRecording() {
         let historyMgr = historyManager
 
-        hud.viewModel.onExplanationRecorded = { [weak self] mode, originalCode, explanation, sourceAppName, fileName, language, explanationProfile in
+        hud.viewModel.onExplanationRecorded = { [weak self] mode, originalCode, explanation, sourceAppName, fileName, language, explanationProfile, customQuestion in
             guard let self else { return }
             let id = historyMgr.recordExplanation(
                 mode: mode,
@@ -852,7 +896,8 @@ final class AppDependencies {
                 sourceAppName: sourceAppName,
                 fileName: fileName,
                 language: language,
-                explanationProfile: explanationProfile
+                explanationProfile: explanationProfile,
+                customQuestion: customQuestion
             )
             self.activeHistoryRequestId = id
         }

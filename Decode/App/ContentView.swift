@@ -4,6 +4,7 @@ import SwiftUI
 private enum AppPage: Hashable {
     case home
     case notes
+    case sessionMode
     case profile
 }
 
@@ -14,7 +15,6 @@ private enum AppPage: Hashable {
 struct ContentView: View {
 
     @Environment(AppDependencies.self) private var dependencies
-    @State private var showingSession = false
     @State private var selectedPage: AppPage = .home
     @State private var showingOnboarding = !OnboardingState.hasCompleted
     @State private var showingMemoryInspector = false
@@ -81,6 +81,7 @@ struct ContentView: View {
                 VStack(spacing: 4) {
                     sidebarItem("Home", icon: "house", page: .home)
                     sidebarItem("Notes", icon: "bookmark", page: .notes)
+                    sidebarItem("Session Mode", icon: "doc.text.magnifyingglass", page: .sessionMode)
                     sidebarItem("Profile", icon: "person.crop.circle", page: .profile)
                 }
                 .padding(.horizontal, 10)
@@ -101,18 +102,16 @@ struct ContentView: View {
                 case .notes:
                     NotesView()
                         .environment(dependencies)
+                case .sessionMode:
+                    if let vm = dependencies.sessionViewModel {
+                        SessionView(viewModel: vm)
+                    }
                 case .profile:
                     ProfileView()
                         .environment(dependencies)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-        .sheet(isPresented: $showingSession) {
-            if let vm = dependencies.sessionViewModel {
-                SessionView(viewModel: vm)
-                    .frame(minWidth: 900, minHeight: 600)
-            }
         }
         .sheet(isPresented: $showingOnboarding) {
             OnboardingView(onOpenSettings: {
@@ -126,7 +125,7 @@ struct ContentView: View {
         }
         .onChange(of: dependencies.sessionViewModel?.shouldPresentSession) { _, newValue in
             if newValue == true {
-                showingSession = true
+                selectedPage = .sessionMode
                 dependencies.sessionViewModel?.shouldPresentSession = false
             }
         }
@@ -303,18 +302,6 @@ struct ContentView: View {
             // Permission status
             PermissionStatusView()
                 .padding(.horizontal, 60)
-
-            Spacer().frame(height: 20)
-
-            // Session Mode entry point
-            Button {
-                showingSession = true
-            } label: {
-                Label("Open Session Mode", systemImage: "doc.text.magnifyingglass")
-                    .font(.system(size: 13, weight: .medium))
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(accentOrange)
 
             Spacer()
         }

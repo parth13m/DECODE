@@ -4,66 +4,139 @@ import SwiftUI
 ///
 /// Displays the file hierarchy grouped by subdirectory. Selecting a file
 /// updates the ``NavigationState`` to show that file's intelligence in the
-/// center column of the Knowledge Inspector.
+/// center column of the Knowledge Inspector. Selecting a folder shows its
+/// contents in the contextual pane.
 struct ProjectExplorerView: View {
 
     let rootPath: String
+    let rootName: String
     let filePaths: [String]
     let activeFilePath: String?
+    let selectedFolderPath: String?
+    let expandedFolders: Set<String>
     let onSelectFile: (String) -> Void
+    let onSelectFolder: (String) -> Void
+    let onToggleFolder: (String) -> Void
 
     // MARK: - WhisperFlow palette
 
     private let accentOrange = Color(red: 0.91, green: 0.47, blue: 0.18)
     private let textPrimary = Color(red: 0.12, green: 0.12, blue: 0.12)
     private let textSecondary = Color(red: 0.50, green: 0.49, blue: 0.47)
+    private let cardBorder = Color(red: 0.91, green: 0.90, blue: 0.88)
 
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 let tree = Self.buildTree(rootPath: rootPath, filePaths: filePaths)
+
+                // Root project row
+                rootRow
+
                 ForEach(tree) { node in
-                    fileTreeRow(node: node, depth: 0)
+                    fileTreeRow(node: node, depth: 1, parentRelativePath: "")
                 }
             }
-            .padding(.vertical, 8)
+            .padding(.vertical, 4)
         }
+    }
+
+    // MARK: - Root Row
+
+    private var rootRow: some View {
+        let isSelected = selectedFolderPath == ""
+        return Button {
+            onSelectFolder("")
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "folder.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(isSelected ? accentOrange : accentOrange.opacity(0.7))
+                Text(rootName)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(isSelected ? accentOrange : textPrimary)
+                    .lineLimit(1)
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(isSelected ? accentOrange.opacity(0.1) : Color.clear)
+            .cornerRadius(4)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Project root: \(rootName)")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     // MARK: - Row Rendering
 
     @ViewBuilder
-    private func fileTreeRow(node: FileTreeNode, depth: Int) -> some View {
+    private func fileTreeRow(node: FileTreeNode, depth: Int, parentRelativePath: String) -> some View {
         if node.isDirectory {
-            directoryRow(node: node, depth: depth)
+            directoryRow(node: node, depth: depth, parentRelativePath: parentRelativePath)
         } else {
             fileRow(node: node, depth: depth)
         }
     }
 
-    private func directoryRow(node: FileTreeNode, depth: Int) -> some View {
-        DisclosureGroup {
-            ForEach(node.children) { child in
-                fileTreeRow(node: child, depth: depth + 1)
-            }
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "folder.fill")
-                    .font(.system(size: 12))
-                    .foregroundStyle(accentOrange.opacity(0.7))
-                Text(node.name)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(textPrimary)
-                    .lineLimit(1)
-                Spacer()
-                Text("\(node.fileCount)")
-                    .font(.system(size: 10))
-                    .foregroundStyle(textSecondary)
+    private func directoryRow(node: FileTreeNode, depth: Int, parentRelativePath: String) -> some View {
+        let relativePath = parentRelativePath.isEmpty ? node.name : parentRelativePath + "/" + node.name
+        let isExpanded = expandedFolders.contains(relativePath)
+        let isSelected = selectedFolderPath == relativePath
+
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 0) {
+                // Disclosure chevron — toggles expansion only
+                Button {
+                    onToggleFolder(relativePath)
+                } label: {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(textSecondary)
+                        .frame(width: 16, height: 16)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(isExpanded ? "Collapse \(node.name)" : "Expand \(node.name)")
+
+                // Folder label — selects folder
+                Button {
+                    onSelectFolder(relativePath)
+                    if !isExpanded {
+                        onToggleFolder(relativePath)
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: isExpanded ? "folder.fill" : "folder")
+                            .font(.system(size: 12))
+                            .foregroundStyle(isSelected ? accentOrange : accentOrange.opacity(0.7))
+                        Text(node.name)
+                            .font(.system(size: 12, weight: isSelected ? .semibold : .medium))
+                            .foregroundStyle(isSelected ? accentOrange : textPrimary)
+                            .lineLimit(1)
+                        Spacer()
+                        Text("\(node.fileCount)")
+                            .font(.system(size: 10))
+                            .foregroundStyle(textSecondary.opacity(0.6))
+                    }
+                }
+                .buttonStyle(.plain)
             }
             .padding(.leading, CGFloat(depth) * 16)
+            .padding(.trailing, 12)
+            .padding(.vertical, 4)
+            .background(isSelected ? accentOrange.opacity(0.1) : Color.clear)
+            .cornerRadius(4)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Folder: \(node.name), \(node.fileCount) files")
+            .accessibilityAddTraits(isSelected ? .isSelected : [])
+
+            // Children — shown when expanded
+            if isExpanded {
+                ForEach(node.children) { child in
+                    fileTreeRow(node: child, depth: depth + 1, parentRelativePath: relativePath)
+                }
+            }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 2)
     }
 
     private func fileRow(node: FileTreeNode, depth: Int) -> some View {
@@ -83,18 +156,20 @@ struct ProjectExplorerView: View {
                     .lineLimit(1)
                 Spacer()
             }
-            .padding(.leading, CGFloat(depth) * 16)
-            .padding(.horizontal, 12)
+            .padding(.leading, CGFloat(depth) * 16 + 16) // Extra 16 for chevron alignment
+            .padding(.trailing, 12)
             .padding(.vertical, 4)
             .background(isActive ? accentOrange.opacity(0.08) : Color.clear)
             .cornerRadius(4)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("File: \(node.name)")
+        .accessibilityAddTraits(isActive ? .isSelected : [])
     }
 
     // MARK: - File Icon
 
-    private static func iconForExtension(_ fileName: String) -> String {
+    static func iconForExtension(_ fileName: String) -> String {
         let ext = (fileName as NSString).pathExtension.lowercased()
         switch ext {
         case "swift": return "swift"
@@ -106,6 +181,8 @@ struct ProjectExplorerView: View {
         case "java": return "cup.and.saucer"
         case "c", "cpp", "h", "hpp", "cxx", "cc", "hxx": return "doc.text"
         case "cs": return "doc.text"
+        case "json", "yaml", "yml", "toml": return "doc.text"
+        case "md", "txt": return "doc.plaintext"
         default: return "doc"
         }
     }

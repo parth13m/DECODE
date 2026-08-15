@@ -479,6 +479,47 @@ final class VirtualSessionManager {
         #endif
     }
 
+    /// Restore session from disk without blocking the main actor.
+    ///
+    /// File I/O runs on a background thread. Session logic (expiration,
+    /// fresh start) runs on `@MainActor` after the read completes.
+    /// If `activeSession` was set by another code path before the read
+    /// finishes, the loaded data is discarded to avoid overwriting
+    /// newer state.
+    func restoreAsync() async {
+        guard isEnabled else {
+            deletePersisted()
+            activeSession = nil
+            return
+        }
+
+        let url = persistenceURL
+        let loaded: VirtualSession? = await Task.detached {
+            Self.load(from: url)
+        }.value
+
+        // Guard against stale-state overwrite: if something set
+        // activeSession while we were reading from disk, don't clobber it.
+        guard activeSession == nil else { return }
+
+        guard let loaded else {
+            startSession()
+            return
+        }
+
+        activeSession = loaded
+
+        if expireIfNeeded() {
+            startSession()
+        }
+
+        #if DEBUG
+        if let session = activeSession {
+            print("[VirtualSession] Restored session (async): \(session.id) (\(session.totalInsightCount) insights, \(session.investigations.count) investigations)")
+        }
+        #endif
+    }
+
     /// Saves the active session to disk.
     ///
     /// Uses atomic writes to prevent partial writes on crash or power loss.
@@ -1382,7 +1423,10 @@ final class VirtualSessionManager {
     }
 
     /// Loads a VirtualSession from the given URL.
-    static func load(from url: URL) -> VirtualSession? {
+    ///
+    /// `nonisolated static` so it can run from any isolation context
+    /// (e.g., `Task.detached` during startup).
+    nonisolated static func load(from url: URL) -> VirtualSession? {
         guard FileManager.default.fileExists(atPath: url.path) else {
             return nil
         }

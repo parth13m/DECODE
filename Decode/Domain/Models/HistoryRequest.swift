@@ -40,6 +40,11 @@ struct HistoryRequest: Identifiable, Codable, Sendable, Equatable {
     let language: String?
     let explanationProfile: String?
 
+    /// The user's custom question / personalized query, if one was typed
+    /// during intent collection. `nil` when the user pressed Enter/Space
+    /// for a default explanation (no custom question).
+    let customQuestion: String?
+
     // Follow-up conversation (ordered by creation time)
     var followUps: [HistoryFollowUp]
 

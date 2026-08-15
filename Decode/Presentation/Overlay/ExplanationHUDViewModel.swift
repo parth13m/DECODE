@@ -23,6 +23,7 @@ enum HUDDisplayState: Sendable {
 /// since ExplanationTagParser assigns IDs 0,1,2... independently per call.
 enum SelectableBlockSource: Hashable, Sendable {
     case explanation
+    case followUpQuestion
     case followUpAnswer
 }
 
@@ -38,8 +39,19 @@ struct ResponseSelection: Sendable {
     let blockID: SelectableBlockID
     /// The selected text, truncated to AILimits.maxResponseSelectionCharacters.
     let text: String
-    /// Whether the response was a follow-up answer (affects augmented question wording).
-    var isFollowUp: Bool { blockID.source == .followUpAnswer }
+    /// Whether the selection came from a follow-up (question or answer).
+    var isFollowUp: Bool {
+        blockID.source == .followUpAnswer || blockID.source == .followUpQuestion
+    }
+
+    /// Human-readable description of the selection source for augmented question wording.
+    var sourceDescription: String {
+        switch blockID.source {
+        case .explanation: return "your previous response"
+        case .followUpQuestion: return "your follow-up question"
+        case .followUpAnswer: return "your follow-up answer"
+        }
+    }
 }
 
 /// ViewModel for the floating explanation HUD.
@@ -393,7 +405,8 @@ final class ExplanationHUDViewModel {
     var onExplanationRecorded: ((@MainActor (
         _ mode: String, _ originalCode: String, _ explanation: String,
         _ sourceAppName: String?, _ fileName: String?,
-        _ language: String?, _ explanationProfile: String?
+        _ language: String?, _ explanationProfile: String?,
+        _ customQuestion: String?
     ) -> Void))?
 
     /// Callback invoked when a follow-up completes successfully.
@@ -640,6 +653,7 @@ final class ExplanationHUDViewModel {
                     // Record in History.
                     let historyCode = followUpContext?.originalCode
                         ?? followUpContext?.sourceContent ?? ""
+                    let trimmedIntent = intentText.trimmingCharacters(in: .whitespacesAndNewlines)
                     onExplanationRecorded?(
                         modeName ?? "unknown",
                         historyCode,
@@ -647,7 +661,8 @@ final class ExplanationHUDViewModel {
                         sourceAppName,
                         sessionFileName,
                         followUpContext?.language,
-                        explanationProfile
+                        explanationProfile,
+                        trimmedIntent.isEmpty ? nil : trimmedIntent
                     )
 
                     // Trigger feedback scheduling for explanations.
@@ -681,10 +696,7 @@ final class ExplanationHUDViewModel {
         #if DEBUG
         print("[AnchoredFollowUp] augmented question includes anchored selection selectionLength=\(selection.text.count) source=\(selection.blockID.source)")
         #endif
-        let source = selection.isFollowUp
-            ? "your follow-up answer"
-            : "your previous response"
-        return "Regarding this specific part of \(source): \"\(selection.text)\"\n\n\(question)"
+        return "Regarding this specific part of \(selection.sourceDescription): \"\(selection.text)\"\n\n\(question)"
     }
 
     /// Ask a follow-up question using the context from the original request.

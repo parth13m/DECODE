@@ -33,6 +33,9 @@ final class FloatingExplanationHUD {
     private var panel: NSPanel?
     private var localKeyMonitor: Any?
     private var globalKeyMonitor: Any?
+    /// The user's saved frame, loaded once and used to restore position/size
+    /// after the intent bar's temporary compact layout.
+    private var restorationFrame: NSRect?
 
     // MARK: - Public Interface
 
@@ -50,7 +53,7 @@ final class FloatingExplanationHUD {
         print("[DEBUG HUD] showStream called, sourceApp=\(sourceApp ?? "nil")")
         #endif
         viewModel.showStream(stream, sourceApp: sourceApp, followUpContext: followUpContext, onComplete: onComplete)
-        panel?.setContentSize(NSSize(width: Self.panelWidth, height: Self.panelHeight))
+        restoreFrameIfNeeded()
         ensurePanelVisible()
     }
 
@@ -64,7 +67,7 @@ final class FloatingExplanationHUD {
         print("[DEBUG HUD] showLoading called, sourceApp=\(sourceApp ?? "nil"), mode=\(mode ?? "nil")")
         #endif
         viewModel.showLoading(sourceApp: sourceApp, mode: mode, sessionFile: sessionFile, explanationProfile: explanationProfile, executionContext: executionContext)
-        panel?.setContentSize(NSSize(width: Self.panelWidth, height: Self.panelHeight))
+        restoreFrameIfNeeded()
         ensurePanelVisible()
     }
 
@@ -74,7 +77,7 @@ final class FloatingExplanationHUD {
         print("[DEBUG HUD] showError called — \(message)")
         #endif
         viewModel.showError(message)
-        panel?.setContentSize(NSSize(width: Self.panelWidth, height: Self.panelHeight))
+        restoreFrameIfNeeded()
         ensurePanelVisible()
     }
 
@@ -103,9 +106,24 @@ final class FloatingExplanationHUD {
         )
         viewModel.onEditingStarted = onEditingStarted
         // Step 2: Show the panel at compact intent size.
+        // Load the user's saved frame BEFORE showing, so we can position the
+        // intent bar at the saved location and restore the full size later.
+        let savedFrame = HUDFramePersistence.loadFrame(for: .explanation)
+        restorationFrame = savedFrame
         ensurePanelVisible()
-        panel?.setContentSize(NSSize(width: Self.panelWidth, height: Self.intentPanelHeight))
-        positionPanel(panel!)
+        // Apply compact intent height at the saved position, or center if no saved frame.
+        if let saved = savedFrame, let panel {
+            let intentFrame = NSRect(
+                x: saved.origin.x,
+                y: saved.origin.y + saved.size.height - Self.intentPanelHeight,
+                width: saved.size.width,
+                height: Self.intentPanelHeight
+            )
+            panel.setFrame(intentFrame, display: true)
+        } else if let panel {
+            panel.setContentSize(NSSize(width: Self.panelWidth, height: Self.intentPanelHeight))
+            positionPanel(panel)
+        }
         // Step 3: Make the panel key so keyboard events route here.
         panel?.makeKey()
         // Step 4: Install key event monitors so keyboard events work
@@ -118,8 +136,9 @@ final class FloatingExplanationHUD {
         let result = await viewModel.awaitIntentSubmission()
         // Clean up the monitor.
         removeIntentKeyMonitor()
-        // If cancelled, hide the panel.
+        // If cancelled, hide the panel without saving the intent bar's compact frame.
         if result == nil {
+            restorationFrame = nil
             panel?.orderOut(nil)
         }
         return result
@@ -128,11 +147,48 @@ final class FloatingExplanationHUD {
     /// Dismiss the HUD and cancel any in-flight stream.
     func dismiss() {
         removeIntentKeyMonitor()
+        // Save the user's current frame before hiding. If transitioning from
+        // intent bar (compact size), save the restoration frame instead —
+        // the compact intent frame is not the user's actual preference.
+        if let panel, panel.isVisible {
+            let frameToSave = restorationFrame ?? panel.frame
+            HUDFramePersistence.saveFrame(frameToSave, for: .explanation)
+        }
+        restorationFrame = nil
         viewModel.dismiss()
         panel?.orderOut(nil)
     }
 
     // MARK: - Panel Management
+
+    /// Restore the user's saved frame when transitioning from intent bar to
+    /// content display, or apply default size for first-ever show.
+    ///
+    /// Three scenarios:
+    /// 1. **Transition from intent bar**: `restorationFrame` is set by `collectIntent()`.
+    ///    Restore the full saved frame so content appears at the user's chosen position/size.
+    /// 2. **Fresh show (panel hidden)**: No `restorationFrame`. `ensurePanelVisible()` will
+    ///    handle loading from UserDefaults or positioning at default.
+    /// 3. **Panel already visible (follow-up show calls)**: No-op to preserve current frame.
+    private func restoreFrameIfNeeded() {
+        guard let panel else { return }
+
+        // Case 1: Transitioning from intent bar — restore the full saved frame.
+        if let frame = restorationFrame {
+            panel.setFrame(frame, display: true)
+            restorationFrame = nil
+            return
+        }
+
+        // Case 2: Panel not yet visible and no saved frame — apply default size.
+        // (If a saved frame exists, ensurePanelVisible() will handle it.)
+        if !panel.isVisible {
+            if HUDFramePersistence.loadFrame(for: .explanation) == nil {
+                panel.setContentSize(NSSize(width: Self.panelWidth, height: Self.panelHeight))
+            }
+        }
+        // Case 3: Panel already visible — preserve current frame (no-op).
+    }
 
     private func ensurePanelVisible() {
         if panel == nil {
@@ -141,7 +197,13 @@ final class FloatingExplanationHUD {
 
         guard let panel else { return }
 
-        positionPanel(panel)
+        if !panel.isVisible {
+            if let savedFrame = HUDFramePersistence.loadFrame(for: .explanation) {
+                panel.setFrame(savedFrame, display: true)
+            } else {
+                positionPanel(panel)
+            }
+        }
         panel.orderFrontRegardless()
     }
 

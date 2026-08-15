@@ -107,9 +107,33 @@ final class HistoryManager {
 
     // MARK: - Lifecycle
 
+    /// Whether the in-memory items have been mutated since init.
+    /// Guards against background restore overwriting a user action.
+    private var hasMutated = false
+
     /// Load history from disk. Called once during app startup.
     func restore() {
         items = HistoryPersistence.load(from: fileURL)
+        hasMutated = false
+    }
+
+    /// Load history from disk without blocking the main actor.
+    ///
+    /// File I/O runs on a background thread. The loaded items are
+    /// published back to `@MainActor` on completion, but only if no
+    /// mutation (e.g., a new explanation recording) has occurred in
+    /// the meantime.
+    func restoreAsync() async {
+        let url = fileURL
+        let loaded: [HistoryRequest] = await Task.detached {
+            HistoryPersistence.load(from: url)
+        }.value
+
+        // Only apply the loaded data if nothing has been recorded yet.
+        // If the user somehow triggered an explanation before restore
+        // finished, keep the newer in-memory state.
+        guard !hasMutated else { return }
+        items = loaded
     }
 
     /// Clear all history and delete the file. Called on logout.
@@ -135,7 +159,8 @@ final class HistoryManager {
         sourceAppName: String? = nil,
         fileName: String? = nil,
         language: String? = nil,
-        explanationProfile: String? = nil
+        explanationProfile: String? = nil,
+        customQuestion: String? = nil
     ) -> UUID {
         let request = HistoryRequest(
             id: UUID(),
@@ -147,8 +172,10 @@ final class HistoryManager {
             fileName: fileName,
             language: language,
             explanationProfile: explanationProfile,
+            customQuestion: customQuestion,
             followUps: []
         )
+        hasMutated = true
         items.insert(request, at: 0)
         if items.count > HistoryRequest.maxItemCount {
             items.removeLast()
