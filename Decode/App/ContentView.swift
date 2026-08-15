@@ -21,7 +21,6 @@ struct ContentView: View {
     @State private var showingProfileInspector = false
     @AppStorage("dsaModeEnabled") private var dsaModeEnabled = false
     @AppStorage("virtualSessionEnabled") private var virtualSessionEnabled = false
-    @AppStorage("enhancedExplanationEnabled") private var enhancedExplanationEnabled = false
 
     // MARK: - WhisperFlow-inspired palette
 
@@ -134,10 +133,12 @@ struct ContentView: View {
     // MARK: - Home Page
 
     private var homeContent: some View {
-        VStack(spacing: 0) {
-            Spacer()
+        GeometryReader { geo in
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 0) {
+                    Spacer()
 
-            // App identity
+                    // App identity
             VStack(spacing: 20) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 18)
@@ -251,27 +252,7 @@ struct ContentView: View {
                 dependencies.virtualSessionManager.handleToggleChanged(enabled: newValue)
             }
 
-            // Enhanced Explanation toggle
-            HStack(spacing: 10) {
-                Toggle("Enhanced Explanation", isOn: $enhancedExplanationEnabled)
-                    .toggleStyle(.switch)
-                    .tint(accentOrange)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(textPrimary)
-                Text("Screen context for richer explanations")
-                    .font(.system(size: 11))
-                    .foregroundStyle(textSecondary)
-                Spacer()
-            }
-            .padding(.horizontal, 60)
-
             #if DEBUG
-            // Temporary debug UI: show most recent Visual Context
-            if enhancedExplanationEnabled {
-                EnhancedExplanationDebugView()
-                    .padding(.horizontal, 60)
-            }
-
             // Profile Intelligence inspector
             if dependencies.profileIntelligenceService != nil {
                 HStack(spacing: 10) {
@@ -304,6 +285,9 @@ struct ContentView: View {
                 .padding(.horizontal, 60)
 
             Spacer()
+                }
+                .frame(minHeight: geo.size.height)
+            }
         }
         .background(warmBackground)
     }
@@ -561,200 +545,6 @@ private struct PermissionStatusView: View {
         }
     }
 }
-
-#if DEBUG
-// MARK: - Enhanced Explanation Debug View (temporary)
-
-/// Displays the most recent Visual Context for debugging.
-/// **Remove once Enhanced Explanation is verified working.**
-///
-/// Reads directly from `EnhancedExplanationDebug.shared` which is `@Observable`.
-/// SwiftUI tracks property access in `body` and re-renders automatically.
-private struct EnhancedExplanationDebugView: View {
-
-    var debug = EnhancedExplanationDebug.shared
-
-    private let mono = Font.system(size: 12, design: .monospaced)
-    private let monoSmall = Font.system(size: 11, design: .monospaced)
-    private let monoBold = Font.system(size: 12, weight: .semibold, design: .monospaced)
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Title bar.
-            HStack(spacing: 6) {
-                Image(systemName: "ladybug.fill")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.white)
-                Text("Enhanced Explanation Debug")
-                    .font(.system(size: 13, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.white)
-                Spacer()
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(Color.purple.opacity(0.8))
-
-            // Error banner — prominent, at the top.
-            if let error = debug.lastError {
-                HStack(spacing: 6) {
-                    Image(systemName: "xmark.octagon.fill")
-                        .foregroundStyle(.white)
-                    Text(error)
-                        .font(mono)
-                        .foregroundStyle(.white)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.red.opacity(0.85))
-            }
-
-            // Status row.
-            VStack(alignment: .leading, spacing: 6) {
-                debugStatusRow
-                Divider().background(Color.white.opacity(0.2))
-                debugParsedSection
-                Divider().background(Color.white.opacity(0.2))
-                debugRawSection
-            }
-            .padding(12)
-        }
-        .background(Color.black.opacity(0.88))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(Color.purple.opacity(0.5), lineWidth: 1)
-        )
-    }
-
-    // MARK: - Status Row
-
-    @ViewBuilder
-    private var debugStatusRow: some View {
-        let hasVC = debug.lastVisualContext != nil
-        let hasError = debug.lastError != nil
-
-        HStack(spacing: 12) {
-            // Status badge.
-            if hasVC {
-                Text("SUCCESS")
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.black)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(Color.green)
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
-            } else if hasError {
-                Text("FAILURE")
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(Color.red)
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
-            } else {
-                Text("WAITING")
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.black)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(Color.yellow)
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
-            }
-
-            // Latency.
-            if let ms = debug.lastLatencyMs {
-                HStack(spacing: 4) {
-                    Text("Latency:")
-                        .font(monoSmall)
-                        .foregroundStyle(.gray)
-                    Text("\(String(format: "%.0f", ms))ms")
-                        .font(monoBold)
-                        .foregroundStyle(.orange)
-                }
-            }
-
-            // Line count.
-            if let vc = debug.lastVisualContext {
-                let lineCount = vc.content.components(separatedBy: "\n").count
-                HStack(spacing: 4) {
-                    Text("Lines:")
-                        .font(monoSmall)
-                        .foregroundStyle(.gray)
-                    Text("\(lineCount)")
-                        .font(monoBold)
-                        .foregroundStyle(.cyan)
-                }
-            }
-
-            Spacer()
-
-            // Timestamp.
-            if let ts = debug.lastTimestamp {
-                HStack(spacing: 4) {
-                    Text(ts, style: .relative)
-                        .font(monoSmall)
-                        .foregroundStyle(.gray)
-                    Text("ago")
-                        .font(monoSmall)
-                        .foregroundStyle(.gray)
-                }
-            }
-        }
-    }
-
-    // MARK: - Validated Visual Context Section
-
-    @ViewBuilder
-    private var debugParsedSection: some View {
-        Text("──── Validated Visual Context ────")
-            .font(monoBold)
-            .foregroundStyle(.purple)
-
-        if let vc = debug.lastVisualContext, !vc.isEmpty {
-            ScrollView {
-                Text(vc.content)
-                    .font(mono)
-                    .foregroundStyle(.white)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
-            }
-            .frame(maxHeight: 150)
-        } else {
-            Text("(none)")
-                .font(mono)
-                .foregroundStyle(.gray)
-        }
-    }
-
-    // MARK: - Raw Vision Response Section
-
-    @ViewBuilder
-    private var debugRawSection: some View {
-        Text("──── Raw Vision Response ────")
-            .font(monoBold)
-            .foregroundStyle(.purple)
-
-        if let raw = debug.lastRawResponse, !raw.isEmpty {
-            ScrollView {
-                Text(raw)
-                    .font(mono)
-                    .foregroundStyle(.green)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
-            }
-            .frame(maxHeight: 200)
-        } else {
-            Text("(none)")
-                .font(mono)
-                .foregroundStyle(.gray)
-        }
-    }
-}
-#endif
 
 #Preview {
     ContentView()

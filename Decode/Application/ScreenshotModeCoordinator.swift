@@ -146,73 +146,18 @@ final class ScreenshotModeCoordinator {
         print("[DEBUG ScreenshotCoordinator] running OCR on \(captureResult.image.width)x\(captureResult.image.height) image...")
         #endif
 
-        let enhancedEnabled = UserDefaults.standard.bool(forKey: "enhancedExplanationEnabled")
         let recognizedText: String
-        var visualContext: VisualContext?
+        let visualContext: VisualContext? = nil
 
-        #if DEBUG
-        print("[EnhancedExplanation] Screenshot Mode: enabled=\(enhancedEnabled), extractor=\(visualContextExtractor != nil ? "present" : "NIL")")
-        #endif
-
-        if enhancedEnabled, let extractor = visualContextExtractor {
-            // Run OCR and vision extraction in parallel.
+        do {
+            recognizedText = try await ocrService.recognizeText(in: captureResult.image)
+        } catch {
+            guard generation == requestGeneration else { return }
             #if DEBUG
-            let parallelStart = CFAbsoluteTimeGetCurrent()
-            print("[EnhancedExplanation] running OCR + vision extraction in parallel...")
+            print("[DEBUG ScreenshotCoordinator] OCR failed: \(error.localizedDescription)")
             #endif
-            async let ocrResult = ocrService.recognizeText(in: captureResult.image)
-            async let vcResult = extractor.extract(from: captureResult.image)
-
-            do {
-                recognizedText = try await ocrResult
-            } catch {
-                guard generation == requestGeneration else { return }
-                #if DEBUG
-                print("[DEBUG ScreenshotCoordinator] OCR failed: \(error.localizedDescription)")
-                #endif
-                toastManager.show("OCR failed: \(error.localizedDescription)", icon: "exclamationmark.triangle")
-                return
-            }
-            visualContext = await vcResult
-            #if DEBUG
-            let parallelMs = (CFAbsoluteTimeGetCurrent() - parallelStart) * 1000
-            if let vc = visualContext {
-                let lineCount = vc.content.components(separatedBy: "\n").count
-                print("[EnhancedExplanation] parallel complete in \(String(format: "%.0f", parallelMs))ms — \(lineCount) lines, \(vc.content.count) chars")
-                EnhancedExplanationDebug.shared.lastVisualContext = vc
-                EnhancedExplanationDebug.shared.lastTimestamp = Date()
-                EnhancedExplanationDebug.shared.lastError = nil
-            } else {
-                print("[EnhancedExplanation] parallel complete in \(String(format: "%.0f", parallelMs))ms — vision returned nil")
-                EnhancedExplanationDebug.shared.lastError = "Vision returned nil after \(String(format: "%.0f", parallelMs))ms"
-                EnhancedExplanationDebug.shared.lastTimestamp = Date()
-            }
-            #endif
-        } else if enhancedEnabled {
-            #if DEBUG
-            print("[EnhancedExplanation] toggle ON but extractor is NIL — is GROQ_API_KEY set?")
-            #endif
-            do {
-                recognizedText = try await ocrService.recognizeText(in: captureResult.image)
-            } catch {
-                guard generation == requestGeneration else { return }
-                #if DEBUG
-                print("[DEBUG ScreenshotCoordinator] OCR failed: \(error.localizedDescription)")
-                #endif
-                toastManager.show("OCR failed: \(error.localizedDescription)", icon: "exclamationmark.triangle")
-                return
-            }
-        } else {
-            do {
-                recognizedText = try await ocrService.recognizeText(in: captureResult.image)
-            } catch {
-                guard generation == requestGeneration else { return }
-                #if DEBUG
-                print("[DEBUG ScreenshotCoordinator] OCR failed: \(error.localizedDescription)")
-                #endif
-                toastManager.show("OCR failed: \(error.localizedDescription)", icon: "exclamationmark.triangle")
-                return
-            }
+            toastManager.show("OCR failed: \(error.localizedDescription)", icon: "exclamationmark.triangle")
+            return
         }
 
         // Staleness check after OCR/vision await.
