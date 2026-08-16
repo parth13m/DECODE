@@ -344,9 +344,7 @@ Persistent floating panel anchored to the left screen edge. Provides one-click a
 
 **Compound modes**: `selection_followup`, `session_followup`, `screenshot_followup`, `selection_improve`, `session_improve`.
 
-**Admin dashboard (legacy)** at `GET /admin`: analytics, token stats, improve stats, follow-up stats, mode/tier/provider/profile tables, user management, invite generation. Remains for backward compatibility.
-
-**Dashboard V2** at `GET /admin/v2`: Founder-grade operational intelligence dashboard. Feature-complete and frozen.
+**Admin Dashboard** at `GET /admin/v2` (also `GET /admin` redirects here): Canonical operational intelligence dashboard. Feature-complete and frozen.
 - **8 pages**: Executive, Product, AI Platform, Users, Workspaces, Quality, Cost, Settings.
 - **Analytics V2 API** (`/api/v2/analytics/*`): 10 endpoints — executive, product, users, user detail, ai-platform, quality, cost, settings, timeline, live, search, token-breakdown, aggregate. All require ADMIN_TOKEN auth.
 - **Token analytics**: Per-feature efficiency (compound modes), daily trends, top consumers, percentile distributions (P50/P95/P99), input/output ratio analysis, forecast metrics, feature × provider/model cross-tabulations.
@@ -499,7 +497,7 @@ Verification is binary: builds succeed or fail, tests pass or fail, strict concu
 7. **Project Intelligence** — **In progress.** Phase 1 (Module Intelligence, M1–M7) complete. Phase 2 (Project Intelligence, M8–M11) complete. M12 (Validation) not started. Cross-cutting: KGR Phase 2 (proactive File Understanding) and Multi-Provider AI Platform complete. See `PROJECT_INTELLIGENCE_IMPLEMENTATION_STATUS.md`.
 8. ~~**Enhanced Explanation**~~ — **Complete.** Visual context extraction for Selection Mode. WindowSelector for reliable content window selection. Edge cropping for image token optimization. Backend vision gateway integration. Vision prompt redesigned for downstream explanation quality. Architecture: `architecture/VISUAL_CONTEXT_ARCHITECTURE.md`.
 9. ~~**Screenshot Mode Investigation**~~ — **Complete (researched and closed).** Product validation concluded insufficient explanation improvement for the latency and complexity cost. No further work planned.
-10. ~~**Dashboard V2**~~ — **Complete (feature-frozen).** Founder-grade operational intelligence dashboard with 8 pages, Analytics V2 API (10 endpoints), comprehensive token analytics (per-feature efficiency, trends, percentiles, forecasts, cross-tabulations), 6 chart types, drill-down drawers, global search, keyboard shortcuts. Future work: bug fixes, UX polish, validation, browser compatibility.
+10. ~~**Admin Dashboard**~~ — **Complete (feature-frozen).** Canonical admin dashboard at `/admin/v2` (V1 retired, `/admin` redirects). 8 pages, Analytics V2 API (10 endpoints), comprehensive token analytics, 6 chart types with hover tooltips, drill-down drawers, global search, keyboard shortcuts, invite management.
 11. ~~**History**~~ — **Complete.** Local explanation history (10 most recent requests + follow-ups). HistoryManager, FloatingHistoryHUD, Anchored Reply integration, Launcher integration, logout clearing. Local-only, zero ICU cost. Architecture: `DECODE_LAUNCHER_ARCHITECTURE_AND_IMPLEMENTATION.md`.
 12. ~~**Launcher Redesign**~~ — **Complete.** Orbital visual geometry with central Decode button, circular-arc action buttons (Folder, File, History), rotating dashed ring. Architecture: `DECODE_LAUNCHER_ARCHITECTURE_AND_IMPLEMENTATION.md`.
 
@@ -594,12 +592,11 @@ Capability-based provider routing is complete and production-ready. Do not modif
 - Graceful fallback: missing GROQ_API_KEY → uniform resolver routes everything to Claude.
 - Backend `resolve_*()` methods with legacy `AI_API_KEY`/`AI_MODEL`/`AI_ADAPTER` fallback.
 
-### Dashboard V2 & Analytics V2 API (Frozen)
-Dashboard V2 is feature-complete. Analytics V2 API endpoints are stable. Do not modify:
+### Admin Dashboard & Analytics V2 API (Frozen)
+The admin dashboard is feature-complete. V1 dashboard has been retired; `/admin` redirects to `/admin/v2`. Analytics V2 API endpoints are stable. Do not modify:
 - Analytics V2 endpoint signatures or response shapes (additive extensions only).
 - Dashboard page structure (8 pages, `D.*` component library, `App.pages.*` modules).
 - Token-breakdown endpoint compound feature derivation logic.
-- Legacy dashboard at `/admin` (remains for backward compatibility).
 - Dual-write architecture (v2 `ai_requests` + legacy `request_logs` coexist).
 
 ### Completed Anchored Follow-Up / Reply ↩ (Frozen)
@@ -759,7 +756,7 @@ Main branch: `main`. Build must pass before committing. Run `xcodegen generate` 
 | Anchored Follow-Up Tests | Complete (uncommitted), 27 tests | `DecodeTests/Presentation/AnchoredFollowUpTests.swift` |
 | Anchored Follow-Up Architecture Doc | Complete (uncommitted) | `architecture/ANCHORED_FOLLOW_UP_REPLY_ARCHITECTURE.md` |
 | Billing Engine Architecture | Designed (not implemented) | Conversation output (2026-08-05) |
-| Dashboard V2 (8 pages) | Complete (uncommitted) | `backend/app/static/v2/` |
+| Admin Dashboard (8 pages) | Complete | `backend/app/static/v2/` |
 | Analytics V2 API | Complete (uncommitted) | `backend/app/routers/analytics_v2.py` |
 | Intent Bar / Conditional Vision | Complete | `ExplanationHUDViewModel.swift`, `SelectionModeCoordinator.swift` |
 | ExplanationExecutionContext | Complete | `Decode/Domain/Models/ExplanationExecutionContext.swift` |

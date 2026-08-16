@@ -236,7 +236,7 @@ async def vision(
         latency_ms = int((time.monotonic() - start) * 1000)
         _log_request(
             db, user.id, success=False, latency_ms=latency_ms,
-            error_type=exc.error_type, mode=body.mode,
+            error_type=exc.error_type, mode=body.mode or "vision",
             ai_provider=settings.VISION_PROVIDER, ai_model=None,
         )
         raise HTTPException(
@@ -245,7 +245,7 @@ async def vision(
         ) from None
 
     _log_request(
-        db, user.id, success=True, latency_ms=latency_ms, mode=body.mode,
+        db, user.id, success=True, latency_ms=latency_ms, mode=body.mode or "vision",
         ai_provider=ai_provider, ai_model=ai_model,
         prompt_tokens=token_usage.get("prompt_tokens"),
         completion_tokens=token_usage.get("completion_tokens"),

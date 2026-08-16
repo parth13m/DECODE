@@ -211,8 +211,12 @@ def get_product_analytics(
     start_date, end_date = _parse_date_range(days, start, end)
     filters = _date_filter(AIRequest, start_date, end_date)
 
+    _effective_mode = case(
+        (AIRequest.origin_mode.isnot(None), AIRequest.origin_mode),
+        else_=sa_func.coalesce(AIRequest.request_type, "other"),
+    ).label("mode")
     mode_rows = db.query(
-        sa_func.coalesce(AIRequest.origin_mode, "unknown").label("mode"),
+        _effective_mode,
         sa_func.count().label("count"),
         sa_func.count(sa_func.distinct(AIRequest.user_id)).label("users"),
         sa_func.avg(AIRequest.latency_ms).label("avg_latency"),
@@ -417,8 +421,12 @@ def get_user_detail(
         *filters, AIRequest.success.is_(True)
     ).scalar() or 0
 
+    _eff_mode = case(
+        (AIRequest.origin_mode.isnot(None), AIRequest.origin_mode),
+        else_=sa_func.coalesce(AIRequest.request_type, "other"),
+    ).label("mode")
     mode_rows = db.query(
-        sa_func.coalesce(AIRequest.origin_mode, "unknown").label("mode"),
+        _eff_mode,
         sa_func.count().label("count"),
     ).filter(*filters).group_by("mode").all()
 
@@ -1224,7 +1232,10 @@ def get_token_breakdown(
         ]
 
     # --- By origin mode ---
-    by_mode = _agg_group(sa_func.coalesce(AIRequest.origin_mode, "unknown"))
+    by_mode = _agg_group(case(
+        (AIRequest.origin_mode.isnot(None), AIRequest.origin_mode),
+        else_=sa_func.coalesce(AIRequest.request_type, "other"),
+    ))
 
     # --- By request type ---
     by_type = _agg_group(AIRequest.request_type)

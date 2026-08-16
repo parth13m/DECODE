@@ -8,44 +8,44 @@
 /* ── Tokens ── */
 :root {
   /* Brand */
-  --d-brand:        #e87830;
-  --d-brand-hover:  #d06828;
-  --d-brand-subtle: rgba(232, 120, 48, 0.08);
-  --d-brand-muted:  rgba(232, 120, 48, 0.15);
+  --d-brand:        #d06828;
+  --d-brand-hover:  #b85a20;
+  --d-brand-subtle: rgba(208, 104, 40, 0.07);
+  --d-brand-muted:  rgba(208, 104, 40, 0.14);
 
   /* Semantic */
-  --d-success:        #10b981;
-  --d-success-subtle: rgba(16, 185, 129, 0.08);
-  --d-success-muted:  rgba(16, 185, 129, 0.18);
-  --d-warning:        #f59e0b;
-  --d-warning-subtle: rgba(245, 158, 11, 0.08);
-  --d-danger:         #ef4444;
-  --d-danger-subtle:  rgba(239, 68, 68, 0.08);
-  --d-danger-muted:   rgba(239, 68, 68, 0.15);
-  --d-info:           #3b82f6;
-  --d-info-subtle:    rgba(59, 130, 246, 0.08);
-  --d-purple:         #8b5cf6;
-  --d-purple-subtle:  rgba(139, 92, 246, 0.08);
+  --d-success:        #0d9668;
+  --d-success-subtle: rgba(13, 150, 104, 0.08);
+  --d-success-muted:  rgba(13, 150, 104, 0.16);
+  --d-warning:        #d97706;
+  --d-warning-subtle: rgba(217, 119, 6, 0.08);
+  --d-danger:         #dc2626;
+  --d-danger-subtle:  rgba(220, 38, 38, 0.07);
+  --d-danger-muted:   rgba(220, 38, 38, 0.13);
+  --d-info:           #2563eb;
+  --d-info-subtle:    rgba(37, 99, 235, 0.07);
+  --d-purple:         #7c3aed;
+  --d-purple-subtle:  rgba(124, 58, 237, 0.07);
 
-  /* Text */
-  --d-text-0: #111827;
-  --d-text-1: #374151;
-  --d-text-2: #6b7280;
-  --d-text-3: #9ca3af;
-  --d-text-4: #d1d5db;
+  /* Text — dark charcoal on warm beige */
+  --d-text-0: #1f1d1a;
+  --d-text-1: #3d3a35;
+  --d-text-2: #6b6560;
+  --d-text-3: #9a938c;
+  --d-text-4: #c4bdb5;
 
-  /* Surfaces */
-  --d-bg-root:   #0f1117;
-  --d-bg-page:   #151720;
-  --d-bg-card:   #1c1e2a;
-  --d-bg-raised: #242736;
-  --d-bg-hover:  #2a2d3e;
-  --d-bg-input:  #1c1e2a;
+  /* Surfaces — warm beige / off-white */
+  --d-bg-root:   #f0ebe4;
+  --d-bg-page:   #f5f1ec;
+  --d-bg-card:   #ffffff;
+  --d-bg-raised: #ede8e1;
+  --d-bg-hover:  #e8e2da;
+  --d-bg-input:  #ffffff;
 
-  /* Borders */
-  --d-border:     rgba(255, 255, 255, 0.06);
-  --d-border-mid: rgba(255, 255, 255, 0.10);
-  --d-border-hi:  rgba(255, 255, 255, 0.15);
+  /* Borders — warm gray */
+  --d-border:     rgba(0, 0, 0, 0.06);
+  --d-border-mid: rgba(0, 0, 0, 0.10);
+  --d-border-hi:  rgba(0, 0, 0, 0.16);
 
   /* Radii */
   --d-r-sm: 6px;
@@ -53,10 +53,10 @@
   --d-r-lg: 14px;
   --d-r-xl: 18px;
 
-  /* Shadows */
-  --d-shadow-sm: 0 1px 2px rgba(0,0,0,0.2);
-  --d-shadow-md: 0 4px 12px rgba(0,0,0,0.25);
-  --d-shadow-lg: 0 8px 30px rgba(0,0,0,0.35);
+  /* Shadows — warm tint */
+  --d-shadow-sm: 0 1px 3px rgba(120, 100, 80, 0.08);
+  --d-shadow-md: 0 4px 12px rgba(120, 100, 80, 0.10);
+  --d-shadow-lg: 0 8px 30px rgba(120, 100, 80, 0.14);
 
   /* Spacing scale */
   --d-sp-1: 4px;
@@ -74,17 +74,10 @@
   --d-sidebar-collapsed-w: 56px;
 
   /* Topbar */
-  --d-topbar-h: 52px;
+  --d-topbar-h: 56px;
 
   /* Transitions */
   --d-transition: 0.15s ease;
-
-  /* Dark-mode text overrides */
-  --d-text-0: #f3f4f6;
-  --d-text-1: #d1d5db;
-  --d-text-2: #9ca3af;
-  --d-text-3: #6b7280;
-  --d-text-4: #4b5563;
 }
 
 
@@ -310,8 +303,8 @@ body {
 }
 
 .d-page {
-  padding: var(--d-sp-8);
-  max-width: 1400px;
+  padding: var(--d-sp-10) var(--d-sp-10);
+  max-width: 1440px;
 }
 
 
@@ -322,7 +315,7 @@ body {
 /* ── KPI Card ── */
 .d-kpi-grid {
   display: grid;
-  gap: var(--d-sp-4);
+  gap: var(--d-sp-5);
 }
 .d-kpi-grid[data-cols="2"] { grid-template-columns: repeat(2, 1fr); }
 .d-kpi-grid[data-cols="3"] { grid-template-columns: repeat(3, 1fr); }
@@ -333,10 +326,11 @@ body {
   background: var(--d-bg-card);
   border: 1px solid var(--d-border);
   border-radius: var(--d-r-md);
-  padding: var(--d-sp-5) var(--d-sp-5) var(--d-sp-4);
+  padding: var(--d-sp-6) var(--d-sp-6) var(--d-sp-5);
   transition: border-color var(--d-transition), box-shadow var(--d-transition);
   position: relative;
   overflow: hidden;
+  box-shadow: var(--d-shadow-sm);
 }
 
 .d-kpi:hover {
@@ -435,14 +429,14 @@ body {
 
 /* ── Section ── */
 .d-section {
-  margin-bottom: var(--d-sp-10);
+  margin-bottom: var(--d-sp-12);
 }
 
 .d-section-header {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  margin-bottom: var(--d-sp-5);
+  margin-bottom: var(--d-sp-6);
   padding-bottom: var(--d-sp-3);
   border-bottom: 1px solid var(--d-border);
 }
@@ -463,7 +457,7 @@ body {
 /* ── Chart Card ── */
 .d-chart-grid {
   display: grid;
-  gap: var(--d-sp-4);
+  gap: var(--d-sp-5);
 }
 .d-chart-grid[data-cols="2"] { grid-template-columns: repeat(2, 1fr); }
 .d-chart-grid[data-cols="3"] { grid-template-columns: repeat(3, 1fr); }
@@ -472,8 +466,9 @@ body {
   background: var(--d-bg-card);
   border: 1px solid var(--d-border);
   border-radius: var(--d-r-md);
-  padding: var(--d-sp-5);
+  padding: var(--d-sp-6);
   transition: border-color var(--d-transition);
+  box-shadow: var(--d-shadow-sm);
 }
 
 .d-chart-card:hover {
@@ -533,6 +528,7 @@ body {
   border: 1px solid var(--d-border);
   border-radius: var(--d-r-md);
   overflow: hidden;
+  box-shadow: var(--d-shadow-sm);
 }
 
 .d-table-header {
@@ -557,7 +553,7 @@ body {
 
 .d-table th {
   text-align: left;
-  padding: 10px 16px;
+  padding: 12px 18px;
   font-size: 11px;
   font-weight: 650;
   text-transform: uppercase;
@@ -569,10 +565,11 @@ body {
 }
 
 .d-table td {
-  padding: 11px 16px;
+  padding: 14px 18px;
   border-bottom: 1px solid var(--d-border);
   vertical-align: middle;
   color: var(--d-text-1);
+  line-height: 1.5;
 }
 
 .d-table tr:last-child td { border-bottom: none; }
@@ -655,7 +652,7 @@ body {
 
 .d-btn-primary {
   background: var(--d-brand);
-  color: #fff;
+  color: #ffffff;
   border-color: var(--d-brand);
 }
 
@@ -938,7 +935,7 @@ body {
 .d-search-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0,0,0,0.6);
+  background: rgba(0,0,0,0.3);
   backdrop-filter: blur(4px);
   z-index: 100;
   display: none;
@@ -1079,7 +1076,7 @@ body {
 .d-drawer-overlay.open .d-drawer-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0,0,0,0.3);
+  background: rgba(0,0,0,0.18);
   animation: d-fade-in 0.15s ease;
 }
 
@@ -1409,7 +1406,7 @@ body.d-drawer-open {
   height: 20px;
   border-radius: 4px;
   overflow: hidden;
-  background: rgba(255,255,255,0.04);
+  background: var(--d-bg-raised);
 }
 
 .d-ratio-bar-fill {
@@ -1456,7 +1453,7 @@ body.d-drawer-open {
 .d-percentile-track {
   flex: 1;
   height: 14px;
-  background: rgba(255,255,255,0.04);
+  background: var(--d-bg-raised);
   border-radius: 3px;
   overflow: hidden;
 }

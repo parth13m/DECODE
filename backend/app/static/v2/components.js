@@ -395,7 +395,7 @@ D.renderAreaChart = function (canvasId, data, opts = {}) {
   function yPos(v) { return padTop + chartH - ((v - min) / range) * chartH; }
 
   // Grid lines
-  ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+  ctx.strokeStyle = 'rgba(0,0,0,0.06)';
   ctx.lineWidth = 1;
   const gridLines = 4;
   for (let i = 0; i <= gridLines; i++) {
@@ -407,14 +407,14 @@ D.renderAreaChart = function (canvasId, data, opts = {}) {
 
     // Y-axis labels
     const val = max - (range / gridLines) * i;
-    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    ctx.fillStyle = 'rgba(0,0,0,0.4)';
     ctx.font = '10px Inter, sans-serif';
     ctx.textAlign = 'right';
     ctx.fillText(yFormat(val), padLeft - 8, y + 3);
   }
 
   // X-axis labels (show a few)
-  ctx.fillStyle = 'rgba(255,255,255,0.3)';
+  ctx.fillStyle = 'rgba(0,0,0,0.4)';
   ctx.font = '10px Inter, sans-serif';
   ctx.textAlign = 'center';
   const labelStep = Math.max(1, Math.floor(data.length / 6));
@@ -457,6 +457,21 @@ D.renderAreaChart = function (canvasId, data, opts = {}) {
     ctx.fillStyle = color;
     ctx.fill();
   });
+
+  // Tooltip
+  const seriesName = opts.seriesName || '';
+  _attachChartTooltip(canvas, (mx, my) => {
+    const idx = _nearestIndex(mx, padLeft, step, data.length);
+    if (idx < 0) return null;
+    // Redraw to show hover dot
+    const px = xPos(idx), py = yPos(data[idx]);
+    if (Math.abs(mx - px) > step * 0.6) return null;
+    const lbl = labels[idx] != null ? labels[idx] : idx;
+    const val = yFormat(data[idx]);
+    let html = `<div style="color:rgba(0,0,0,.45);margin-bottom:2px">${lbl}</div>`;
+    html += _tipLine(color, seriesName || 'Value', val);
+    return { html };
+  });
 };
 
 function hexToRgb(hex) {
@@ -464,6 +479,79 @@ function hexToRgb(hex) {
   const g = parseInt(hex.slice(3, 5), 16);
   const b = parseInt(hex.slice(5, 7), 16);
   return `${r},${g},${b}`;
+}
+
+
+/* ══════════════════════════════════════════════════════════
+   CHART TOOLTIP (Shared)
+   ══════════════════════════════════════════════════════════ */
+
+const _chartTooltip = (() => {
+  let el = null;
+  function ensure() {
+    if (el) return el;
+    el = document.createElement('div');
+    el.className = 'd-chart-tooltip';
+    el.style.cssText =
+      'position:fixed;pointer-events:none;z-index:99999;opacity:0;transition:opacity .12s;' +
+      'background:rgba(255,255,255,.95);border:1px solid rgba(0,0,0,.1);border-radius:6px;' +
+      'padding:6px 10px;font:11px/1.5 Inter,sans-serif;color:#1f1d1a;' +
+      'backdrop-filter:blur(8px);max-width:240px;white-space:nowrap;box-shadow:0 4px 12px rgba(0,0,0,.1);';
+    document.body.appendChild(el);
+    return el;
+  }
+  function show(html, x, y) {
+    const tip = ensure();
+    tip.innerHTML = html;
+    tip.style.opacity = '1';
+    // Position: prefer right of cursor, flip if clipping
+    const pad = 12;
+    let left = x + pad;
+    let top = y - tip.offsetHeight - 6;
+    if (left + tip.offsetWidth > window.innerWidth - 8) left = x - tip.offsetWidth - pad;
+    if (top < 4) top = y + pad;
+    tip.style.left = left + 'px';
+    tip.style.top = top + 'px';
+  }
+  function hide() {
+    if (el) el.style.opacity = '0';
+  }
+  return { show, hide };
+})();
+
+/** Get mouse position relative to canvas in CSS pixels */
+function _canvasMousePos(canvas, e) {
+  const r = canvas.getBoundingClientRect();
+  return { x: e.clientX - r.left, y: e.clientY - r.top };
+}
+
+/** Attach tooltip handlers to a canvas that has hitTest metadata stored on it.
+ *  hitTest(x, y) should return { html } or null. */
+function _attachChartTooltip(canvas, hitTest) {
+  canvas.addEventListener('mousemove', e => {
+    const pos = _canvasMousePos(canvas, e);
+    const hit = hitTest(pos.x, pos.y);
+    if (hit) {
+      _chartTooltip.show(hit.html, e.clientX, e.clientY);
+    } else {
+      _chartTooltip.hide();
+    }
+  });
+  canvas.addEventListener('mouseleave', () => _chartTooltip.hide());
+}
+
+/** Build a tooltip line: colored dot + label + value */
+function _tipLine(color, label, value) {
+  const dot = color
+    ? `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color};margin-right:5px;vertical-align:middle"></span>`
+    : '';
+  return `<div>${dot}<span style="color:rgba(0,0,0,.5)">${label}:</span> <strong>${value}</strong></div>`;
+}
+
+/** Find nearest data-point index for a given x in a line/area chart */
+function _nearestIndex(x, padLeft, step, len) {
+  const idx = Math.round((x - padLeft) / step);
+  return idx >= 0 && idx < len ? idx : -1;
 }
 
 
@@ -504,7 +592,7 @@ D.renderBarChart = function (canvasId, data, opts = {}) {
   const gap = chartW / data.length;
 
   // Grid
-  ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+  ctx.strokeStyle = 'rgba(0,0,0,0.06)';
   ctx.lineWidth = 1;
   for (let i = 0; i <= 4; i++) {
     const y = padTop + (chartH / 4) * i;
@@ -514,7 +602,7 @@ D.renderBarChart = function (canvasId, data, opts = {}) {
     ctx.stroke();
 
     const val = max - (max / 4) * i;
-    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    ctx.fillStyle = 'rgba(0,0,0,0.4)';
     ctx.font = '10px Inter, sans-serif';
     ctx.textAlign = 'right';
     ctx.fillText(yFormat(val), padLeft - 8, y + 3);
@@ -540,7 +628,7 @@ D.renderBarChart = function (canvasId, data, opts = {}) {
     ctx.fill();
 
     // Label
-    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
     ctx.font = '10px Inter, sans-serif';
     ctx.textAlign = 'center';
     ctx.save();
@@ -551,6 +639,24 @@ D.renderBarChart = function (canvasId, data, opts = {}) {
     }
     ctx.fillText(labels[i] || '', 0, 0);
     ctx.restore();
+  });
+
+  // Tooltip
+  _attachChartTooltip(canvas, (mx, my) => {
+    for (let i = 0; i < data.length; i++) {
+      const bx = padLeft + gap * i + (gap - barW) / 2;
+      const barH = (data[i] / max) * chartH;
+      const by = padTop + chartH - barH;
+      if (mx >= bx && mx <= bx + barW && my >= by && my <= padTop + chartH) {
+        const lbl = labels[i] != null ? labels[i] : `Bar ${i + 1}`;
+        const val = yFormat(data[i]);
+        const c = typeof colors === 'string' ? colors : (colors[i] || '#e87830');
+        let html = `<div style="color:rgba(0,0,0,.45);margin-bottom:2px">${lbl}</div>`;
+        html += _tipLine(c, 'Value', val);
+        return { html };
+      }
+    }
+    return null;
   });
 };
 
@@ -900,17 +1006,38 @@ D.renderDonutChart = function (canvasId, segments, opts = {}) {
 
   // Center text
   if (opts.centerLabel) {
-    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    ctx.fillStyle = 'rgba(0,0,0,0.85)';
     ctx.font = 'bold 22px Inter, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(opts.centerLabel, cx, cy - 6);
     if (opts.centerSub) {
-      ctx.fillStyle = 'rgba(255,255,255,0.4)';
+      ctx.fillStyle = 'rgba(0,0,0,0.4)';
       ctx.font = '11px Inter, sans-serif';
       ctx.fillText(opts.centerSub, cx, cy + 14);
     }
   }
+
+  // Tooltip
+  _attachChartTooltip(canvas, (mx, my) => {
+    const dx = mx - cx, dy = my - cy;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist < innerR || dist > outerR) return null;
+    let angle = Math.atan2(dy, dx);
+    if (angle < -Math.PI / 2) angle += Math.PI * 2;
+    let cumAngle = -Math.PI / 2;
+    for (let i = 0; i < segments.length; i++) {
+      const sweep = (segments[i].value / total) * Math.PI * 2;
+      if (angle >= cumAngle && angle < cumAngle + sweep) {
+        const pct = ((segments[i].value / total) * 100).toFixed(1);
+        let html = _tipLine(segments[i].color, segments[i].label, D.fmt.num(segments[i].value));
+        html += `<div style="color:rgba(0,0,0,.45);font-size:10px">${pct}% of total</div>`;
+        return { html };
+      }
+      cumAngle += sweep;
+    }
+    return null;
+  });
 };
 
 /** HTML legend for donut charts */
@@ -988,19 +1115,19 @@ D.renderStackedAreaChart = function (canvasId, series, opts = {}) {
   function yPos(v) { return padTop + chartH - (v / max) * chartH; }
 
   // Grid
-  ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+  ctx.strokeStyle = 'rgba(0,0,0,0.06)';
   ctx.lineWidth = 1;
   for (let i = 0; i <= 4; i++) {
     const y = padTop + (chartH / 4) * i;
     ctx.beginPath(); ctx.moveTo(padLeft, y); ctx.lineTo(w - padRight, y); ctx.stroke();
-    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    ctx.fillStyle = 'rgba(0,0,0,0.4)';
     ctx.font = '10px Inter, sans-serif';
     ctx.textAlign = 'right';
     ctx.fillText(D.fmt.num(Math.round(max - (max / 4) * i)), padLeft - 8, y + 3);
   }
 
   // X labels
-  ctx.fillStyle = 'rgba(255,255,255,0.3)';
+  ctx.fillStyle = 'rgba(0,0,0,0.4)';
   ctx.textAlign = 'center';
   const labelStep = Math.max(1, Math.floor(len / 6));
   labels.forEach((l, i) => {
@@ -1035,6 +1162,20 @@ D.renderStackedAreaChart = function (canvasId, series, opts = {}) {
     ctx.strokeStyle = s.color || '#e87830';
     ctx.lineWidth = 1.5;
     ctx.stroke();
+  });
+
+  // Tooltip
+  const yFormat = opts.yFormat || (v => D.fmt.num(Math.round(v)));
+  _attachChartTooltip(canvas, (mx, my) => {
+    const idx = _nearestIndex(mx, padLeft, step, len);
+    if (idx < 0 || Math.abs(mx - xPos(idx)) > step * 0.6) return null;
+    const lbl = labels[idx] != null ? labels[idx] : idx;
+    let html = `<div style="color:rgba(0,0,0,.45);margin-bottom:2px">${lbl}</div>`;
+    series.forEach(s => {
+      html += _tipLine(s.color || '#e87830', s.label || 'Series', yFormat(s.data[idx]));
+    });
+    html += `<div style="border-top:1px solid rgba(0,0,0,.1);margin-top:3px;padding-top:3px;color:rgba(0,0,0,.45)">Total: <strong>${yFormat(stacked[idx])}</strong></div>`;
+    return { html };
   });
 };
 
@@ -1077,7 +1218,7 @@ D.renderHeatmap = function (canvasId, grid, opts = {}) {
   const rgb = hexToRgb(color);
 
   // Row labels
-  ctx.fillStyle = 'rgba(255,255,255,0.3)';
+  ctx.fillStyle = 'rgba(0,0,0,0.4)';
   ctx.font = '10px Inter, sans-serif';
   ctx.textAlign = 'right';
   rowLabels.forEach((l, i) => {
@@ -1105,6 +1246,20 @@ D.renderHeatmap = function (canvasId, grid, opts = {}) {
       );
       ctx.fill();
     });
+  });
+
+  // Tooltip
+  const valFormat = opts.valueFormat || (v => D.fmt.num(v));
+  _attachChartTooltip(canvas, (mx, my) => {
+    const ci = Math.floor((mx - padLeft) / cellW);
+    const ri = Math.floor((my - padTop) / cellH);
+    if (ri < 0 || ri >= rows || ci < 0 || ci >= cols) return null;
+    const val = grid[ri][ci];
+    const rowLbl = rowLabels[ri] || `Row ${ri}`;
+    const colLbl = colLabels[ci] || `Col ${ci}`;
+    let html = `<div style="color:rgba(0,0,0,.45);margin-bottom:2px">${colLbl} · ${rowLbl}</div>`;
+    html += `<div><strong>${valFormat(val)}</strong></div>`;
+    return { html };
   });
 };
 
@@ -1148,19 +1303,19 @@ D.renderMultiLineChart = function (canvasId, series, opts = {}) {
   function yPos(v) { return padTop + chartH - ((v - min) / range) * chartH; }
 
   // Grid
-  ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+  ctx.strokeStyle = 'rgba(0,0,0,0.06)';
   ctx.lineWidth = 1;
   for (let i = 0; i <= 4; i++) {
     const y = padTop + (chartH / 4) * i;
     ctx.beginPath(); ctx.moveTo(padLeft, y); ctx.lineTo(w - padRight, y); ctx.stroke();
-    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    ctx.fillStyle = 'rgba(0,0,0,0.4)';
     ctx.font = '10px Inter, sans-serif';
     ctx.textAlign = 'right';
     ctx.fillText(yFormat(max - (range / 4) * i), padLeft - 8, y + 3);
   }
 
   // X labels
-  ctx.fillStyle = 'rgba(255,255,255,0.3)';
+  ctx.fillStyle = 'rgba(0,0,0,0.4)';
   ctx.textAlign = 'center';
   const labelStep = Math.max(1, Math.floor(len / 6));
   labels.forEach((l, i) => {
@@ -1178,6 +1333,18 @@ D.renderMultiLineChart = function (canvasId, series, opts = {}) {
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
     ctx.stroke();
+  });
+
+  // Tooltip
+  _attachChartTooltip(canvas, (mx, my) => {
+    const idx = _nearestIndex(mx, padLeft, step, len);
+    if (idx < 0 || Math.abs(mx - xPos(idx)) > step * 0.6) return null;
+    const lbl = labels[idx] != null ? labels[idx] : idx;
+    let html = `<div style="color:rgba(0,0,0,.45);margin-bottom:2px">${lbl}</div>`;
+    series.forEach(s => {
+      html += _tipLine(s.color || '#e87830', s.label || 'Series', yFormat(s.data[idx]));
+    });
+    return { html };
   });
 };
 

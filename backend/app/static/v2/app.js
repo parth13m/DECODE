@@ -587,12 +587,14 @@ App.pages.executive = {
         height: 220,
         color: '#e87830',
         yFormat: v => D.fmt.num(Math.round(v)),
+        seriesName: 'Requests',
       });
       D.renderAreaChart('exec-chart-cost', dailyCost, {
         labels: dailyCostLabels,
         height: 220,
         color: '#f59e0b',
         yFormat: v => D.fmt.usdCompact(v),
+        seriesName: 'Cost',
       });
       if (providerCounts.length) {
         D.renderBarChart('exec-chart-providers', providerCounts, {
@@ -790,9 +792,9 @@ App.pages.product = {
         </div>
       ` : ''}
 
-      ${(history && (history.history_opens > 0 || history.history_followups > 0)) ? `
-        <div class="d-section d-mt-6">
-          ${D.sectionHeader('History Analytics')}
+      <div class="d-section d-mt-6">
+        ${D.sectionHeader('History Analytics')}
+        ${(history && (history.history_opens > 0 || history.history_followups > 0 || history.history_clears > 0)) ? `
           ${D.kpiGrid([
             D.kpi({ label: 'History Users', value: D.fmt.num(history.history_users), sub: history.adoption !== null ? D.fmt.pct(history.adoption) + ' adoption' : 'No active users', accent: 'brand' }),
             D.kpi({ label: 'History Opens', value: D.fmt.num(history.history_opens), accent: 'info' }),
@@ -837,8 +839,14 @@ App.pages.product = {
               ${D.chartCard({ title: 'History Usage Trend', canvasId: 'history-trend-chart', height: 200, placeholder: false })}
             </div>
           ` : ''}
-        </div>
-      ` : ''}
+        ` : `
+          <div class="d-chart-card" style="padding:var(--d-sp-8);text-align:center">
+            <div style="font-size:2rem;margin-bottom:8px">&#x1F4DA;</div>
+            <div style="font-weight:600;margin-bottom:4px">No history activity yet</div>
+            <div style="color:var(--d-text-3);font-size:0.85rem">History analytics will appear here once users start using the History feature.</div>
+          </div>
+        `}
+      </div>
 
       <div class="d-section d-mt-6" style="text-align:center;padding:var(--d-sp-4)">
         <button class="d-btn d-btn-ghost" onclick="App.navigate('executive')">&#x2190; Executive Overview</button>
@@ -870,7 +878,7 @@ App.pages.product = {
         body.innerHTML = `<canvas id="improve-trend-chart" style="width:100%;height:200px"></canvas>`;
         D.renderAreaChart('improve-trend-chart',
           trend.map(d => (d.copies || 0) + (d.replaces || 0) + (d.dismissals || 0) + (d.no_changes || 0)),
-          { labels: trend.map(d => D.fmt.dateShort(d.date)), height: 200, color: '#10b981', yFormat: v => D.fmt.num(Math.round(v)) }
+          { labels: trend.map(d => D.fmt.dateShort(d.date)), height: 200, color: '#10b981', yFormat: v => D.fmt.num(Math.round(v)), seriesName: 'Improve Actions' }
         );
       }
 
@@ -882,7 +890,7 @@ App.pages.product = {
         body.innerHTML = `<canvas id="history-trend-chart" style="width:100%;height:200px"></canvas>`;
         D.renderAreaChart('history-trend-chart',
           trend.map(d => (d.opens || 0) + (d.followups || 0) + (d.clears || 0)),
-          { labels: trend.map(d => D.fmt.dateShort(d.date)), height: 200, color: '#e87830', yFormat: v => D.fmt.num(Math.round(v)) }
+          { labels: trend.map(d => D.fmt.dateShort(d.date)), height: 200, color: '#e87830', yFormat: v => D.fmt.num(Math.round(v)), seriesName: 'History Events' }
         );
       }
     });
@@ -1431,9 +1439,9 @@ App.pages.ai = {
             D.chartLegend([{ color: '#3b82f6', label: 'Input' }, { color: '#10b981', label: 'Output' }])
           );
         }
-        D.renderAreaChart('ai-trend-total', tdTotal, { labels: tdLabels, height: 220, color: '#8b5cf6', yFormat: v => D.fmt.num(Math.round(v)) });
-        D.renderAreaChart('ai-trend-cost', tdCost, { labels: tdLabels, height: 220, color: '#f59e0b', yFormat: v => D.fmt.usdCompact(v) });
-        D.renderAreaChart('ai-trend-reqs', tdReqs, { labels: tdLabels, height: 220, color: '#e87830', yFormat: v => D.fmt.num(Math.round(v)) });
+        D.renderAreaChart('ai-trend-total', tdTotal, { labels: tdLabels, height: 220, color: '#8b5cf6', yFormat: v => D.fmt.num(Math.round(v)), seriesName: 'Tokens' });
+        D.renderAreaChart('ai-trend-cost', tdCost, { labels: tdLabels, height: 220, color: '#f59e0b', yFormat: v => D.fmt.usdCompact(v), seriesName: 'Cost' });
+        D.renderAreaChart('ai-trend-reqs', tdReqs, { labels: tdLabels, height: 220, color: '#e87830', yFormat: v => D.fmt.num(Math.round(v)), seriesName: 'Requests' });
       }
 
       // Provider donut
@@ -1986,6 +1994,7 @@ App.pages.users = {
             height: 120,
             color: '#3b82f6',
             yFormat: v => D.fmt.num(Math.round(v)),
+            seriesName: 'Requests',
           });
         }
       });
@@ -2238,6 +2247,7 @@ App.pages.quality = {
           color: '#10b981',
           min: Math.max(0, Math.min(...dailySuccessRate) - 5),
           yFormat: v => D.fmt.pct(v, 0),
+          seriesName: 'Success Rate',
         });
       }
       if (dailyLatency.length) {
@@ -2246,6 +2256,7 @@ App.pages.quality = {
           height: 220,
           color: '#f59e0b',
           yFormat: v => D.fmt.latency(v),
+          seriesName: 'Latency',
         });
       }
       if (errors.length) {
@@ -2432,12 +2443,14 @@ App.pages.cost = {
         height: 220,
         color: '#f59e0b',
         yFormat: v => D.fmt.usdCompact(v),
+        seriesName: 'Cost',
       });
       D.renderAreaChart('cost-chart-cpr', dailyCPR, {
         labels: dailyLabels,
         height: 220,
         color: '#8b5cf6',
         yFormat: v => D.fmt.usd(v, 4),
+        seriesName: 'Cost/Request',
       });
 
       // Provider donut
@@ -2608,7 +2621,6 @@ App.pages.settings = {
           </div>
 
           <div style="margin-top:20px;display:flex;gap:12px;flex-wrap:wrap">
-            <a href="/admin" class="d-btn d-btn-sm">v1 Dashboard &#x2197;</a>
             <button class="d-btn d-btn-sm" onclick="App.logout()">Sign Out</button>
             <button class="d-btn d-btn-sm d-btn-ghost" onclick="D.api.clearCache();App.refreshPage()">Clear Cache</button>
           </div>
@@ -2881,6 +2893,7 @@ App.pages.feedback = {
             labels: data.daily_trend.map(d => D.fmt.dateShort(d.date)),
             color: '#10b981',
             yFormat: v => v + '%',
+            seriesName: 'Satisfaction',
           });
         });
       }

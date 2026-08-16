@@ -4,7 +4,7 @@ from collections.abc import AsyncGenerator
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from slowapi.errors import RateLimitExceeded
 
@@ -86,14 +86,14 @@ def health_check() -> dict[str, str]:
 
 
 @app.get("/admin")
-def admin_dashboard() -> FileResponse:
-    """Serve the founder admin dashboard."""
-    return FileResponse(_STATIC_DIR / "admin.html")
+def admin_dashboard() -> RedirectResponse:
+    """Redirect legacy /admin to the canonical V2 dashboard."""
+    return RedirectResponse(url="/admin/v2", status_code=301)
 
 
 @app.get("/admin/v2")
 def admin_dashboard_v2() -> FileResponse:
-    """Serve the v2 operational intelligence dashboard."""
+    """Serve the admin dashboard."""
     return FileResponse(_STATIC_DIR / "v2" / "index.html")
 
 
