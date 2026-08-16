@@ -580,7 +580,7 @@ private struct HistoryContentView: View {
 
         Task {
             let messages = buildMessages(from: contextRequest, question: question, throughFollowUpIndex: followUpScope)
-            let followUpMode = "\(contextRequest.mode)_followup"
+            let followUpMode = "history_\(contextRequest.mode)_followup"
 
             // Use the canonical follow-up system prompt from ExplanationHUDViewModel.
             let systemPrompt = ExplanationHUDViewModel.historyFollowUpSystemPrompt

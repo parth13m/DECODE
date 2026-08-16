@@ -471,7 +471,7 @@ App.pages.product = {
       ` : ''}
 
       <div class="d-section d-mt-6">
-        ${D.sectionHeader('History Analytics')}
+        ${D.sectionHeader('History Activity', `<span class="d-text-dim" style="font-size:11px">Feature interactions — no AI cost</span>`)}
         ${(history && (history.history_opens > 0 || history.history_followups > 0 || history.history_clears > 0)) ? `
           ${D.kpiGrid([
             D.kpi({ label: 'History Users', value: D.fmt.num(history.history_users), sub: history.adoption !== null ? D.fmt.pct(history.adoption) + ' adoption' : 'No active users', accent: 'brand' }),
@@ -482,7 +482,7 @@ App.pages.product = {
 
           ${(history.daily_trend || []).length > 0 ? `
             <div class="d-mt-4">
-              ${D.chartCard({ title: 'History Usage Trend', canvasId: 'history-trend-chart', height: 200, placeholder: false })}
+              ${D.chartCard({ title: 'History Activity Trend', canvasId: 'history-trend-chart', height: 200, placeholder: false })}
             </div>
           ` : ''}
         ` : `
@@ -492,6 +492,71 @@ App.pages.product = {
             <div style="color:var(--d-text-3);font-size:0.85rem">History analytics will appear here once users start using the History feature.</div>
           </div>
         `}
+      </div>
+
+      <div class="d-section d-mt-6">
+        ${D.sectionHeader('History AI Usage', `<span class="d-text-dim" style="font-size:11px">LLM consumption from History follow-ups</span>`)}
+        ${(() => {
+          const ai = history?.ai_usage;
+          if (!ai || !ai.requests) return `
+            <div class="d-chart-card" style="padding:var(--d-sp-6);text-align:center">
+              <div style="color:var(--d-text-3);font-size:0.85rem">No History AI requests recorded yet. History follow-ups will appear here once users ask follow-up questions from the History panel.</div>
+            </div>`;
+
+          const byMode = ai.by_mode || [];
+          const aiDaily = ai.daily_trend || [];
+
+          return `
+            <div class="d-chart-card" style="padding:var(--d-sp-5);margin-bottom:16px">
+              <table style="width:100%;border-collapse:collapse;font-size:0.85rem">
+                <thead>
+                  <tr style="border-bottom:1px solid var(--d-border)">
+                    <th style="text-align:left;padding:6px 12px;color:var(--d-text-3);font-weight:500"></th>
+                    <th style="text-align:right;padding:6px 12px;color:var(--d-text-3);font-weight:500">Total</th>
+                    <th style="text-align:right;padding:6px 12px;color:var(--d-text-3);font-weight:500">Avg / Request</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr><td style="padding:8px 12px;font-weight:600">Input Tokens</td><td style="text-align:right;padding:8px 12px;font-variant-numeric:tabular-nums">${D.fmt.num(ai.prompt_tokens)}</td><td style="text-align:right;padding:8px 12px;font-variant-numeric:tabular-nums">${D.fmt.num(ai.avg_prompt_tokens)}</td></tr>
+                  <tr><td style="padding:8px 12px;font-weight:600">Output Tokens</td><td style="text-align:right;padding:8px 12px;font-variant-numeric:tabular-nums">${D.fmt.num(ai.completion_tokens)}</td><td style="text-align:right;padding:8px 12px;font-variant-numeric:tabular-nums">${D.fmt.num(ai.avg_completion_tokens)}</td></tr>
+                  <tr style="border-top:1px solid var(--d-border);font-weight:700"><td style="padding:8px 12px">Total</td><td style="text-align:right;padding:8px 12px;font-variant-numeric:tabular-nums">${D.fmt.num(ai.total_tokens)}</td><td style="text-align:right;padding:8px 12px;font-variant-numeric:tabular-nums">${D.fmt.num(ai.avg_total_tokens)}</td></tr>
+                </tbody>
+              </table>
+              <div style="margin-top:8px;padding:4px 12px;color:var(--d-text-4);font-size:0.78rem">
+                AI Requests: ${D.fmt.num(ai.requests)} (${D.fmt.pct(ai.success_rate)} success)
+                &middot; Est. Cost: ${D.fmt.usd(ai.estimated_cost_usd)} (${D.fmt.usd(ai.avg_cost_per_request, 4)}/req)
+                &middot; Share: ${D.fmt.pct(ai.share_of_requests)}% of requests, ${D.fmt.pct(ai.share_of_tokens)}% of tokens, ${D.fmt.pct(ai.share_of_cost)}% of cost
+              </div>
+            </div>
+
+            ${byMode.length > 0 ? `
+              <div class="d-chart-card" style="margin-bottom:16px">${D.table({
+                headers: [
+                  'Origin Mode',
+                  { label: 'Requests', align: 'right' },
+                  { label: 'Input', align: 'right' },
+                  { label: 'Output', align: 'right' },
+                  { label: 'Total', align: 'right' },
+                  { label: 'Avg / Req', align: 'right' },
+                  { label: 'Cost', align: 'right' },
+                ],
+                rows: byMode.map(m => ({
+                  cells: [
+                    '<strong style="color:' + D.featureColor(m.mode) + '">' + D.label(m.mode) + '</strong>',
+                    D.fmt.num(m.requests),
+                    D.fmt.num(m.prompt_tokens),
+                    D.fmt.num(m.completion_tokens),
+                    D.fmt.num(m.total_tokens),
+                    D.fmt.num(m.avg_total_tokens),
+                    D.fmt.usd(m.estimated_cost_usd),
+                  ],
+                })),
+              })}</div>
+            ` : ''}
+
+            ${aiDaily.length > 1 ? D.chartCard({ title: 'History AI Cost Trend', canvasId: 'history-ai-trend-chart', height: 200, placeholder: false }) : ''}
+          `;
+        })()}
       </div>
     `;
 
@@ -523,6 +588,18 @@ App.pages.product = {
         D.renderAreaChart('history-trend-chart',
           trend.map(d => (d.opens || 0) + (d.followups || 0) + (d.clears || 0)),
           { labels: trend.map(d => D.fmt.dateShort(d.date)), height: 200, color: '#e87830', yFormat: v => D.fmt.num(Math.round(v)), seriesName: 'History Events' }
+        );
+      }
+
+      // History AI cost trend
+      const histAiTrend = history?.ai_usage?.daily_trend || [];
+      const histAiCanvas = document.getElementById('history-ai-trend-chart');
+      if (histAiCanvas && histAiTrend.length > 1) {
+        const body = histAiCanvas.closest('.d-chart-body');
+        body.innerHTML = `<canvas id="history-ai-trend-chart" style="width:100%;height:200px"></canvas>`;
+        D.renderAreaChart('history-ai-trend-chart',
+          histAiTrend.map(d => d.cost_usd),
+          { labels: histAiTrend.map(d => D.fmt.dateShort(d.date)), height: 200, color: '#ec4899', yFormat: v => D.fmt.usdCompact(v), seriesName: 'History AI Cost' }
         );
       }
     });
@@ -1254,7 +1331,7 @@ App.pages.userDetail = {
 
       ${detail.history_breakdown ? `
         <div class="d-section d-mt-6">
-          ${D.sectionHeader('History Usage')}
+          ${D.sectionHeader('History Activity', `<span class="d-text-dim" style="font-size:11px">Feature interactions — no AI cost</span>`)}
           <div class="d-chart-card" style="padding:var(--d-sp-5)">
             ${D.statRow([
               { label: 'Opens', value: D.fmt.num(detail.history_breakdown.history_opens) },
@@ -1264,6 +1341,95 @@ App.pages.userDetail = {
           </div>
         </div>
       ` : ''}
+
+      ${detail.history_ai_usage ? (() => {
+        const hai = detail.history_ai_usage;
+        const haiByMode = hai.by_mode || [];
+        const haiRecent = hai.recent_requests || [];
+        return `
+          <div class="d-section d-mt-6">
+            ${D.sectionHeader('History AI Usage', '<span class="d-text-dim" style="font-size:11px">LLM consumption from History follow-ups</span>')}
+            <div class="d-chart-card" style="padding:var(--d-sp-5);margin-bottom:16px">
+              <table style="width:100%;border-collapse:collapse;font-size:0.85rem">
+                <thead>
+                  <tr style="border-bottom:1px solid var(--d-border)">
+                    <th style="text-align:left;padding:6px 12px;color:var(--d-text-3);font-weight:500"></th>
+                    <th style="text-align:right;padding:6px 12px;color:var(--d-text-3);font-weight:500">Total</th>
+                    <th style="text-align:right;padding:6px 12px;color:var(--d-text-3);font-weight:500">Avg / Request</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr><td style="padding:8px 12px;font-weight:600">Input Tokens</td><td style="text-align:right;padding:8px 12px;font-variant-numeric:tabular-nums">${D.fmt.num(hai.prompt_tokens)}</td><td style="text-align:right;padding:8px 12px;font-variant-numeric:tabular-nums">${D.fmt.num(hai.avg_prompt_tokens)}</td></tr>
+                  <tr><td style="padding:8px 12px;font-weight:600">Output Tokens</td><td style="text-align:right;padding:8px 12px;font-variant-numeric:tabular-nums">${D.fmt.num(hai.completion_tokens)}</td><td style="text-align:right;padding:8px 12px;font-variant-numeric:tabular-nums">${D.fmt.num(hai.avg_completion_tokens)}</td></tr>
+                  <tr style="border-top:1px solid var(--d-border);font-weight:700"><td style="padding:8px 12px">Total</td><td style="text-align:right;padding:8px 12px;font-variant-numeric:tabular-nums">${D.fmt.num(hai.total_tokens)}</td><td style="text-align:right;padding:8px 12px;font-variant-numeric:tabular-nums">${D.fmt.num(hai.avg_total_tokens)}</td></tr>
+                </tbody>
+              </table>
+              <div style="margin-top:8px;padding:4px 12px;color:var(--d-text-4);font-size:0.78rem">
+                AI Requests: ${D.fmt.num(hai.requests)} (${D.fmt.pct(hai.success_rate)} success)
+                &middot; Est. Cost: ${D.fmt.usd(hai.estimated_cost_usd)} (${D.fmt.usd(hai.avg_cost_per_request, 4)}/req)
+                &middot; Avg Latency: ${D.fmt.latency(hai.avg_latency_ms)}
+              </div>
+            </div>
+
+            ${haiByMode.length > 0 ? `
+              <div class="d-chart-card" style="margin-bottom:16px">${D.table({
+                headers: [
+                  'Origin Mode',
+                  { label: 'Requests', align: 'right' },
+                  { label: 'Input', align: 'right' },
+                  { label: 'Output', align: 'right' },
+                  { label: 'Total', align: 'right' },
+                  { label: 'Avg / Req', align: 'right' },
+                  { label: 'Cost', align: 'right' },
+                ],
+                rows: haiByMode.map(m => ({
+                  cells: [
+                    '<strong style="color:' + D.featureColor(m.mode) + '">' + D.label(m.mode) + '</strong>',
+                    D.fmt.num(m.requests),
+                    D.fmt.num(m.prompt_tokens),
+                    D.fmt.num(m.completion_tokens),
+                    D.fmt.num(m.total_tokens),
+                    D.fmt.num(m.avg_total_tokens),
+                    D.fmt.usd(m.estimated_cost_usd),
+                  ],
+                })),
+              })}</div>
+            ` : ''}
+
+            ${haiRecent.length > 0 ? `
+              ${D.sectionHeader('Recent History AI Requests', '<span class="d-text-dim" style="font-size:11px">Newest first</span>')}
+              <div class="d-chart-card">${D.table({
+                headers: [
+                  'Time',
+                  'Origin',
+                  'Provider',
+                  'Model',
+                  'Status',
+                  { label: 'Latency', align: 'right' },
+                  { label: 'Input', align: 'right' },
+                  { label: 'Output', align: 'right' },
+                  { label: 'Total', align: 'right' },
+                  { label: 'Cost', align: 'right' },
+                ],
+                rows: haiRecent.slice(0, 20).map(r => ({
+                  cells: [
+                    D.fmt.timeAgo(r.created_at),
+                    '<strong style="color:' + D.featureColor(r.origin_mode) + '">' + D.label(r.origin_mode || 'unknown') + '</strong>',
+                    r.ai_provider ? D.badge(r.ai_provider, r.ai_provider === 'groq' ? 'info' : 'neutral') : '\\u2014',
+                    r.ai_model ? '<span class="d-text-mono" style="font-size:0.75rem">' + D.fmt.escapeHtml(r.ai_model) + '</span>' : '\\u2014',
+                    r.success ? D.badge('OK', 'success') : D.badge(r.error_type || 'FAIL', 'danger'),
+                    D.fmt.latency(r.latency_ms),
+                    r.prompt_tokens ? D.fmt.num(r.prompt_tokens) : '\\u2014',
+                    r.completion_tokens ? D.fmt.num(r.completion_tokens) : '\\u2014',
+                    r.total_tokens ? D.fmt.num(r.total_tokens) : '\\u2014',
+                    D.fmt.usd(r.estimated_cost_usd),
+                  ],
+                })),
+              })}</div>
+            ` : ''}
+          </div>
+        `;
+      })() : ''}
 
       ${recentReqs.length ? `
         <div class="d-section d-mt-6">

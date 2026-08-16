@@ -519,6 +519,9 @@ def get_user_detail(
         ("_none_", "enrichment"): "Semantic Enrichment",
         ("_none_", "enrichment_kgr"): "File Understanding (KGR)",
         ("_none_", "compression"): "VS Memory Compression",
+        ("selection", "history_followup"): "History Follow-Up (Selection)",
+        ("session", "history_followup"): "History Follow-Up (Session)",
+        ("screenshot", "history_followup"): "History Follow-Up (Screenshot)",
     }
 
     mode_detail = []
@@ -628,6 +631,77 @@ def get_user_detail(
         sa_func.max(AIRequest.created_at)
     ).filter(*filters).scalar()
 
+    # ── Per-user History AI usage (request_type = "history_followup") ──
+    hist_ai_filters = (*filters, AIRequest.request_type == "history_followup")
+    hist_ai_totals = db.query(
+        sa_func.count().label("requests"),
+        sa_func.count().filter(AIRequest.success.is_(True)).label("successful"),
+        sa_func.count().filter(AIRequest.success.is_(False)).label("failed"),
+        sa_func.sum(AIRequest.prompt_tokens).label("prompt_tokens"),
+        sa_func.sum(AIRequest.completion_tokens).label("completion_tokens"),
+        sa_func.sum(AIRequest.total_tokens).label("total_tokens"),
+        sa_func.sum(AIRequest.estimated_cost_usd).label("cost"),
+        sa_func.avg(AIRequest.latency_ms).filter(
+            AIRequest.success.is_(True)
+        ).label("avg_latency"),
+    ).filter(*hist_ai_filters).one()
+
+    _hai_reqs = hist_ai_totals.requests or 0
+    _hai_prompt = hist_ai_totals.prompt_tokens or 0
+    _hai_completion = hist_ai_totals.completion_tokens or 0
+    _hai_tokens = hist_ai_totals.total_tokens or 0
+    _hai_cost = hist_ai_totals.cost or 0
+
+    # By origin_mode within history_followup
+    hist_ai_by_mode = db.query(
+        AIRequest.origin_mode.label("mode"),
+        sa_func.count().label("requests"),
+        sa_func.count().filter(AIRequest.success.is_(True)).label("successful"),
+        sa_func.count().filter(AIRequest.success.is_(False)).label("failed"),
+        sa_func.sum(AIRequest.prompt_tokens).label("prompt_tokens"),
+        sa_func.sum(AIRequest.completion_tokens).label("completion_tokens"),
+        sa_func.sum(AIRequest.total_tokens).label("total_tokens"),
+        sa_func.sum(AIRequest.estimated_cost_usd).label("cost"),
+    ).filter(*hist_ai_filters).group_by("mode").order_by(
+        sa_func.count().desc()
+    ).all()
+
+    # Recent history AI requests
+    hist_ai_recent = db.query(AIRequest).filter(
+        *hist_ai_filters
+    ).order_by(AIRequest.created_at.desc()).limit(20).all()
+
+    history_ai_usage = {
+        "requests": _hai_reqs,
+        "successful": hist_ai_totals.successful or 0,
+        "failed": hist_ai_totals.failed or 0,
+        "success_rate": round((hist_ai_totals.successful or 0) / _hai_reqs * 100, 1) if _hai_reqs else 0,
+        "prompt_tokens": _hai_prompt,
+        "completion_tokens": _hai_completion,
+        "total_tokens": _hai_tokens,
+        "estimated_cost_usd": round(_hai_cost, 4),
+        "avg_prompt_tokens": round(_hai_prompt / _hai_reqs) if _hai_reqs else 0,
+        "avg_completion_tokens": round(_hai_completion / _hai_reqs) if _hai_reqs else 0,
+        "avg_total_tokens": round(_hai_tokens / _hai_reqs) if _hai_reqs else 0,
+        "avg_cost_per_request": round(_hai_cost / _hai_reqs, 6) if _hai_reqs else 0,
+        "avg_latency_ms": round(hist_ai_totals.avg_latency) if hist_ai_totals.avg_latency else 0,
+        "by_mode": [
+            {
+                "mode": r.mode or "unknown",
+                "requests": r.requests,
+                "successful": r.successful or 0,
+                "failed": r.failed or 0,
+                "prompt_tokens": r.prompt_tokens or 0,
+                "completion_tokens": r.completion_tokens or 0,
+                "total_tokens": r.total_tokens or 0,
+                "avg_total_tokens": round((r.total_tokens or 0) / r.requests) if r.requests else 0,
+                "estimated_cost_usd": round(r.cost, 4) if r.cost else 0,
+            }
+            for r in hist_ai_by_mode
+        ],
+        "recent_requests": [_format_request(r) for r in hist_ai_recent],
+    } if _hai_reqs > 0 else None
+
     return {
         "user": {
             "id": str(user.id),
@@ -649,6 +723,7 @@ def get_user_detail(
         "by_request_type": [{"request_type": r.type, "count": r.count} for r in type_rows],
         "mode_detail": mode_detail,
         "history_breakdown": history_breakdown,
+        "history_ai_usage": history_ai_usage,
         "improve_breakdown": _v2_user_improve_breakdown(db, user_id, start_date, end_date),
         "profile_intelligence": _v2_user_profile_intelligence(user),
         "daily_trend": [
@@ -1366,6 +1441,7 @@ def get_token_breakdown(
     # dashboard can show Selection, Session, Session Follow-up, etc.
     feature_expr = case(
         (AIRequest.request_type == "vision", "vision"),
+        (AIRequest.request_type == "history_followup", "history_followup"),
         (and_(AIRequest.origin_mode == "session",
               AIRequest.request_type == "followup"), "session_followup"),
         (and_(AIRequest.origin_mode == "session",
@@ -1877,8 +1953,100 @@ def get_history_analytics(
         .all()
     )
 
+    # ══════════════════════════════════════════════════════════
+    # History AI Usage — token analytics from ai_requests
+    # ══════════════════════════════════════════════════════════
+    # History-originated follow-ups are stored with request_type="history_followup"
+    # in ai_requests (via the "history_<mode>_followup" compound mode).
+    ai_filters = (
+        *_date_filter(AIRequest, start_date, end_date),
+        AIRequest.request_type == "history_followup",
+    )
+
+    # ── Overall totals ──
+    ai_totals = db.query(
+        sa_func.count().label("requests"),
+        sa_func.count().filter(AIRequest.success.is_(True)).label("successful"),
+        sa_func.count().filter(AIRequest.success.is_(False)).label("failed"),
+        sa_func.sum(AIRequest.prompt_tokens).label("prompt_tokens"),
+        sa_func.sum(AIRequest.completion_tokens).label("completion_tokens"),
+        sa_func.sum(AIRequest.total_tokens).label("total_tokens"),
+        sa_func.sum(AIRequest.estimated_cost_usd).label("cost"),
+        sa_func.avg(AIRequest.latency_ms).filter(
+            AIRequest.success.is_(True)
+        ).label("avg_latency"),
+    ).filter(*ai_filters).one()
+
+    ai_requests_count = ai_totals.requests or 0
+    ai_successful = ai_totals.successful or 0
+    ai_failed = ai_totals.failed or 0
+    ai_prompt = ai_totals.prompt_tokens or 0
+    ai_completion = ai_totals.completion_tokens or 0
+    ai_total_tokens = ai_totals.total_tokens or 0
+    ai_cost = ai_totals.cost or 0
+
+    # ── All AI requests in the period (for share/impact) ──
+    all_ai = db.query(
+        sa_func.count().label("requests"),
+        sa_func.sum(AIRequest.total_tokens).label("total_tokens"),
+        sa_func.sum(AIRequest.estimated_cost_usd).label("cost"),
+    ).filter(*_date_filter(AIRequest, start_date, end_date)).one()
+
+    all_ai_requests = all_ai.requests or 0
+    all_ai_tokens = all_ai.total_tokens or 0
+    all_ai_cost = all_ai.cost or 0
+
+    # ── By origin_mode breakdown ──
+    ai_by_mode = db.query(
+        AIRequest.origin_mode.label("mode"),
+        sa_func.count().label("requests"),
+        sa_func.count().filter(AIRequest.success.is_(True)).label("successful"),
+        sa_func.count().filter(AIRequest.success.is_(False)).label("failed"),
+        sa_func.sum(AIRequest.prompt_tokens).label("prompt_tokens"),
+        sa_func.sum(AIRequest.completion_tokens).label("completion_tokens"),
+        sa_func.sum(AIRequest.total_tokens).label("total_tokens"),
+        sa_func.sum(AIRequest.estimated_cost_usd).label("cost"),
+        sa_func.avg(AIRequest.latency_ms).filter(
+            AIRequest.success.is_(True)
+        ).label("avg_latency"),
+    ).filter(*ai_filters).group_by("mode").order_by(
+        sa_func.count().desc()
+    ).all()
+
+    # ── Daily AI trend ──
+    ai_daily = db.query(
+        cast(AIRequest.created_at, Date).label("day"),
+        sa_func.count().label("requests"),
+        sa_func.sum(AIRequest.prompt_tokens).label("prompt_tokens"),
+        sa_func.sum(AIRequest.completion_tokens).label("completion_tokens"),
+        sa_func.sum(AIRequest.total_tokens).label("total_tokens"),
+        sa_func.sum(AIRequest.estimated_cost_usd).label("cost"),
+    ).filter(*ai_filters).group_by("day").order_by("day").all()
+
+    # ── Per-user History AI breakdown (top 20) ──
+    ai_top_users = db.query(
+        AIRequest.user_id,
+        sa_func.count().label("requests"),
+        sa_func.count().filter(AIRequest.success.is_(True)).label("successful"),
+        sa_func.sum(AIRequest.prompt_tokens).label("prompt_tokens"),
+        sa_func.sum(AIRequest.completion_tokens).label("completion_tokens"),
+        sa_func.sum(AIRequest.total_tokens).label("total_tokens"),
+        sa_func.sum(AIRequest.estimated_cost_usd).label("cost"),
+    ).filter(*ai_filters).group_by(AIRequest.user_id).order_by(
+        sa_func.sum(AIRequest.total_tokens).desc()
+    ).limit(20).all()
+
+    ai_user_ids = [r.user_id for r in ai_top_users]
+    ai_users_map = {}
+    if ai_user_ids:
+        _u_rows = db.query(User.id, User.name, User.email).filter(
+            User.id.in_(ai_user_ids)
+        ).all()
+        ai_users_map = {str(u.id): (u.name, u.email) for u in _u_rows}
+
     return {
         "period": {"start": str(start_date), "end": str(end_date)},
+        # ── History Activity (analytics_events) ──
         "history_users": history_users,
         "active_users": active_users,
         "adoption": adoption,
@@ -1910,6 +2078,70 @@ def get_history_analytics(
             }
             for r in top_users
         ],
+        # ── History AI Usage (ai_requests where request_type=history_followup) ──
+        "ai_usage": {
+            "requests": ai_requests_count,
+            "successful": ai_successful,
+            "failed": ai_failed,
+            "success_rate": round(ai_successful / ai_requests_count * 100, 1) if ai_requests_count else 0,
+            "prompt_tokens": ai_prompt,
+            "completion_tokens": ai_completion,
+            "total_tokens": ai_total_tokens,
+            "estimated_cost_usd": round(ai_cost, 4),
+            "avg_prompt_tokens": round(ai_prompt / ai_requests_count) if ai_requests_count else 0,
+            "avg_completion_tokens": round(ai_completion / ai_requests_count) if ai_requests_count else 0,
+            "avg_total_tokens": round(ai_total_tokens / ai_requests_count) if ai_requests_count else 0,
+            "avg_cost_per_request": round(ai_cost / ai_requests_count, 6) if ai_requests_count else 0,
+            "avg_latency_ms": round(ai_totals.avg_latency) if ai_totals.avg_latency else 0,
+            # Share / impact relative to all AI usage
+            "share_of_requests": round(ai_requests_count / all_ai_requests * 100, 1) if all_ai_requests else 0,
+            "share_of_tokens": round(ai_total_tokens / all_ai_tokens * 100, 1) if all_ai_tokens else 0,
+            "share_of_cost": round(ai_cost / all_ai_cost * 100, 1) if all_ai_cost else 0,
+            # By origin mode
+            "by_mode": [
+                {
+                    "mode": r.mode or "unknown",
+                    "requests": r.requests,
+                    "successful": r.successful or 0,
+                    "failed": r.failed or 0,
+                    "success_rate": round((r.successful or 0) / r.requests * 100, 1) if r.requests else 0,
+                    "prompt_tokens": r.prompt_tokens or 0,
+                    "completion_tokens": r.completion_tokens or 0,
+                    "total_tokens": r.total_tokens or 0,
+                    "avg_total_tokens": round((r.total_tokens or 0) / r.requests) if r.requests else 0,
+                    "estimated_cost_usd": round(r.cost, 4) if r.cost else 0,
+                    "avg_latency_ms": round(r.avg_latency) if r.avg_latency else 0,
+                }
+                for r in ai_by_mode
+            ],
+            # Daily AI trend
+            "daily_trend": [
+                {
+                    "date": str(r.day),
+                    "requests": r.requests,
+                    "prompt_tokens": r.prompt_tokens or 0,
+                    "completion_tokens": r.completion_tokens or 0,
+                    "total_tokens": r.total_tokens or 0,
+                    "cost_usd": round(r.cost, 4) if r.cost else 0,
+                }
+                for r in ai_daily
+            ],
+            # Top consumers
+            "top_users": [
+                {
+                    "user_id": r.user_id,
+                    "name": ai_users_map.get(r.user_id, (None, None))[0],
+                    "email": ai_users_map.get(r.user_id, (None, None))[1],
+                    "requests": r.requests,
+                    "successful": r.successful or 0,
+                    "prompt_tokens": r.prompt_tokens or 0,
+                    "completion_tokens": r.completion_tokens or 0,
+                    "total_tokens": r.total_tokens or 0,
+                    "cost_usd": round(r.cost, 4) if r.cost else 0,
+                }
+                for r in ai_top_users
+            ],
+        },
     }
 
 

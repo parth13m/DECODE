@@ -37,6 +37,11 @@ _COMPOUND_MODE_MAP: dict[str, tuple[str, str]] = {
     "screenshot_followup": ("screenshot", "followup"),
     "selection_improve": ("selection", "improve"),
     "session_improve": ("session", "improve"),
+    # History-originated follow-ups — prefixed with "history_" by
+    # FloatingHistoryHUD so they are distinguishable from normal follow-ups.
+    "history_selection_followup": ("selection", "history_followup"),
+    "history_session_followup": ("session", "history_followup"),
+    "history_screenshot_followup": ("screenshot", "history_followup"),
 }
 
 

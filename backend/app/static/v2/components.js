@@ -112,7 +112,7 @@ D.label = (function() {
     selection: 'Selection Mode', session: 'Session Mode', screenshot: 'Screenshot Mode',
     explain: 'Code Explanation', followup: 'Follow-up', improve: 'Code Improvement',
     vision: 'Visual Context', enrichment: 'File Understanding', enrichment_kgr: 'Knowledge Gen',
-    compression: 'Memory Compression',
+    compression: 'Memory Compression', history_followup: 'History Follow-up',
     selection_followup: 'Selection Follow-up', session_followup: 'Session Follow-up',
     screenshot_followup: 'Screenshot Follow-up',
     selection_improve: 'Selection Improvement', session_improve: 'Session Improvement',
@@ -131,7 +131,8 @@ D.featureColor = function(key) {
     selection: '#e87830', session: '#3b82f6', screenshot: '#8b5cf6',
     explain: '#e87830', followup: '#3b82f6', improve: '#10b981',
     vision: '#8b5cf6', enrichment: '#f59e0b', enrichment_kgr: '#f59e0b',
-    compression: '#6b7280', selection_followup: '#f97316', session_followup: '#06b6d4',
+    compression: '#6b7280', history_followup: '#ec4899',
+    selection_followup: '#f97316', session_followup: '#06b6d4',
     selection_improve: '#10b981', session_improve: '#10b981',
     other: '#6b7280', unknown: '#9ca3af',
   };
