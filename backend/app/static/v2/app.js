@@ -868,15 +868,10 @@ App.pages.product = {
         const trend = improve.daily_trend;
         const body = improveTrendCanvas.closest('.d-chart-body');
         body.innerHTML = `<canvas id="improve-trend-chart" style="width:100%;height:200px"></canvas>`;
-        D.renderAreaChart('improve-trend-chart', {
-          labels: trend.map(d => d.date),
-          datasets: [
-            { label: 'Copy', data: trend.map(d => d.copies), color: '#10b981' },
-            { label: 'Replace', data: trend.map(d => d.replaces), color: '#3b82f6' },
-            { label: 'Dismiss', data: trend.map(d => d.dismissals), color: '#f59e0b' },
-            { label: 'No Change', data: trend.map(d => d.no_changes), color: '#6b7280' },
-          ],
-        }, { height: 200 });
+        D.renderAreaChart('improve-trend-chart',
+          trend.map(d => (d.copies || 0) + (d.replaces || 0) + (d.dismissals || 0) + (d.no_changes || 0)),
+          { labels: trend.map(d => D.fmt.dateShort(d.date)), height: 200, color: '#10b981', yFormat: v => D.fmt.num(Math.round(v)) }
+        );
       }
 
       // History trend chart
@@ -885,14 +880,10 @@ App.pages.product = {
         const trend = history.daily_trend;
         const body = historyTrendCanvas.closest('.d-chart-body');
         body.innerHTML = `<canvas id="history-trend-chart" style="width:100%;height:200px"></canvas>`;
-        D.renderAreaChart('history-trend-chart', {
-          labels: trend.map(d => d.date),
-          datasets: [
-            { label: 'Opens', data: trend.map(d => d.opens), color: '#e87830' },
-            { label: 'Follow-Ups', data: trend.map(d => d.followups), color: '#3b82f6' },
-            { label: 'Clears', data: trend.map(d => d.clears), color: '#ef4444' },
-          ],
-        }, { height: 200 });
+        D.renderAreaChart('history-trend-chart',
+          trend.map(d => (d.opens || 0) + (d.followups || 0) + (d.clears || 0)),
+          { labels: trend.map(d => D.fmt.dateShort(d.date)), height: 200, color: '#e87830', yFormat: v => D.fmt.num(Math.round(v)) }
+        );
       }
     });
   },
@@ -2803,13 +2794,15 @@ App.pages.feedback = {
         html += D.sectionHeader('By Feature');
         html += D.table({
           headers: ['Feature', 'Total', 'Likes', 'Dislikes', 'Satisfaction'],
-          rows: data.by_feature.map(r => [
-            D.badge(r.feature, r.feature === 'explain' ? 'info' : 'brand'),
-            D.fmt.num(r.total),
-            D.fmt.num(r.likes),
-            D.fmt.num(r.dislikes),
-            D.badge(D.fmt.pct(r.satisfaction), r.satisfaction >= 70 ? 'success' : r.satisfaction >= 40 ? 'warning' : 'danger'),
-          ]),
+          rows: data.by_feature.map(r => ({
+            cells: [
+              D.badge(r.feature, r.feature === 'explain' ? 'info' : 'brand'),
+              D.fmt.num(r.total),
+              D.fmt.num(r.likes),
+              D.fmt.num(r.dislikes),
+              D.badge(D.fmt.pct(r.satisfaction), r.satisfaction >= 70 ? 'success' : r.satisfaction >= 40 ? 'warning' : 'danger'),
+            ],
+          })),
         });
       }
 
@@ -2818,13 +2811,15 @@ App.pages.feedback = {
         html += D.sectionHeader('By Optimisation Goal');
         html += D.table({
           headers: ['Goal', 'Total', 'Likes', 'Dislikes', 'Satisfaction'],
-          rows: data.by_optimisation_goal.map(r => [
-            D.badge(r.goal, 'brand'),
-            D.fmt.num(r.total),
-            D.fmt.num(r.likes),
-            D.fmt.num(r.dislikes),
-            D.badge(D.fmt.pct(r.satisfaction), r.satisfaction >= 70 ? 'success' : r.satisfaction >= 40 ? 'warning' : 'danger'),
-          ]),
+          rows: data.by_optimisation_goal.map(r => ({
+            cells: [
+              D.badge(r.goal, 'brand'),
+              D.fmt.num(r.total),
+              D.fmt.num(r.likes),
+              D.fmt.num(r.dislikes),
+              D.badge(D.fmt.pct(r.satisfaction), r.satisfaction >= 70 ? 'success' : r.satisfaction >= 40 ? 'warning' : 'danger'),
+            ],
+          })),
         });
       }
 
@@ -2833,13 +2828,15 @@ App.pages.feedback = {
         html += D.sectionHeader('By Language');
         html += D.table({
           headers: ['Language', 'Total', 'Likes', 'Dislikes', 'Satisfaction'],
-          rows: data.by_language.map(r => [
-            r.language,
-            D.fmt.num(r.total),
-            D.fmt.num(r.likes),
-            D.fmt.num(r.dislikes),
-            D.badge(D.fmt.pct(r.satisfaction), r.satisfaction >= 70 ? 'success' : r.satisfaction >= 40 ? 'warning' : 'danger'),
-          ]),
+          rows: data.by_language.map(r => ({
+            cells: [
+              r.language,
+              D.fmt.num(r.total),
+              D.fmt.num(r.likes),
+              D.fmt.num(r.dislikes),
+              D.badge(D.fmt.pct(r.satisfaction), r.satisfaction >= 70 ? 'success' : r.satisfaction >= 40 ? 'warning' : 'danger'),
+            ],
+          })),
         });
       }
 
@@ -2848,13 +2845,15 @@ App.pages.feedback = {
         html += D.sectionHeader('By Mode');
         html += D.table({
           headers: ['Mode', 'Total', 'Likes', 'Dislikes', 'Satisfaction'],
-          rows: data.by_mode.map(r => [
-            D.badge(r.mode, 'neutral'),
-            D.fmt.num(r.total),
-            D.fmt.num(r.likes),
-            D.fmt.num(r.dislikes),
-            D.badge(D.fmt.pct(r.satisfaction), r.satisfaction >= 70 ? 'success' : r.satisfaction >= 40 ? 'warning' : 'danger'),
-          ]),
+          rows: data.by_mode.map(r => ({
+            cells: [
+              D.badge(r.mode, 'neutral'),
+              D.fmt.num(r.total),
+              D.fmt.num(r.likes),
+              D.fmt.num(r.dislikes),
+              D.badge(D.fmt.pct(r.satisfaction), r.satisfaction >= 70 ? 'success' : r.satisfaction >= 40 ? 'warning' : 'danger'),
+            ],
+          })),
         });
       }
 
@@ -2872,16 +2871,17 @@ App.pages.feedback = {
       // Render charts after DOM mount.
       if (data.daily_trend && data.daily_trend.length > 1) {
         requestAnimationFrame(() => {
-          D.renderBarChart('feedback-daily-chart', {
-            labels: data.daily_trend.map(d => D.fmt.dateShort(d.date)),
-            values: data.daily_trend.map(d => d.total),
-          }, { color: 'var(--d-brand)' });
+          D.renderBarChart('feedback-daily-chart',
+            data.daily_trend.map(d => d.total),
+            { labels: data.daily_trend.map(d => D.fmt.dateShort(d.date)), colors: '#e87830' }
+          );
 
           const satValues = data.daily_trend.map(d => d.total > 0 ? Math.round(d.likes / d.total * 100) : 0);
-          D.renderAreaChart('feedback-satisfaction-chart', {
+          D.renderAreaChart('feedback-satisfaction-chart', satValues, {
             labels: data.daily_trend.map(d => D.fmt.dateShort(d.date)),
-            values: satValues,
-          }, { color: 'var(--d-success)', yMax: 100, ySuffix: '%' });
+            color: '#10b981',
+            yFormat: v => v + '%',
+          });
         });
       }
 

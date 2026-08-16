@@ -1775,7 +1775,7 @@ def get_history_analytics(
     # Count unique users who made any AI request in the period.
     active_users = (
         db.query(sa_func.count(sa_func.distinct(RequestLog.user_id)))
-        .filter(_date_filter(RequestLog, start_date, end_date))
+        .filter(*_date_filter(RequestLog, start_date, end_date))
         .scalar()
     ) or 0
     adoption = round(history_users / active_users * 100, 1) if active_users > 0 else None
