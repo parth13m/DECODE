@@ -14,10 +14,15 @@ import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
+import os
+
 import httpx
 
-BASE_URL = "https://decode-production-9eba.up.railway.app"
-TOKEN = "3caa9b9e51d62702ba194fb48b69111d030fda9583af675575bfbbba6c4f87ae"
+BASE_URL = os.environ.get("LOAD_TEST_URL", "http://localhost:8000")
+TOKEN = os.environ.get("LOAD_TEST_TOKEN", "")
+if not TOKEN:
+    print("ERROR: Set LOAD_TEST_TOKEN environment variable before running.")
+    sys.exit(1)
 HEADERS = {"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json"}
 
 TIMEOUT = 90.0  # seconds per request

@@ -326,6 +326,72 @@ def get_users_analytics(
 
 
 # ---------------------------------------------------------------------------
+# User Detail — helpers
+# ---------------------------------------------------------------------------
+
+
+def _v2_user_improve_breakdown(
+    db: Session, user_id: str, start_date: date, end_date: date,
+) -> dict | None:
+    """Per-user Improve Code outcome analytics from analytics_events."""
+    improve_types = ["improve_copy", "improve_replace", "improve_dismiss", "improve_no_change"]
+    date_filters = _date_filter(AnalyticsEvent, start_date, end_date)
+
+    counts = dict(
+        db.query(AnalyticsEvent.event_type, sa_func.count(AnalyticsEvent.id))
+        .filter(
+            *date_filters,
+            AnalyticsEvent.user_id == user_id,
+            AnalyticsEvent.event_type.in_(improve_types),
+        )
+        .group_by(AnalyticsEvent.event_type)
+        .all()
+    )
+    copy_count = counts.get("improve_copy", 0)
+    replace_count = counts.get("improve_replace", 0)
+    dismiss_count = counts.get("improve_dismiss", 0)
+    no_change_count = counts.get("improve_no_change", 0)
+    total = copy_count + replace_count + dismiss_count + no_change_count
+
+    if total == 0:
+        return None
+
+    # Improve AI requests for this user
+    req_date_filters = _date_filter(AIRequest, start_date, end_date)
+    improve_requests = (
+        db.query(sa_func.count(AIRequest.id))
+        .filter(*req_date_filters, AIRequest.user_id == user_id, AIRequest.request_type == "improve")
+        .scalar()
+    ) or 0
+
+    improvable = total - no_change_count
+    accepted = copy_count + replace_count
+
+    return {
+        "improve_requests": improve_requests,
+        "copy_count": copy_count,
+        "replace_count": replace_count,
+        "dismiss_count": dismiss_count,
+        "no_change_count": no_change_count,
+        "total_outcomes": total,
+        "acceptance_rate": round(accepted / improvable * 100, 1) if improvable > 0 else None,
+        "no_change_rate": round(no_change_count / total * 100, 1) if total > 0 else None,
+    }
+
+
+def _v2_user_profile_intelligence(user) -> dict | None:
+    """Extract Profile Intelligence snapshot from user model."""
+    if not user.profile_snapshot:
+        return None
+    return {
+        "available": True,
+        "schema_version": user.profile_schema_version,
+        "synced_at": str(user.profile_synced_at) if user.profile_synced_at else None,
+        "data": user.profile_snapshot,
+    }
+
+
+# ---------------------------------------------------------------------------
 # User Detail
 # ---------------------------------------------------------------------------
 
@@ -558,6 +624,8 @@ def get_user_detail(
         "by_request_type": [{"request_type": r.type, "count": r.count} for r in type_rows],
         "mode_detail": mode_detail,
         "history_breakdown": history_breakdown,
+        "improve_breakdown": _v2_user_improve_breakdown(db, user_id, start_date, end_date),
+        "profile_intelligence": _v2_user_profile_intelligence(user),
         "daily_trend": [
             {"date": str(r.day), "requests": r.requests}
             for r in daily
@@ -1811,6 +1879,148 @@ def get_history_analytics(
                 "opens": r.opens or 0,
                 "followups": r.followups or 0,
                 "clears": r.clears or 0,
+            }
+            for r in top_users
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Improve Code analytics
+# ---------------------------------------------------------------------------
+
+
+@router.get("/improve")
+def get_improve_analytics(
+    days: int | None = Query(None, ge=1, le=365),
+    start: date | None = None,
+    end: date | None = None,
+    db: Session = Depends(get_db),
+):
+    """Improve Code outcome analytics from analytics_events."""
+    start_date, end_date = _parse_date_range(days, start, end)
+    date_filters = _date_filter(AnalyticsEvent, start_date, end_date)
+    req_date_filters = _date_filter(AIRequest, start_date, end_date)
+
+    improve_types = ["improve_copy", "improve_replace", "improve_dismiss", "improve_no_change"]
+
+    # ── Aggregate outcome counts ──
+    counts = dict(
+        db.query(AnalyticsEvent.event_type, sa_func.count(AnalyticsEvent.id))
+        .filter(*date_filters, AnalyticsEvent.event_type.in_(improve_types))
+        .group_by(AnalyticsEvent.event_type)
+        .all()
+    )
+    copy_count = counts.get("improve_copy", 0)
+    replace_count = counts.get("improve_replace", 0)
+    dismiss_count = counts.get("improve_dismiss", 0)
+    no_change_count = counts.get("improve_no_change", 0)
+    total_outcomes = copy_count + replace_count + dismiss_count + no_change_count
+
+    # ── Improve AI requests count (from ai_requests) ──
+    improve_requests = (
+        db.query(sa_func.count(AIRequest.id))
+        .filter(*req_date_filters, AIRequest.request_type == "improve")
+        .scalar()
+    ) or 0
+
+    # ── Explain requests for adoption rate ──
+    explain_requests = (
+        db.query(sa_func.count(AIRequest.id))
+        .filter(*req_date_filters, AIRequest.request_type == "explain")
+        .scalar()
+    ) or 0
+    adoption_rate = round(improve_requests / explain_requests * 100, 1) if explain_requests > 0 else None
+
+    # ── Acceptance rate: (copy + replace) / improvable requests ──
+    improvable_total = total_outcomes - no_change_count
+    accepted_total = copy_count + replace_count
+    acceptance_rate = round(accepted_total / improvable_total * 100, 1) if improvable_total > 0 else None
+    no_change_rate = round(no_change_count / total_outcomes * 100, 1) if total_outcomes > 0 else None
+
+    # ── Replace failure rate from metadata ──
+    replace_failure_count = (
+        db.query(sa_func.count(AnalyticsEvent.id))
+        .filter(
+            *date_filters,
+            AnalyticsEvent.event_type == "improve_replace",
+            AnalyticsEvent.metadata_["replace_result"].as_string() != "success",
+        )
+        .scalar()
+    ) or 0
+    replace_failure_rate = (
+        round(replace_failure_count / replace_count * 100, 1)
+        if replace_count > 0 else None
+    )
+
+    # ── Unique users ──
+    improve_users = (
+        db.query(sa_func.count(sa_func.distinct(AnalyticsEvent.user_id)))
+        .filter(*date_filters, AnalyticsEvent.event_type.in_(improve_types))
+        .scalar()
+    ) or 0
+
+    # ── Daily trend ──
+    daily = (
+        db.query(
+            cast(AnalyticsEvent.created_at, Date).label("day"),
+            sa_func.count().filter(AnalyticsEvent.event_type == "improve_copy").label("copies"),
+            sa_func.count().filter(AnalyticsEvent.event_type == "improve_replace").label("replaces"),
+            sa_func.count().filter(AnalyticsEvent.event_type == "improve_dismiss").label("dismissals"),
+            sa_func.count().filter(AnalyticsEvent.event_type == "improve_no_change").label("no_changes"),
+        )
+        .filter(*date_filters, AnalyticsEvent.event_type.in_(improve_types))
+        .group_by("day")
+        .order_by("day")
+        .all()
+    )
+
+    # ── Top users by improve activity ──
+    top_users = (
+        db.query(
+            AnalyticsEvent.user_id,
+            sa_func.count().label("total"),
+            sa_func.count().filter(AnalyticsEvent.event_type == "improve_copy").label("copies"),
+            sa_func.count().filter(AnalyticsEvent.event_type == "improve_replace").label("replaces"),
+        )
+        .filter(*date_filters, AnalyticsEvent.event_type.in_(improve_types))
+        .group_by(AnalyticsEvent.user_id)
+        .order_by(sa_func.count().desc())
+        .limit(20)
+        .all()
+    )
+
+    return {
+        "period": {"start": str(start_date), "end": str(end_date)},
+        "improve_requests": improve_requests,
+        "explain_requests": explain_requests,
+        "adoption_rate": adoption_rate,
+        "copy_count": copy_count,
+        "replace_count": replace_count,
+        "dismiss_count": dismiss_count,
+        "no_change_count": no_change_count,
+        "total_outcomes": total_outcomes,
+        "acceptance_rate": acceptance_rate,
+        "no_change_rate": no_change_rate,
+        "replace_failure_count": replace_failure_count,
+        "replace_failure_rate": replace_failure_rate,
+        "improve_users": improve_users,
+        "daily_trend": [
+            {
+                "date": str(r.day),
+                "copies": r.copies or 0,
+                "replaces": r.replaces or 0,
+                "dismissals": r.dismissals or 0,
+                "no_changes": r.no_changes or 0,
+            }
+            for r in daily
+        ],
+        "top_users": [
+            {
+                "user_id": str(r.user_id),
+                "total": r.total,
+                "copies": r.copies or 0,
+                "replaces": r.replaces or 0,
             }
             for r in top_users
         ],

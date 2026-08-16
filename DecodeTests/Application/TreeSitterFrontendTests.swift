@@ -85,13 +85,15 @@ struct TreeSitterFrontendTests {
         """, extension: "py")
 
         let importOutputs = outputs.filter { $0.predicate.name == "imports" }
-        #expect(importOutputs.count >= 2)
+        // Imports are consolidated into a single newline-delimited output.
+        #expect(importOutputs.count == 1)
 
-        let importValues = importOutputs.compactMap { output -> String? in
-            if case .string(let s) = output.value { return s }
-            return nil
+        if case .string(let combined) = importOutputs.first?.value {
+            let modules = combined.components(separatedBy: "\n")
+            #expect(modules.contains(where: { $0.contains("os") }))
+        } else {
+            Issue.record("Expected string value for imports output")
         }
-        #expect(importValues.contains("os"))
     }
 
     // MARK: - JavaScript Parsing

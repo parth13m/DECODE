@@ -318,16 +318,17 @@ App.pages.executive = {
 
     try {
       // Fetch all data in parallel
-      const [exec, quality, aiPlatform, cost, timeline] = await Promise.all([
+      const [exec, quality, aiPlatform, cost, timeline, founder] = await Promise.all([
         D.api.fetch(D.api.url('/api/v2/analytics/executive')),
         D.api.fetch(D.api.url('/api/v2/analytics/quality')),
         D.api.fetch(D.api.url('/api/v2/analytics/ai-platform')),
         D.api.fetch(D.api.url('/api/v2/analytics/cost')),
         D.api.fetch(D.api.url('/api/v2/analytics/timeline', { limit: 15 })),
+        D.api.fetch('/api/admin/analytics/founder').catch(() => null),
       ]);
 
-      this._lastData = { exec, quality, aiPlatform, cost, timeline };
-      this._renderLive(el, exec, quality, aiPlatform, cost, timeline);
+      this._lastData = { exec, quality, aiPlatform, cost, timeline, founder };
+      this._renderLive(el, exec, quality, aiPlatform, cost, timeline, founder);
     } catch (err) {
       el.innerHTML = `
         ${D.globalFilterBar()}
@@ -335,7 +336,7 @@ App.pages.executive = {
     }
   },
 
-  _renderLive(el, exec, quality, aiPlatform, cost, timeline) {
+  _renderLive(el, exec, quality, aiPlatform, cost, timeline, founder) {
     const dailyRequests = exec.daily_trend?.map(d => d.requests) || [];
     const dailyUsers = exec.daily_trend?.map(d => d.users) || [];
     const dailyLabels = exec.daily_trend?.map(d => D.fmt.dateShort(d.date)) || [];
@@ -514,6 +515,69 @@ App.pages.executive = {
           ${D.timeline(timelineEvents)}
         </div>
       </div>
+
+      ${founder ? `
+        <div class="d-section d-mt-6">
+          ${D.sectionHeader('Founder Intelligence')}
+
+          <div class="d-chart-card" style="padding:var(--d-sp-5)">
+            <h4 style="margin:0 0 16px;font-size:0.85rem;font-weight:600">Activation Funnel</h4>
+            ${D.horizontalBars([
+              { label: 'Invites Generated', value: founder.activation_funnel.invites_generated, color: '#6b7280' },
+              { label: 'Activated (' + D.fmt.pct(founder.activation_funnel.activated_pct) + ')', value: founder.activation_funnel.activated, color: '#3b82f6' },
+              { label: 'First Request (' + D.fmt.pct(founder.activation_funnel.first_request_pct) + ')', value: founder.activation_funnel.made_first_request, color: '#10b981' },
+              { label: 'Active 7d (' + D.fmt.pct(founder.activation_funnel.active_7d_pct) + ')', value: founder.activation_funnel.active_after_7d, color: '#8b5cf6' },
+              { label: 'Active 30d (' + D.fmt.pct(founder.activation_funnel.active_30d_pct) + ')', value: founder.activation_funnel.active_after_30d, color: '#e87830' },
+            ])}
+          </div>
+
+          <div class="d-mt-4">
+            ${D.kpiGrid([
+              D.kpi({ label: 'Avg TTFV', value: founder.time_to_first_value.average_seconds != null ? D.fmt.latency(founder.time_to_first_value.average_seconds * 1000) : '\u2014', sub: 'Time to First Value', accent: 'brand' }),
+              D.kpi({ label: 'Median TTFV', value: founder.time_to_first_value.median_seconds != null ? D.fmt.latency(founder.time_to_first_value.median_seconds * 1000) : '\u2014', sub: D.fmt.num(founder.time_to_first_value.sample_size) + ' users sampled', accent: 'info' }),
+              D.kpi({ label: 'Cost/User (7d)', value: founder.cost_per_active_user.last_7d != null ? D.fmt.usd(founder.cost_per_active_user.last_7d) : '\u2014', sub: D.fmt.num(founder.cost_per_active_user.active_users_7d) + ' active users', accent: 'warning' }),
+              D.kpi({ label: 'Cost/User (All)', value: founder.cost_per_active_user.all_time != null ? D.fmt.usd(founder.cost_per_active_user.all_time) : '\u2014', sub: D.fmt.num(founder.cost_per_active_user.active_users_all_time) + ' total users', accent: 'success' }),
+            ], 4)}
+          </div>
+
+          ${founder.slowest_requests && founder.slowest_requests.length > 0 ? `
+            <div class="d-mt-4">
+              ${D.table({
+                title: 'Slowest Requests (Top 10)',
+                headers: ['User', 'Mode', { label: 'Latency', align: 'right' }, 'Provider', 'Status', 'Time'],
+                rows: founder.slowest_requests.slice(0, 10).map(r => ({
+                  cells: [
+                    D.fmt.escapeHtml(r.user_name || r.user_email || '\u2014'),
+                    D.badge(r.mode || '\u2014', 'neutral'),
+                    D.fmt.latency(r.latency_ms),
+                    r.ai_provider ? D.badge(r.ai_provider, 'info') : '\u2014',
+                    r.success ? D.badge('OK', 'success') : D.badge('FAIL', 'danger'),
+                    D.fmt.timeAgo(r.created_at),
+                  ],
+                })),
+              })}
+            </div>
+          ` : ''}
+
+          ${founder.language_analytics && founder.language_analytics.length > 0 ? `
+            <div class="d-mt-4">
+              ${D.table({
+                title: 'Language Analytics',
+                headers: ['Language', { label: 'Requests', align: 'right' }, { label: 'Success', align: 'right' }, { label: 'Avg Latency', align: 'right' }, { label: 'Cost', align: 'right' }],
+                rows: founder.language_analytics.slice(0, 15).map(l => ({
+                  cells: [
+                    `<strong>${D.fmt.escapeHtml(l.language)}</strong>`,
+                    D.fmt.num(l.request_count),
+                    D.badge(D.fmt.pct(l.success_rate), l.success_rate >= 95 ? 'success' : 'warning'),
+                    D.fmt.latency(l.avg_latency_ms),
+                    D.fmt.usd(l.estimated_cost_usd),
+                  ],
+                })),
+              })}
+            </div>
+          ` : ''}
+        </div>
+      ` : ''}
     `;
 
     // Render charts after DOM update
@@ -572,19 +636,20 @@ App.pages.product = {
       </div>`;
 
     try {
-      const [product, exec, history] = await Promise.all([
+      const [product, exec, history, improve] = await Promise.all([
         D.api.fetch(D.api.url('/api/v2/analytics/product')),
         D.api.fetch(D.api.url('/api/v2/analytics/executive')),
         D.api.fetch(D.api.url('/api/v2/analytics/history')),
+        D.api.fetch(D.api.url('/api/v2/analytics/improve')),
       ]);
-      this._lastData = { product, exec, history };
-      this._renderLive(el, product, exec, history);
+      this._lastData = { product, exec, history, improve };
+      this._renderLive(el, product, exec, history, improve);
     } catch (err) {
       el.innerHTML = `${D.globalFilterBar()}${D.error('Failed to load product data', err.message, "App.pages.product.render()")}`;
     }
   },
 
-  _renderLive(el, product, exec, history) {
+  _renderLive(el, product, exec, history, improve) {
     const modes = product.by_mode || [];
     const types = product.by_request_type || [];
     const profiles = product.by_profile || [];
@@ -686,6 +751,45 @@ App.pages.product = {
         </div>
       ` : ''}
 
+      ${(improve && improve.total_outcomes > 0) ? `
+        <div class="d-section d-mt-6">
+          ${D.sectionHeader('Improve Code Analytics')}
+          ${D.kpiGrid([
+            D.kpi({ label: 'Improve Requests', value: D.fmt.num(improve.improve_requests), sub: improve.adoption_rate !== null ? D.fmt.pct(improve.adoption_rate) + ' adoption' : 'No explanations', accent: 'brand' }),
+            D.kpi({ label: 'Acceptance Rate', value: improve.acceptance_rate !== null ? D.fmt.pct(improve.acceptance_rate) : '\u2014', sub: D.fmt.num(improve.copy_count + improve.replace_count) + ' accepted', accent: 'success' }),
+            D.kpi({ label: 'No Change Rate', value: improve.no_change_rate !== null ? D.fmt.pct(improve.no_change_rate) : '\u2014', sub: D.fmt.num(improve.no_change_count) + ' already clean', accent: 'info' }),
+            D.kpi({ label: 'Improve Users', value: D.fmt.num(improve.improve_users), accent: 'purple' }),
+          ], 4)}
+
+          <div class="d-mt-4">
+            <div class="d-chart-card" style="padding:var(--d-sp-5)">
+              <h4 style="margin:0 0 12px;font-size:0.85rem;font-weight:600">Outcome Distribution</h4>
+              ${D.horizontalBars([
+                { label: 'Copy', value: improve.copy_count, color: '#10b981' },
+                { label: 'Replace', value: improve.replace_count, color: '#3b82f6' },
+                { label: 'Dismiss', value: improve.dismiss_count, color: '#f59e0b' },
+                { label: 'No Change', value: improve.no_change_count, color: '#6b7280' },
+              ].filter(b => b.value > 0))}
+            </div>
+          </div>
+
+          ${improve.replace_failure_count > 0 ? `
+            <div class="d-mt-3">
+              ${D.statRow([
+                { label: 'Replace Failures', value: D.fmt.num(improve.replace_failure_count), color: 'var(--d-danger)' },
+                { label: 'Replace Failure Rate', value: improve.replace_failure_rate !== null ? D.fmt.pct(improve.replace_failure_rate) : '\u2014' },
+              ])}
+            </div>
+          ` : ''}
+
+          ${(improve.daily_trend || []).length > 0 ? `
+            <div class="d-mt-4">
+              ${D.chartCard({ title: 'Improve Outcome Trend', canvasId: 'improve-trend-chart', height: 200, placeholder: false })}
+            </div>
+          ` : ''}
+        </div>
+      ` : ''}
+
       ${(history && (history.history_opens > 0 || history.history_followups > 0)) ? `
         <div class="d-section d-mt-6">
           ${D.sectionHeader('History Analytics')}
@@ -756,6 +860,23 @@ App.pages.product = {
         const body = typeCanvas.closest('.d-chart-body');
         body.innerHTML = `<div class="d-donut-wrap"><canvas id="product-donut-type" style="width:180px;height:180px"></canvas>${D.donutLegend(typeSegments, typeTotal)}</div>`;
         D.renderDonutChart('product-donut-type', typeSegments, { height: 180, centerLabel: D.fmt.num(typeTotal), centerSub: 'requests' });
+      }
+
+      // Improve trend chart
+      const improveTrendCanvas = document.getElementById('improve-trend-chart');
+      if (improveTrendCanvas && improve && (improve.daily_trend || []).length > 0) {
+        const trend = improve.daily_trend;
+        const body = improveTrendCanvas.closest('.d-chart-body');
+        body.innerHTML = `<canvas id="improve-trend-chart" style="width:100%;height:200px"></canvas>`;
+        D.renderAreaChart('improve-trend-chart', {
+          labels: trend.map(d => d.date),
+          datasets: [
+            { label: 'Copy', data: trend.map(d => d.copies), color: '#10b981' },
+            { label: 'Replace', data: trend.map(d => d.replaces), color: '#3b82f6' },
+            { label: 'Dismiss', data: trend.map(d => d.dismissals), color: '#f59e0b' },
+            { label: 'No Change', data: trend.map(d => d.no_changes), color: '#6b7280' },
+          ],
+        }, { height: 200 });
       }
 
       // History trend chart
@@ -1774,6 +1895,25 @@ App.pages.users = {
           </div>
         ` : ''}
 
+        ${detail.improve_breakdown ? `
+          <div class="d-mt-6">
+            ${D.sectionHeader('Improve Code')}
+            ${D.statRow([
+              { label: 'Improve Requests', value: D.fmt.num(detail.improve_breakdown.improve_requests) },
+              { label: 'Acceptance Rate', value: detail.improve_breakdown.acceptance_rate !== null ? D.fmt.pct(detail.improve_breakdown.acceptance_rate) : '\u2014', color: 'var(--d-success)' },
+              { label: 'No Change Rate', value: detail.improve_breakdown.no_change_rate !== null ? D.fmt.pct(detail.improve_breakdown.no_change_rate) : '\u2014' },
+            ])}
+            <div class="d-mt-3">
+              ${D.horizontalBars([
+                { label: 'Copy', value: detail.improve_breakdown.copy_count, color: '#10b981' },
+                { label: 'Replace', value: detail.improve_breakdown.replace_count, color: '#3b82f6' },
+                { label: 'Dismiss', value: detail.improve_breakdown.dismiss_count, color: '#f59e0b' },
+                { label: 'No Change', value: detail.improve_breakdown.no_change_count, color: '#6b7280' },
+              ].filter(b => b.value > 0))}
+            </div>
+          </div>
+        ` : ''}
+
         ${detail.history_breakdown ? `
           <div class="d-mt-6">
             ${D.sectionHeader('History')}
@@ -1800,6 +1940,28 @@ App.pages.users = {
           </div>
         ` : ''}
 
+        ${detail.profile_intelligence && detail.profile_intelligence.available ? (() => {
+          const pi = detail.profile_intelligence.data || {};
+          const sections = [];
+          if (pi.technology) sections.push({ label: 'Technology', data: pi.technology });
+          if (pi.learning) sections.push({ label: 'Learning', data: pi.learning });
+          if (pi.interaction) sections.push({ label: 'Interaction', data: pi.interaction });
+          if (pi.coding) sections.push({ label: 'Coding', data: pi.coding });
+          if (pi.preference) sections.push({ label: 'Preferences', data: pi.preference });
+          if (pi.project) sections.push({ label: 'Project', data: pi.project });
+          if (sections.length === 0) return '';
+          return '<div class="d-mt-6">' +
+            D.sectionHeader('Profile Intelligence', '<span style="font-size:11px;color:var(--d-text-3)">v' + (detail.profile_intelligence.schema_version || '?') + ' \u00b7 ' + (detail.profile_intelligence.synced_at ? D.fmt.timeAgo(detail.profile_intelligence.synced_at) : 'unknown') + '</span>') +
+            '<div class="d-chart-card" style="padding:var(--d-sp-5)">' +
+            sections.map(s => {
+              const items = typeof s.data === 'object' && !Array.isArray(s.data)
+                ? Object.entries(s.data).map(([k, v]) => '<div style="margin-bottom:4px"><strong style="font-size:12px">' + D.fmt.escapeHtml(k) + ':</strong> <span style="font-size:12px;color:var(--d-text-2)">' + D.fmt.escapeHtml(typeof v === 'object' ? JSON.stringify(v) : String(v)) + '</span></div>').join('')
+                : '<div style="font-size:12px;color:var(--d-text-2)">' + D.fmt.escapeHtml(typeof s.data === 'object' ? JSON.stringify(s.data) : String(s.data)) + '</div>';
+              return '<div style="margin-bottom:12px"><div style="font-size:13px;font-weight:600;margin-bottom:4px">' + D.fmt.escapeHtml(s.label) + '</div>' + items + '</div>';
+            }).join('') +
+            '</div></div>';
+        })() : ''}
+
         ${recentReqs.length ? `
           <div class="d-mt-6">
             ${D.sectionHeader('Recent Requests')}
@@ -1819,8 +1981,10 @@ App.pages.users = {
           </div>
         ` : ''}
 
-        <div class="d-mt-6">
+        <div class="d-mt-6" style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="d-btn d-btn-sm" onclick="D.drillDown.exportData(JSON.parse(atob('${btoa(JSON.stringify(detail))}')), 'user-${userId}.json')">Export JSON</button>
+          ${u.status === 'active' ? `<button class="d-btn d-btn-sm d-btn-ghost" style="color:var(--d-warning)" onclick="App.pages.users._toggleUser('${userId}', 'disable')">Disable User</button>` : ''}
+          ${u.status === 'disabled' ? `<button class="d-btn d-btn-sm d-btn-ghost" style="color:var(--d-success)" onclick="App.pages.users._toggleUser('${userId}', 'enable')">Enable User</button>` : ''}
         </div>
       `);
 
@@ -1842,6 +2006,22 @@ App.pages.users = {
   _exportUsers() {
     if (!this._lastData) return;
     D.drillDown.exportData(this._lastData.users.users, 'users.csv', 'csv');
+  },
+
+  async _toggleUser(userId, action) {
+    if (!confirm(`Are you sure you want to ${action} this user?`)) return;
+    try {
+      const res = await fetch(`/api/admin/users/${userId}/${action}`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${App.token}` },
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      D.api.clearCache();
+      D.drillDown.close();
+      this.render();
+    } catch (err) {
+      alert(`Failed to ${action} user: ${err.message}`);
+    }
   },
 };
 
@@ -2380,6 +2560,17 @@ App.pages.settings = {
       </div>
 
       <div class="d-section d-mt-6">
+        ${D.sectionHeader('Invite Management')}
+        <div class="d-chart-card" style="padding:var(--d-sp-5)">
+          <div style="display:flex;gap:12px;align-items:center;margin-bottom:16px">
+            <button class="d-btn d-btn-sm" onclick="App.pages.settings._generateInvite()">Generate Invite Code</button>
+            <span id="settings-invite-result" style="font-size:12px;color:var(--d-text-2)"></span>
+          </div>
+          <div id="settings-invite-codes"></div>
+        </div>
+      </div>
+
+      <div class="d-section d-mt-6">
         ${D.sectionHeader('Dashboard')}
         <div class="d-chart-card" style="padding:var(--d-sp-6)">
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
@@ -2416,6 +2607,56 @@ App.pages.settings = {
         </div>
       </div>
     `;
+
+    // Load invite codes after render
+    this._loadInviteCodes();
+  },
+
+  async _generateInvite() {
+    const resultEl = document.getElementById('settings-invite-result');
+    resultEl.textContent = 'Generating...';
+    try {
+      const res = await fetch('/api/admin/invite', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${App.token}`, 'Content-Type': 'application/json' },
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      resultEl.innerHTML = `<span class="d-text-mono" style="font-size:14px;font-weight:600;color:var(--d-success)">${D.fmt.escapeHtml(data.invite_code)}</span>`;
+      this._loadInviteCodes();
+    } catch (err) {
+      resultEl.innerHTML = `<span style="color:var(--d-danger)">Failed: ${D.fmt.escapeHtml(err.message)}</span>`;
+    }
+  },
+
+  async _loadInviteCodes() {
+    const container = document.getElementById('settings-invite-codes');
+    if (!container) return;
+    try {
+      const res = await fetch('/api/admin/users', {
+        headers: { 'Authorization': `Bearer ${App.token}` },
+      });
+      if (!res.ok) return;
+      const users = await res.json();
+      const pending = users.filter(u => u.status === 'pending');
+      if (pending.length === 0) {
+        container.innerHTML = '<div style="font-size:12px;color:var(--d-text-3)">No pending invites</div>';
+        return;
+      }
+      container.innerHTML = D.table({
+        title: 'Pending Invites',
+        headers: ['Invite Code', 'Name', 'Created'],
+        rows: pending.map(u => ({
+          cells: [
+            `<span class="d-text-mono">${D.fmt.escapeHtml(u.invite_code || '\u2014')}</span>`,
+            D.fmt.escapeHtml(u.name || '\u2014'),
+            u.created_at ? D.fmt.timeAgo(u.created_at) : '\u2014',
+          ],
+        })),
+      });
+    } catch (err) {
+      container.innerHTML = '';
+    }
   },
 };
 

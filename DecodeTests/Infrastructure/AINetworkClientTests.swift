@@ -280,7 +280,9 @@ struct AILayerTests {
                     capturedBody = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
                 }
                 let r = HTTPURLResponse(url: URL(string: "https://api.openai.com")!, statusCode: 200, httpVersion: nil, headerFields: nil)!
-                return (Data(), r)
+                // Return a minimal valid SSE response so the stream completes without error.
+                let sseBody = "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":null}]}\ndata: [DONE]\n\n"
+                return (sseBody.data(using: .utf8)!, r)
             }
 
             let messages = [

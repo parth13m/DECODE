@@ -77,7 +77,8 @@ struct ExplanationTagParserParseTests {
 
     @Test func emptyTagSkipped() {
         let result = ExplanationTagParser.parse("before<hl></hl>after")
-        #expect(result == [.plain("before"), .plain("after")])
+        // Empty tags are stripped; adjacent plain text merges into one segment.
+        #expect(result == [.plain("beforeafter")])
     }
 
     // MARK: - Unclosed Tags

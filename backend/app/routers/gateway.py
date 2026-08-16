@@ -2,9 +2,9 @@ import json
 import logging
 import time
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.auth import get_current_user
@@ -12,6 +12,7 @@ from app.config import settings
 from app.database import get_db
 from app.dual_write_service import log_ai_request, log_analytics_event
 from app.gateway_service import GatewayError, call_llm, call_vision_llm, stream_llm
+from app.rate_limit import limiter
 from app.models.user import User
 
 logger = logging.getLogger(__name__)
@@ -20,17 +21,17 @@ router = APIRouter(prefix="/api/gateway", tags=["gateway"])
 
 
 class ChatMessage(BaseModel):
-    role: str
-    content: str
+    role: str = Field(..., max_length=20)
+    content: str = Field(..., max_length=100_000)
 
 
 class ChatRequest(BaseModel):
-    messages: list[ChatMessage] = Field(..., min_length=1)
-    system_prompt: str | None = None
-    mode: str | None = None
-    context_tier: str | None = None
-    explanation_profile: str | None = None
-    language: str | None = None
+    messages: list[ChatMessage] = Field(..., min_length=1, max_length=20)
+    system_prompt: str | None = Field(default=None, max_length=50_000)
+    mode: str | None = Field(default=None, max_length=50)
+    context_tier: str | None = Field(default=None, max_length=50)
+    explanation_profile: str | None = Field(default=None, max_length=50)
+    language: str | None = Field(default=None, max_length=50)
 
 
 class ChatResponse(BaseModel):
@@ -38,7 +39,9 @@ class ChatResponse(BaseModel):
 
 
 @router.post("/chat", response_model=ChatResponse)
+@limiter.limit("30/minute")
 async def chat(
+    request: Request,
     body: ChatRequest,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -86,7 +89,9 @@ async def chat(
 
 
 @router.post("/chat/stream")
+@limiter.limit("30/minute")
 async def chat_stream(
+    request: Request,
     body: ChatRequest,
     user: User = Depends(get_current_user),
 ) -> StreamingResponse:
@@ -192,9 +197,9 @@ async def chat_stream(
 # ---------------------------------------------------------------------------
 
 class VisionRequest(BaseModel):
-    image_data: str = Field(..., min_length=1, description="Base64-encoded JPEG image")
-    prompt: str = Field(..., min_length=1)
-    mode: str | None = None
+    image_data: str = Field(..., min_length=1, max_length=10_000_000, description="Base64-encoded JPEG image (max ~7.5 MB)")
+    prompt: str = Field(..., min_length=1, max_length=10_000)
+    mode: str | None = Field(default=None, max_length=50)
 
 
 class VisionResponse(BaseModel):
@@ -202,7 +207,9 @@ class VisionResponse(BaseModel):
 
 
 @router.post("/vision", response_model=VisionResponse)
+@limiter.limit("10/minute")
 async def vision(
+    request: Request,
     body: VisionRequest,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -310,10 +317,26 @@ _ALLOWED_EVENT_TYPES = frozenset({
 })
 
 
+_MAX_METADATA_KEYS = 20
+_MAX_METADATA_BYTES = 4_096
+
+
 class AnalyticsEventRequest(BaseModel):
-    event_type: str
-    mode: str | None = None
+    event_type: str = Field(..., max_length=50)
+    mode: str | None = Field(default=None, max_length=50)
     metadata: dict | None = None
+
+    @field_validator("metadata")
+    @classmethod
+    def _cap_metadata(cls, v: dict | None) -> dict | None:
+        if v is None:
+            return v
+        if len(v) > _MAX_METADATA_KEYS:
+            raise ValueError(f"metadata must have at most {_MAX_METADATA_KEYS} keys")
+        import json as _json
+        if len(_json.dumps(v)) > _MAX_METADATA_BYTES:
+            raise ValueError(f"metadata must be at most {_MAX_METADATA_BYTES} bytes when serialized")
+        return v
 
 
 @router.post("/analytics/event", status_code=status.HTTP_204_NO_CONTENT)
@@ -343,11 +366,22 @@ async def record_analytics_event(
 # ---------------------------------------------------------------------------
 
 
+_MAX_PROFILE_BYTES = 65_536
+
+
 class ProfileSyncRequest(BaseModel):
     """Derived UserProfile snapshot from the macOS client."""
     profile_version: int
     total_observation_count: int
     profile_data: dict  # The full derived UserProfile as JSON
+
+    @field_validator("profile_data")
+    @classmethod
+    def _cap_profile(cls, v: dict) -> dict:
+        import json as _json
+        if len(_json.dumps(v)) > _MAX_PROFILE_BYTES:
+            raise ValueError(f"profile_data must be at most {_MAX_PROFILE_BYTES} bytes when serialized")
+        return v
 
 
 @router.post("/profile", status_code=status.HTTP_204_NO_CONTENT)

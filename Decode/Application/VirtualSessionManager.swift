@@ -1039,6 +1039,10 @@ final class VirtualSessionManager {
         // Split into paragraphs (separated by blank lines).
         let paragraphs = text.components(separatedBy: "\n\n")
 
+        // When no paragraph boundary exists (single block of text),
+        // return nil so callers can fall through to sentence extraction.
+        guard paragraphs.count > 1 else { return nil }
+
         for paragraph in paragraphs {
             let trimmed = paragraph.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { continue }

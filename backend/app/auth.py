@@ -83,12 +83,8 @@ def require_admin(
             detail="Admin access not configured. Set the ADMIN_TOKEN environment variable.",
         )
 
-    if credentials.credentials != settings.ADMIN_TOKEN:
-        logger.warning(
-            "Admin login failed: token mismatch (provided length=%d, expected length=%d)",
-            len(credentials.credentials),
-            len(settings.ADMIN_TOKEN),
-        )
+    if not secrets.compare_digest(credentials.credentials, settings.ADMIN_TOKEN):
+        logger.warning("Admin login failed: token mismatch")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid admin token",

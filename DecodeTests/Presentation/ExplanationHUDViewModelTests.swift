@@ -95,7 +95,10 @@ struct ExplanationHUDViewModelTests {
         vm.showStream(stream, sourceApp: "Safari")
         try await Task.sleep(for: .milliseconds(50))
 
-        #expect(vm.displayState == .error)
+        // Production intentionally transitions to .complete when partial content
+        // was received before the error — preserves visible partial explanation.
+        // Only transitions to .error when no content was received at all.
+        #expect(vm.displayState == .complete)
         #expect(vm.explanationText == "Partial")
         #expect(vm.errorMessage == "Test failure")
         #expect(vm.isVisible == true)

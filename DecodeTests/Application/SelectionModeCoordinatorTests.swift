@@ -109,6 +109,11 @@ struct SelectionModeCoordinatorTests {
         continuation.yield(makeExplainEvent())
         continuation.finish()
 
+        // Let the coordinator reach collectIntent() and register the continuation.
+        try await Task.sleep(for: .milliseconds(50))
+        // Resolve intent with default (empty string = Enter key).
+        hud.viewModel.submitIntent()
+        // Let the AI call and stream complete.
         try await Task.sleep(for: .milliseconds(100))
 
         // Provider should have received the captured text.
@@ -342,6 +347,11 @@ struct SelectionModeCoordinatorTests {
         continuation.yield(makeExplainEvent())
         continuation.finish()
 
+        // Let the coordinator reach collectIntent() and register the continuation.
+        try await Task.sleep(for: .milliseconds(50))
+        // Resolve intent with default (empty string = Enter key).
+        hud.viewModel.submitIntent()
+        // Let the AI call complete.
         try await Task.sleep(for: .milliseconds(100))
 
         // AI failure after loading started → stays in HUD.
@@ -426,6 +436,11 @@ struct SelectionModeCoordinatorTests {
         continuation.yield(makeExplainEvent(appName: "Safari"))
         continuation.finish()
 
+        // Let the coordinator reach collectIntent() and register the continuation.
+        try await Task.sleep(for: .milliseconds(50))
+        // Resolve intent with default (empty string = Enter key).
+        hud.viewModel.submitIntent()
+        // Let the AI call complete.
         try await Task.sleep(for: .milliseconds(100))
 
         #expect(provider.lastSystemPrompt?.contains("Safari") == true)
@@ -458,6 +473,11 @@ struct SelectionModeCoordinatorTests {
         continuation.yield(makeExplainEvent(appName: nil))
         continuation.finish()
 
+        // Let the coordinator reach collectIntent() and register the continuation.
+        try await Task.sleep(for: .milliseconds(50))
+        // Resolve intent with default (empty string = Enter key).
+        hud.viewModel.submitIntent()
+        // Let the AI call complete.
         try await Task.sleep(for: .milliseconds(100))
 
         #expect(provider.lastSystemPrompt?.contains("selected in") == false)

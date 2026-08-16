@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -11,6 +11,7 @@ from app.auth import (
 )
 from app.database import get_db
 from app.models.user import User, UserStatus
+from app.rate_limit import limiter
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -35,7 +36,8 @@ class ValidateResponse(BaseModel):
 
 
 @router.post("/activate", response_model=ActivateResponse)
-def activate_invite(body: ActivateRequest, db: Session = Depends(get_db)) -> ActivateResponse:
+@limiter.limit("5/minute")
+def activate_invite(request: Request, body: ActivateRequest, db: Session = Depends(get_db)) -> ActivateResponse:
     """Redeem an invite code and receive an access token."""
     code = body.invite_code.strip().upper()
 
