@@ -2562,11 +2562,28 @@ App.pages.settings = {
       <div class="d-section d-mt-6">
         ${D.sectionHeader('Invite Management')}
         <div class="d-chart-card" style="padding:var(--d-sp-5)">
-          <div style="display:flex;gap:12px;align-items:center;margin-bottom:16px">
-            <button class="d-btn d-btn-sm" onclick="App.pages.settings._generateInvite()">Generate Invite Code</button>
-            <span id="settings-invite-result" style="font-size:12px;color:var(--d-text-2)"></span>
+          <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:12px;align-items:end">
+            <div>
+              <label style="display:block;font-size:12px;font-weight:550;color:var(--d-text-2);margin-bottom:6px">Name <span style="font-weight:400;color:var(--d-text-3)">(optional)</span></label>
+              <input type="text" id="invite-name" class="d-input" placeholder="e.g. Jane Doe" style="font-size:13px;padding:8px 12px">
+            </div>
+            <div>
+              <label style="display:block;font-size:12px;font-weight:550;color:var(--d-text-2);margin-bottom:6px">Email <span style="font-weight:400;color:var(--d-text-3)">(optional)</span></label>
+              <input type="email" id="invite-email" class="d-input" placeholder="e.g. jane@company.com" style="font-size:13px;padding:8px 12px">
+            </div>
+            <button id="invite-generate-btn" class="d-btn d-btn-primary" style="height:38px" onclick="App.pages.settings._generateInvite()">Generate</button>
           </div>
-          <div id="settings-invite-codes"></div>
+          <div id="invite-result" style="display:none;margin-top:16px;padding:14px 16px;border-radius:var(--d-r-sm);background:var(--d-success-subtle);border:1px solid rgba(16, 185, 129, 0.2)">
+            <div style="display:flex;align-items:center;justify-content:space-between">
+              <div>
+                <div style="font-size:11px;font-weight:550;color:var(--d-text-2);margin-bottom:4px">Invite Code</div>
+                <span id="invite-code-display" class="d-text-mono" style="font-size:18px;font-weight:700;letter-spacing:0.5px;color:var(--d-success)"></span>
+              </div>
+              <button class="d-btn d-btn-sm" onclick="App.pages.settings._copyInviteCode()">Copy</button>
+            </div>
+          </div>
+          <div id="invite-error" style="display:none;margin-top:12px;font-size:13px;color:var(--d-danger)"></div>
+          <div id="invite-list" style="margin-top:20px"></div>
         </div>
       </div>
 
@@ -2609,28 +2626,91 @@ App.pages.settings = {
     `;
 
     // Load invite codes after render
-    this._loadInviteCodes();
+    this._loadInviteList();
   },
 
+  _inviteInFlight: false,
+
   async _generateInvite() {
-    const resultEl = document.getElementById('settings-invite-result');
-    resultEl.textContent = 'Generating...';
+    if (this._inviteInFlight) return;
+
+    const btn = document.getElementById('invite-generate-btn');
+    const nameInput = document.getElementById('invite-name');
+    const emailInput = document.getElementById('invite-email');
+    const resultEl = document.getElementById('invite-result');
+    const errorEl = document.getElementById('invite-error');
+    const codeEl = document.getElementById('invite-code-display');
+
+    // Reset previous state
+    errorEl.style.display = 'none';
+    errorEl.textContent = '';
+
+    // Build request body — both fields optional per backend contract
+    const body = {};
+    const name = (nameInput.value || '').trim();
+    const email = (emailInput.value || '').trim();
+    if (name) body.name = name;
+    if (email) body.email = email;
+
+    // Loading state
+    this._inviteInFlight = true;
+    const origText = btn.textContent;
+    btn.textContent = 'Generating\u2026';
+    btn.disabled = true;
+    btn.style.opacity = '0.6';
+
     try {
       const res = await fetch('/api/admin/invite', {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${App.token}`, 'Content-Type': 'application/json' },
+        headers: {
+          'Authorization': `Bearer ${App.token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      if (!res.ok) {
+        let msg = `HTTP ${res.status}`;
+        try { const d = await res.json(); if (d.detail) msg = d.detail; } catch {}
+        throw new Error(msg);
+      }
+
       const data = await res.json();
-      resultEl.innerHTML = `<span class="d-text-mono" style="font-size:14px;font-weight:600;color:var(--d-success)">${D.fmt.escapeHtml(data.invite_code)}</span>`;
-      this._loadInviteCodes();
+
+      // Show success
+      codeEl.textContent = data.invite_code;
+      resultEl.style.display = 'block';
+
+      // Clear form
+      nameInput.value = '';
+      emailInput.value = '';
+
+      // Refresh invite list
+      this._loadInviteList();
     } catch (err) {
-      resultEl.innerHTML = `<span style="color:var(--d-danger)">Failed: ${D.fmt.escapeHtml(err.message)}</span>`;
+      errorEl.textContent = 'Failed to generate invite: ' + err.message;
+      errorEl.style.display = 'block';
+    } finally {
+      this._inviteInFlight = false;
+      btn.textContent = origText;
+      btn.disabled = false;
+      btn.style.opacity = '';
     }
   },
 
-  async _loadInviteCodes() {
-    const container = document.getElementById('settings-invite-codes');
+  _copyInviteCode() {
+    const code = document.getElementById('invite-code-display')?.textContent;
+    if (!code) return;
+    navigator.clipboard.writeText(code).then(() => {
+      const btn = event.target;
+      const orig = btn.textContent;
+      btn.textContent = 'Copied!';
+      setTimeout(() => { btn.textContent = orig; }, 1500);
+    }).catch(() => {});
+  },
+
+  async _loadInviteList() {
+    const container = document.getElementById('invite-list');
     if (!container) return;
     try {
       const res = await fetch('/api/admin/users', {
@@ -2638,19 +2718,39 @@ App.pages.settings = {
       });
       if (!res.ok) return;
       const users = await res.json();
-      const pending = users.filter(u => u.status === 'pending');
-      if (pending.length === 0) {
-        container.innerHTML = '<div style="font-size:12px;color:var(--d-text-3)">No pending invites</div>';
+
+      // Show all users with invite codes, grouped by status
+      const withInvites = users.filter(u => u.invite_code);
+      if (withInvites.length === 0) {
+        container.innerHTML = '<div style="font-size:12px;color:var(--d-text-3)">No invites generated yet</div>';
         return;
       }
+
+      // Sort: pending first, then active, then disabled — newest first within each group
+      const statusOrder = { pending: 0, active: 1, disabled: 2 };
+      withInvites.sort((a, b) => {
+        const so = (statusOrder[a.status] ?? 3) - (statusOrder[b.status] ?? 3);
+        if (so !== 0) return so;
+        return new Date(b.created_at || 0) - new Date(a.created_at || 0);
+      });
+
       container.innerHTML = D.table({
-        title: 'Pending Invites',
-        headers: ['Invite Code', 'Name', 'Created'],
-        rows: pending.map(u => ({
+        headers: [
+          'Invite Code',
+          'Name',
+          'Email',
+          'Status',
+          { label: 'Requests', align: 'right' },
+          'Activated',
+        ],
+        rows: withInvites.map(u => ({
           cells: [
-            `<span class="d-text-mono">${D.fmt.escapeHtml(u.invite_code || '\u2014')}</span>`,
+            `<span class="d-text-mono" style="font-size:12px">${D.fmt.escapeHtml(u.invite_code)}</span>`,
             D.fmt.escapeHtml(u.name || '\u2014'),
-            u.created_at ? D.fmt.timeAgo(u.created_at) : '\u2014',
+            u.email && !u.email.startsWith('pending-') ? D.fmt.escapeHtml(u.email) : '\u2014',
+            D.badge(u.status, u.status === 'active' ? 'success' : u.status === 'pending' ? 'warning' : 'danger'),
+            D.fmt.num(u.total_requests || 0),
+            u.activated_at ? D.fmt.timeAgo(u.activated_at) : '\u2014',
           ],
         })),
       });
