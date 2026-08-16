@@ -114,7 +114,9 @@ D.label = (function() {
     vision: 'Visual Context', enrichment: 'File Understanding', enrichment_kgr: 'Knowledge Gen',
     compression: 'Memory Compression',
     selection_followup: 'Selection Follow-up', session_followup: 'Session Follow-up',
+    screenshot_followup: 'Screenshot Follow-up',
     selection_improve: 'Selection Improvement', session_improve: 'Session Improvement',
+    screenshot_improve: 'Screenshot Improvement',
     general: 'General', dsa: 'DSA', none: 'Default',
     unknown: 'Unclassified', other: 'Other', unspecified: 'Unspecified',
   };

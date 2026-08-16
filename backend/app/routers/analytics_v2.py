@@ -93,6 +93,9 @@ def _format_request(r) -> dict:
         "success": r.success,
         "error_type": r.error_type,
         "latency_ms": r.latency_ms,
+        "prompt_tokens": r.prompt_tokens,
+        "completion_tokens": r.completion_tokens,
+        "total_tokens": r.total_tokens,
         "estimated_cost_usd": r.estimated_cost_usd,
     }
 
@@ -616,6 +619,15 @@ def get_user_detail(
         "last_activity": str(hist_activity[1]) if hist_activity[1] else None,
     } if (hist_opens + hist_followups + hist_clears) > 0 else None
 
+    # Compute top-level token/cost totals from mode_detail (avoids extra query)
+    _total_prompt = sum(m["prompt_tokens"] for m in mode_detail)
+    _total_completion = sum(m["completion_tokens"] for m in mode_detail)
+    _total_tokens = sum(m["total_tokens"] for m in mode_detail)
+    _total_cost = sum(m["estimated_cost_usd"] for m in mode_detail)
+    _last_active_row = db.query(
+        sa_func.max(AIRequest.created_at)
+    ).filter(*filters).scalar()
+
     return {
         "user": {
             "id": str(user.id),
@@ -628,6 +640,11 @@ def get_user_detail(
         "total_requests": total,
         "successful_requests": successful,
         "success_rate": round(successful / total * 100, 1) if total else 0,
+        "total_prompt_tokens": _total_prompt,
+        "total_completion_tokens": _total_completion,
+        "total_tokens": _total_tokens,
+        "total_cost_usd": round(_total_cost, 4),
+        "last_active": str(_last_active_row) if _last_active_row else None,
         "by_mode": [{"mode": r.mode, "count": r.count} for r in mode_rows],
         "by_request_type": [{"request_type": r.type, "count": r.count} for r in type_rows],
         "mode_detail": mode_detail,

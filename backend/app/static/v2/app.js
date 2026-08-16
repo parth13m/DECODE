@@ -563,6 +563,8 @@ App.pages.ai = {
     const models = ai.by_model || [];
     const lat = quality.latency || {};
     const byFeature = tokens.by_feature || [];
+    const byMode = tokens.by_mode || [];
+    const byType = tokens.by_request_type || [];
     const tokenDaily = tokens.daily_trend || [];
     const topUsers = tokens.top_users || [];
 
@@ -570,7 +572,9 @@ App.pages.ai = {
     const totalSuccess = providers.reduce((s, p) => s + p.successful, 0);
     const successRate = totalReqs > 0 ? (totalSuccess / totalReqs * 100) : 0;
     const totalCost = byFeature.reduce((s, f) => s + (f.total_cost_usd || 0), 0);
-    const totalTokens = byFeature.reduce((s, f) => s + (f.total_tokens || 0), 0);
+    const totalPrompt = byFeature.reduce((s, f) => s + (f.prompt_tokens || 0), 0);
+    const totalCompletion = byFeature.reduce((s, f) => s + (f.completion_tokens || 0), 0);
+    const totalTokens = totalPrompt + totalCompletion;
 
     // Forecast
     const numDays = tokenDaily.length || 1;
@@ -595,6 +599,15 @@ App.pages.ai = {
     const featureCostSegs = byFeature.filter(f => f.total_cost_usd > 0).map(f => ({
       label: D.label(f.key), value: f.total_cost_usd, color: D.featureColor(f.key),
     }));
+
+    // Token overview stats
+    const avgPromptPerReq = totalReqs > 0 ? Math.round(totalPrompt / totalReqs) : 0;
+    const avgCompletionPerReq = totalReqs > 0 ? Math.round(totalCompletion / totalReqs) : 0;
+    const avgTotalPerReq = totalReqs > 0 ? Math.round(totalTokens / totalReqs) : 0;
+
+    // Sort by-mode and by-feature/type for tables
+    const sortedByMode = byMode.slice().sort((a, b) => (b.total_tokens || 0) - (a.total_tokens || 0));
+    const sortedByFeature = byFeature.slice().sort((a, b) => (b.total_tokens || 0) - (a.total_tokens || 0));
 
     el.innerHTML = `
       ${D.globalFilterBar()}
@@ -634,6 +647,85 @@ App.pages.ai = {
           }) : D.empty(null, 'No cost data')}</div>`,
         ], 2)}
       </div>
+
+      <div class="d-section d-mt-6">
+        ${D.sectionHeader('Token Usage')}
+        <div class="d-chart-card" style="padding:var(--d-sp-5)">
+          <table style="width:100%;border-collapse:collapse;font-size:0.85rem">
+            <thead>
+              <tr style="border-bottom:1px solid var(--d-border)">
+                <th style="text-align:left;padding:6px 12px;color:var(--d-text-3);font-weight:500"></th>
+                <th style="text-align:right;padding:6px 12px;color:var(--d-text-3);font-weight:500">Total</th>
+                <th style="text-align:right;padding:6px 12px;color:var(--d-text-3);font-weight:500">Avg / Request</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td style="padding:8px 12px;font-weight:600">Input Tokens</td><td style="text-align:right;padding:8px 12px;font-variant-numeric:tabular-nums">${D.fmt.num(totalPrompt)}</td><td style="text-align:right;padding:8px 12px;font-variant-numeric:tabular-nums">${D.fmt.num(avgPromptPerReq)}</td></tr>
+              <tr><td style="padding:8px 12px;font-weight:600">Output Tokens</td><td style="text-align:right;padding:8px 12px;font-variant-numeric:tabular-nums">${D.fmt.num(totalCompletion)}</td><td style="text-align:right;padding:8px 12px;font-variant-numeric:tabular-nums">${D.fmt.num(avgCompletionPerReq)}</td></tr>
+              <tr style="border-top:1px solid var(--d-border);font-weight:700"><td style="padding:8px 12px">Total</td><td style="text-align:right;padding:8px 12px;font-variant-numeric:tabular-nums">${D.fmt.num(totalTokens)}</td><td style="text-align:right;padding:8px 12px;font-variant-numeric:tabular-nums">${D.fmt.num(avgTotalPerReq)}</td></tr>
+            </tbody>
+          </table>
+          <div style="margin-top:8px;padding:4px 12px;color:var(--d-text-4);font-size:0.78rem">AI Requests: ${D.fmt.num(totalReqs)} &middot; Est. Cost: ${D.fmt.usdCompact(totalCost)}</div>
+        </div>
+      </div>
+
+      ${sortedByMode.length > 0 ? `
+        <div class="d-section d-mt-6">
+          ${D.sectionHeader('Token Usage by Mode', `<span class="d-text-dim" style="font-size:11px">User-facing surface that generated the usage</span>`)}
+          <div class="d-chart-card">${D.table({
+            headers: [
+              'Mode',
+              { label: 'Requests', align: 'right' },
+              { label: 'Input', align: 'right' },
+              { label: 'Output', align: 'right' },
+              { label: 'Total', align: 'right' },
+              { label: 'Avg / Req', align: 'right' },
+              { label: 'Cost', align: 'right' },
+            ],
+            rows: sortedByMode.map(m => ({
+              cells: [
+                `<strong style="color:${D.featureColor(m.key)}">${D.label(m.key)}</strong>`,
+                D.fmt.num(m.requests),
+                D.fmt.num(m.prompt_tokens),
+                D.fmt.num(m.completion_tokens),
+                D.fmt.num(m.total_tokens),
+                D.fmt.num(m.avg_total_tokens),
+                D.fmt.usd(m.total_cost_usd),
+              ],
+            })),
+          })}</div>
+        </div>
+      ` : ''}
+
+      ${sortedByFeature.length > 0 ? `
+        <div class="d-section d-mt-6">
+          ${D.sectionHeader('Token Usage by Feature', `<span class="d-text-dim" style="font-size:11px">AI operation that was performed</span>`)}
+          <div class="d-chart-card">${D.table({
+            headers: [
+              'Feature',
+              { label: 'Requests', align: 'right' },
+              { label: 'Input', align: 'right' },
+              { label: 'Output', align: 'right' },
+              { label: 'Total', align: 'right' },
+              { label: 'Avg / Req', align: 'right' },
+              { label: 'Cost', align: 'right' },
+            ],
+            rows: sortedByFeature.map(f => ({
+              clickable: true,
+              onclick: `App.pages.ai._drillDownFeature('${D.fmt.escapeHtml(f.key)}')`,
+              cells: [
+                `<strong style="color:${D.featureColor(f.key)}">${D.label(f.key)}</strong>`,
+                D.fmt.num(f.requests),
+                D.fmt.num(f.prompt_tokens),
+                D.fmt.num(f.completion_tokens),
+                D.fmt.num(f.total_tokens),
+                D.fmt.num(f.avg_total_tokens),
+                D.fmt.usd(f.total_cost_usd),
+              ],
+            })),
+          })}</div>
+        </div>
+      ` : ''}
 
       ${tdLabels.length > 1 ? `
         <div class="d-section d-mt-6">
@@ -704,13 +796,19 @@ App.pages.ai = {
             headers: [
               'User',
               { label: 'Requests', align: 'right' },
-              { label: 'Tokens', align: 'right' },
+              { label: 'Input', align: 'right' },
+              { label: 'Output', align: 'right' },
+              { label: 'Total Tokens', align: 'right' },
               { label: 'Cost', align: 'right' },
             ],
             rows: topUsers.slice(0, 8).map(u => ({
+              clickable: true,
+              onclick: `App.navigateToUser('${u.user_id}')`,
               cells: [
                 `<strong>${D.fmt.escapeHtml(u.name || u.email || u.user_id.substring(0, 8))}</strong>`,
                 D.fmt.num(u.requests),
+                D.fmt.num(u.prompt_tokens),
+                D.fmt.num(u.completion_tokens),
                 D.fmt.num(u.total_tokens),
                 D.fmt.usd(u.cost_usd),
               ],
@@ -978,6 +1076,58 @@ App.pages.userDetail = {
 
     const statusColor = u.status === 'active' ? 'success' : u.status === 'disabled' ? 'danger' : 'warning';
 
+    // Token totals from API (computed server-side from all mode_detail rows)
+    const totalPrompt = detail.total_prompt_tokens || 0;
+    const totalCompletion = detail.total_completion_tokens || 0;
+    const totalTokens = detail.total_tokens || 0;
+    const totalReqs = detail.total_requests || 0;
+    const avgPrompt = totalReqs > 0 ? Math.round(totalPrompt / totalReqs) : 0;
+    const avgCompletion = totalReqs > 0 ? Math.round(totalCompletion / totalReqs) : 0;
+    const avgTotal = totalReqs > 0 ? Math.round(totalTokens / totalReqs) : 0;
+
+    // Group mode_detail by origin_mode for "by mode" token table
+    const modeTokenMap = {};
+    modeDetail.forEach(m => {
+      const modeKey = m.origin_mode || m.request_type || 'other';
+      if (!modeTokenMap[modeKey]) {
+        modeTokenMap[modeKey] = { requests: 0, prompt: 0, completion: 0, total: 0 };
+      }
+      modeTokenMap[modeKey].requests += m.total;
+      modeTokenMap[modeKey].prompt += m.prompt_tokens || 0;
+      modeTokenMap[modeKey].completion += m.completion_tokens || 0;
+      modeTokenMap[modeKey].total += m.total_tokens || 0;
+    });
+    const modeTokenRows = Object.entries(modeTokenMap)
+      .sort((a, b) => b[1].total - a[1].total)
+      .map(([key, v]) => ({
+        key,
+        requests: v.requests,
+        prompt: v.prompt,
+        completion: v.completion,
+        total: v.total,
+        avg: v.requests > 0 ? Math.round(v.total / v.requests) : 0,
+      }));
+
+    // Feature-level (each mode_detail row is a unique origin_mode × request_type)
+    const featureTokenRows = modeDetail
+      .filter(m => (m.total_tokens || 0) > 0 || m.total > 0)
+      .sort((a, b) => (b.total_tokens || 0) - (a.total_tokens || 0))
+      .map(m => {
+        // Derive a feature key for color/label from display_name or request_type
+        const featureKey = m.origin_mode && m.request_type
+          ? (m.request_type === 'explain' ? m.origin_mode : `${m.origin_mode}_${m.request_type}`)
+          : m.request_type || 'other';
+        return {
+          label: m.display_name,
+          key: featureKey,
+          requests: m.total,
+          prompt: m.prompt_tokens || 0,
+          completion: m.completion_tokens || 0,
+          total: m.total_tokens || 0,
+          avg: m.total > 0 ? Math.round((m.total_tokens || 0) / m.total) : 0,
+        };
+      });
+
     el.innerHTML = `
       <div style="margin-bottom:24px">
         <button class="d-btn d-btn-sm d-btn-ghost" onclick="App.navigate('users')">&#x2190; Back to Users</button>
@@ -1008,24 +1158,73 @@ App.pages.userDetail = {
         </div>
       ` : ''}
 
-      ${modeDetail.length > 0 ? `
+      <div class="d-section d-mt-6">
+        ${D.sectionHeader('Token Usage', `<span class="d-text-dim" style="font-size:11px">All AI requests by this user</span>`)}
+        <div class="d-chart-card" style="padding:var(--d-sp-5)">
+          <table style="width:100%;border-collapse:collapse;font-size:0.85rem">
+            <thead>
+              <tr style="border-bottom:1px solid var(--d-border)">
+                <th style="text-align:left;padding:6px 12px;color:var(--d-text-3);font-weight:500"></th>
+                <th style="text-align:right;padding:6px 12px;color:var(--d-text-3);font-weight:500">Total</th>
+                <th style="text-align:right;padding:6px 12px;color:var(--d-text-3);font-weight:500">Avg / Request</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td style="padding:8px 12px;font-weight:600">Input Tokens</td><td style="text-align:right;padding:8px 12px;font-variant-numeric:tabular-nums">${D.fmt.num(totalPrompt)}</td><td style="text-align:right;padding:8px 12px;font-variant-numeric:tabular-nums">${D.fmt.num(avgPrompt)}</td></tr>
+              <tr><td style="padding:8px 12px;font-weight:600">Output Tokens</td><td style="text-align:right;padding:8px 12px;font-variant-numeric:tabular-nums">${D.fmt.num(totalCompletion)}</td><td style="text-align:right;padding:8px 12px;font-variant-numeric:tabular-nums">${D.fmt.num(avgCompletion)}</td></tr>
+              <tr style="border-top:1px solid var(--d-border);font-weight:700"><td style="padding:8px 12px">Total</td><td style="text-align:right;padding:8px 12px;font-variant-numeric:tabular-nums">${D.fmt.num(totalTokens)}</td><td style="text-align:right;padding:8px 12px;font-variant-numeric:tabular-nums">${D.fmt.num(avgTotal)}</td></tr>
+            </tbody>
+          </table>
+          <div style="margin-top:8px;padding:4px 12px;color:var(--d-text-4);font-size:0.78rem">AI Requests: ${D.fmt.num(totalReqs)} &middot; Est. Cost: ${D.fmt.usd(detail.total_cost_usd)}</div>
+        </div>
+      </div>
+
+      ${modeTokenRows.length > 0 ? `
         <div class="d-section d-mt-6">
-          ${D.sectionHeader('Feature Usage')}
+          ${D.sectionHeader('Token Usage by Mode', `<span class="d-text-dim" style="font-size:11px">User-facing surface</span>`)}
+          <div class="d-chart-card">${D.table({
+            headers: [
+              'Mode',
+              { label: 'Requests', align: 'right' },
+              { label: 'Input', align: 'right' },
+              { label: 'Output', align: 'right' },
+              { label: 'Total', align: 'right' },
+              { label: 'Avg / Req', align: 'right' },
+            ],
+            rows: modeTokenRows.map(m => ({
+              cells: [
+                `<strong style="color:${D.featureColor(m.key)}">${D.label(m.key)}</strong>`,
+                D.fmt.num(m.requests),
+                D.fmt.num(m.prompt),
+                D.fmt.num(m.completion),
+                D.fmt.num(m.total),
+                D.fmt.num(m.avg),
+              ],
+            })),
+          })}</div>
+        </div>
+      ` : ''}
+
+      ${featureTokenRows.length > 0 ? `
+        <div class="d-section d-mt-6">
+          ${D.sectionHeader('Token Usage by Feature', `<span class="d-text-dim" style="font-size:11px">AI operation performed</span>`)}
           <div class="d-chart-card">${D.table({
             headers: [
               'Feature',
               { label: 'Requests', align: 'right' },
-              { label: 'Success', align: 'right' },
-              { label: 'Latency', align: 'right' },
-              { label: 'Cost', align: 'right' },
+              { label: 'Input', align: 'right' },
+              { label: 'Output', align: 'right' },
+              { label: 'Total', align: 'right' },
+              { label: 'Avg / Req', align: 'right' },
             ],
-            rows: modeDetail.map(m => ({
+            rows: featureTokenRows.map(f => ({
               cells: [
-                `<strong style="color:${D.featureColor(m.display_name)}">${D.label(m.display_name)}</strong>`,
-                D.fmt.num(m.total),
-                D.badge(D.fmt.pct(m.success_rate), m.success_rate >= 95 ? 'success' : m.success_rate >= 80 ? 'warning' : 'danger'),
-                D.fmt.latency(m.avg_latency_ms),
-                D.fmt.usd(m.estimated_cost_usd),
+                `<strong style="color:${D.featureColor(f.key)}">${D.label(f.label)}</strong>`,
+                D.fmt.num(f.requests),
+                D.fmt.num(f.prompt),
+                D.fmt.num(f.completion),
+                D.fmt.num(f.total),
+                D.fmt.num(f.avg),
               ],
             })),
           })}</div>
@@ -1070,12 +1269,12 @@ App.pages.userDetail = {
         <div class="d-section d-mt-6">
           ${D.sectionHeader('Recent Requests')}
           <div class="d-chart-card">${D.table({
-            headers: ['Type', 'Provider', 'Status', { label: 'Latency', align: 'right' }, { label: 'Cost', align: 'right' }, 'Time'],
-            rows: recentReqs.slice(0, 15).map(r => ({
+            headers: ['Type', 'Status', { label: 'Tokens', align: 'right' }, { label: 'Latency', align: 'right' }, { label: 'Cost', align: 'right' }, 'Time'],
+            rows: recentReqs.slice(0, 20).map(r => ({
               cells: [
                 `<strong>${D.label(r.request_type)}</strong>`,
-                r.ai_provider ? D.badge(r.ai_provider, r.ai_provider === 'groq' ? 'info' : 'neutral') : '\u2014',
                 r.success ? D.badge('OK', 'success') : D.badge(r.error_type || 'FAIL', 'danger'),
+                r.total_tokens ? D.fmt.num(r.total_tokens) : '\u2014',
                 D.fmt.latency(r.latency_ms),
                 D.fmt.usd(r.estimated_cost_usd),
                 D.fmt.timeAgo(r.created_at),
