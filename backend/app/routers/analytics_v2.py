@@ -234,7 +234,7 @@ def get_product_analytics(
     ).filter(*filters).group_by("profile").all()
 
     lang_rows = db.query(
-        sa_func.coalesce(AIRequest.language, "unknown").label("language"),
+        sa_func.coalesce(AIRequest.language, "unspecified").label("language"),
         sa_func.count().label("count"),
     ).filter(*filters).group_by("language").order_by(sa_func.count().desc()).limit(20).all()
 

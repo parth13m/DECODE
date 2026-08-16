@@ -105,6 +105,38 @@ D.fmt = {
 };
 
 
+/* ── Display Labels ── */
+
+D.label = (function() {
+  const map = {
+    selection: 'Selection Mode', session: 'Session Mode', screenshot: 'Screenshot Mode',
+    explain: 'Code Explanation', followup: 'Follow-up', improve: 'Code Improvement',
+    vision: 'Visual Context', enrichment: 'File Understanding', enrichment_kgr: 'Knowledge Gen',
+    compression: 'Memory Compression',
+    selection_followup: 'Selection Follow-up', session_followup: 'Session Follow-up',
+    selection_improve: 'Selection Improvement', session_improve: 'Session Improvement',
+    general: 'General', dsa: 'DSA', none: 'Default',
+    unknown: 'Unclassified', other: 'Other', unspecified: 'Unspecified',
+  };
+  return function(key) {
+    if (!key) return 'Unclassified';
+    return map[key] || key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  };
+})();
+
+D.featureColor = function(key) {
+  const c = {
+    selection: '#e87830', session: '#3b82f6', screenshot: '#8b5cf6',
+    explain: '#e87830', followup: '#3b82f6', improve: '#10b981',
+    vision: '#8b5cf6', enrichment: '#f59e0b', enrichment_kgr: '#f59e0b',
+    compression: '#6b7280', selection_followup: '#f97316', session_followup: '#06b6d4',
+    selection_improve: '#10b981', session_improve: '#10b981',
+    other: '#6b7280', unknown: '#9ca3af',
+  };
+  return c[key] || '#6b7280';
+};
+
+
 /* ══════════════════════════════════════════════════════════
    API CLIENT
    ══════════════════════════════════════════════════════════ */
