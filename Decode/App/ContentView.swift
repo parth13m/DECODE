@@ -323,13 +323,7 @@ struct ContentView: View {
     // MARK: - Auth State Views
 
     private var authLoadingView: some View {
-        VStack(spacing: 16) {
-            ProgressView()
-                .controlSize(.large)
-            Text("Verifying account...")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(textSecondary)
-        }
+        StartupView()
     }
 
     private var disabledView: some View {
@@ -542,6 +536,119 @@ private struct PermissionStatusView: View {
                     .foregroundStyle(textSecondary)
             }
             Spacer()
+        }
+    }
+}
+
+// MARK: - Startup View
+
+/// Branded startup screen shown while Decode initializes.
+///
+/// Replaces the generic system spinner with the Decode icon block,
+/// a subtle breathing pulse, and time-delayed evolving status text.
+/// Matches the visual language of Home, InviteCode, and Onboarding.
+private struct StartupView: View {
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    // Decode palette (matches ContentView, InviteCodeView, etc.)
+    private let warmBackground = Color(red: 0.98, green: 0.97, blue: 0.95)
+    private let accentOrange = Color(red: 0.91, green: 0.47, blue: 0.18)
+    private let textPrimary = Color(red: 0.12, green: 0.12, blue: 0.12)
+    private let textSecondary = Color(red: 0.50, green: 0.49, blue: 0.47)
+
+    // MARK: - Animation State
+
+    /// Drives the icon background opacity pulse.
+    @State private var isPulsing = false
+
+    /// Index into `statusMessages` — advances on a timed schedule.
+    @State private var messageIndex = 0
+
+    /// Scheduled tasks for text transitions, cancelled when the view disappears.
+    @State private var textTimerTask: Task<Void, Never>?
+
+    private let statusMessages = [
+        "Getting Decode ready...",
+        "Preparing your workspace...",
+        "Taking a little longer than usual...",
+    ]
+
+    /// Delays (in seconds) before advancing to the next message.
+    /// Index 0 → 1 after 4s, index 1 → 2 after 8s more (12s total).
+    private let messageDelays: [UInt64] = [4, 8]
+
+    // MARK: - Body
+
+    var body: some View {
+        VStack(spacing: 20) {
+            Spacer()
+
+            // Decode icon block — matches Home/InviteCode/Onboarding
+            ZStack {
+                RoundedRectangle(cornerRadius: 18)
+                    .fill(accentOrange.opacity(isPulsing ? 0.22 : 0.12))
+                    .frame(width: 76, height: 76)
+                Image(systemName: "chevron.left.forwardslash.chevron.right")
+                    .font(.system(size: 32, weight: .semibold))
+                    .foregroundStyle(accentOrange)
+            }
+            .accessibilityHidden(true)
+
+            VStack(spacing: 6) {
+                Text("Decode")
+                    .font(.system(size: 26, weight: .bold, design: .rounded))
+                    .foregroundStyle(textPrimary)
+
+                Text(statusMessages[messageIndex])
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(textSecondary)
+                    .id(messageIndex)
+                    .transition(.opacity)
+                    .accessibilityLabel(statusMessages[messageIndex])
+            }
+
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(warmBackground)
+        .onAppear {
+            startPulse()
+            startTextTimer()
+        }
+        .onDisappear {
+            textTimerTask?.cancel()
+            textTimerTask = nil
+        }
+    }
+
+    // MARK: - Animation
+
+    private func startPulse() {
+        guard !reduceMotion else { return }
+        withAnimation(
+            .easeInOut(duration: 1.0)
+            .repeatForever(autoreverses: true)
+        ) {
+            isPulsing = true
+        }
+    }
+
+    private func startTextTimer() {
+        textTimerTask = Task { @MainActor in
+            for delay in messageDelays {
+                try? await Task.sleep(for: .seconds(delay))
+                guard !Task.isCancelled else { return }
+                let nextIndex = messageIndex + 1
+                guard nextIndex < statusMessages.count else { return }
+                if reduceMotion {
+                    messageIndex = nextIndex
+                } else {
+                    withAnimation(.easeInOut(duration: 0.6)) {
+                        messageIndex = nextIndex
+                    }
+                }
+            }
         }
     }
 }

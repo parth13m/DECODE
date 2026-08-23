@@ -22,12 +22,21 @@ struct DecodeApp: App {
         WindowGroup {
             ContentView()
                 .environment(dependencies)
+                .task {
+                    // Primary startup trigger: fires when the view appears,
+                    // guaranteeing deferred startup runs even if the initial
+                    // didBecomeActiveNotification was delivered before SwiftUI
+                    // set up the .onReceive subscriber.
+                    dependencies.performDeferredStartup()
+                }
                 .onReceive(
                     NotificationCenter.default.publisher(
                         for: NSApplication.didBecomeActiveNotification
                     )
                 ) { _ in
-                    appLog.notice("[DIAG] didBecomeActiveNotification received")
+                    // Backup trigger: handles reactivation after the app was
+                    // backgrounded. Idempotent — performDeferredStartup() has
+                    // a hasPerformedDeferredStartup guard.
                     dependencies.performDeferredStartup()
                 }
                 .onReceive(
