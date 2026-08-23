@@ -356,7 +356,7 @@ struct SelectionModeCoordinatorTests {
 
         // AI failure after loading started → stays in HUD.
         #expect(hud.viewModel.displayState == .error)
-        #expect(hud.viewModel.errorMessage.contains("AI request failed"))
+        #expect(!hud.viewModel.errorMessage.isEmpty)
 
         coordinator.stopListening()
     }

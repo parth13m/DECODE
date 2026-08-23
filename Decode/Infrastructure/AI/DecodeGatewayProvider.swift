@@ -98,6 +98,8 @@ struct DecodeGatewayProvider: AIProviderProtocol, Sendable {
         }
 
         // Map non-200 status codes to errors.
+        // Note: provider errors arrive via SSE events (handled below), not HTTP status.
+        // These status codes come from FastAPI middleware (auth, validation, rate limiting).
         switch httpResponse.statusCode {
         case 200:
             break
@@ -106,7 +108,7 @@ struct DecodeGatewayProvider: AIProviderProtocol, Sendable {
         case 403:
             throw AIProviderError.accountDisabled
         case 422:
-            throw AIProviderError.invalidResponse(detail: "Invalid request format")
+            throw AIProviderError.serviceError
         case 429:
             throw AIProviderError.rateLimited(retryAfter: nil)
         default:
@@ -166,8 +168,7 @@ struct DecodeGatewayProvider: AIProviderProtocol, Sendable {
                             continuation.finish()
                             return
                         case "error":
-                            let message = event.message ?? "AI service unavailable"
-                            continuation.finish(throwing: AIProviderError.invalidResponse(detail: message))
+                            continuation.finish(throwing: mapGatewayErrorType(event.errorType))
                             return
                         default:
                             break
@@ -274,10 +275,8 @@ struct DecodeGatewayProvider: AIProviderProtocol, Sendable {
             throw AIProviderError.sessionExpired
         case 403:
             throw AIProviderError.accountDisabled
-        case 502:
-            throw AIProviderError.serviceUnavailable
         default:
-            throw AIProviderError.serviceUnavailable
+            throw Self.classifyHTTPError(from: data)
         }
     }
 
@@ -285,6 +284,23 @@ struct DecodeGatewayProvider: AIProviderProtocol, Sendable {
         // Validate by sending a minimal request to the gateway.
         let messages = [AIMessage(role: .user, content: "hi")]
         _ = try await callGateway(messages: messages, systemPrompt: "Reply with OK only.", mode: nil)
+    }
+
+    /// Extract ``error_type`` from a gateway HTTP error response body and
+    /// map it to the appropriate ``AIProviderError`` via ``mapGatewayErrorType``.
+    ///
+    /// Falls back to ``.serviceUnavailable`` if the body cannot be parsed
+    /// or does not contain an ``error_type`` field (backwards compatibility
+    /// with backends that predate the error_type contract).
+    private static func classifyHTTPError(from data: Data) -> AIProviderError {
+        // FastAPI HTTPException with dict detail:
+        // {"detail": {"message": "...", "error_type": "..."}}
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let detail = json["detail"] as? [String: Any],
+           let errorType = detail["error_type"] as? String {
+            return mapGatewayErrorType(errorType)
+        }
+        return .serviceUnavailable
     }
 
     // MARK: - Streaming Fallback
@@ -332,13 +348,11 @@ struct DecodeGatewayProvider: AIProviderProtocol, Sendable {
         case 403:
             throw AIProviderError.accountDisabled
         case 422:
-            throw AIProviderError.invalidResponse(detail: "Invalid request format")
+            throw AIProviderError.serviceError
         case 429:
             throw AIProviderError.rateLimited(retryAfter: nil)
-        case 502:
-            throw AIProviderError.serviceUnavailable
         default:
-            throw AIProviderError.serviceUnavailable
+            throw Self.classifyHTTPError(from: data)
         }
     }
 
@@ -400,16 +414,13 @@ struct DecodeGatewayProvider: AIProviderProtocol, Sendable {
             throw AIProviderError.accountDisabled
 
         case 422:
-            throw AIProviderError.invalidResponse(detail: "Invalid request format")
+            throw AIProviderError.serviceError
 
         case 429:
             throw AIProviderError.rateLimited(retryAfter: nil)
 
-        case 502:
-            throw AIProviderError.serviceUnavailable
-
         default:
-            throw AIProviderError.serviceUnavailable
+            throw Self.classifyHTTPError(from: data)
         }
     }
 
@@ -466,9 +477,38 @@ private struct SSEEvent: Decodable {
     let content: String?
     /// Error message — present when `type == "error"`.
     let message: String?
+    /// Backend error classification — present when `type == "error"`.
+    let errorType: String?
     /// Token usage — present when `type == "done"`. Not consumed by
     /// the client (analytics are logged server-side).
     let usage: SSEUsage?
+
+    enum CodingKeys: String, CodingKey {
+        case type, content, message, usage
+        case errorType = "error_type"
+    }
+}
+
+/// Maps a backend gateway ``error_type`` string to the appropriate ``AIProviderError``.
+///
+/// Used by both streaming (SSE) and non-streaming (HTTP) error paths to ensure
+/// consistent classification.
+private func mapGatewayErrorType(_ errorType: String?) -> AIProviderError {
+    switch errorType {
+    case "server_error", "stream_error", "network_error":
+        return .serviceUnavailable
+    case "rate_limit":
+        return .rateLimited(retryAfter: nil)
+    case "timeout":
+        return .timeout
+    case "auth_error", "api_error", "config_error":
+        return .serviceError
+    case "empty_response":
+        return .emptyResponse
+    default:
+        // Unknown or missing error_type — safe default for backwards compatibility.
+        return .serviceUnavailable
+    }
 }
 
 private struct SSEUsage: Decodable {

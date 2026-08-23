@@ -70,7 +70,7 @@ async def chat(
         )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="AI service unavailable",
+            detail={"message": "AI service unavailable", "error_type": exc.error_type},
         ) from None
 
     _log_request(
@@ -102,7 +102,7 @@ async def chat_stream(
     SSE event format (Decode-owned, not provider-specific):
         data: {"type":"token","content":"..."}
         data: {"type":"done","usage":{...}}
-        data: {"type":"error","message":"..."}
+        data: {"type":"error","error_type":"...","message":"..."}
     """
     # Capture user fields as primitives while the DB session is still open.
     # The generator runs after FastAPI's dependency cleanup closes the session,
@@ -178,7 +178,7 @@ async def chat_stream(
                 language=body.language,
                 ai_provider=ai_provider, ai_model=ai_model,
             )
-            yield f"data: {json.dumps({'type': 'error', 'message': 'AI service unavailable'})}\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'error_type': exc.error_type, 'message': 'AI service unavailable'})}\n\n"
             return
 
     return StreamingResponse(
@@ -241,7 +241,7 @@ async def vision(
         )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Vision service unavailable",
+            detail={"message": "Vision service unavailable", "error_type": exc.error_type},
         ) from None
 
     _log_request(

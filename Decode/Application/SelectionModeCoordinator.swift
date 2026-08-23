@@ -462,7 +462,7 @@ final class SelectionModeCoordinator {
             #if DEBUG
             print("[DEBUG Coordinator] streamChat threw: \(error.localizedDescription)")
             #endif
-            hud.showError("AI request failed: \(error.localizedDescription)")
+            hud.showError(error.localizedDescription)
         }
     }
 

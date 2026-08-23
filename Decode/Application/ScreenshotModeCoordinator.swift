@@ -318,7 +318,7 @@ final class ScreenshotModeCoordinator {
             #if DEBUG
             print("[DEBUG ScreenshotCoordinator] streamChat threw: \(error.localizedDescription)")
             #endif
-            hud.showError("AI request failed: \(error.localizedDescription)")
+            hud.showError(error.localizedDescription)
         }
     }
 

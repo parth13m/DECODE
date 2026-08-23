@@ -13,7 +13,13 @@ enum AIProviderError: Error, LocalizedError, Sendable {
     case accountDisabled
 
     /// The Decode service is temporarily unavailable (HTTP 502 / 5xx).
+    /// Transient — retrying soon is appropriate.
     case serviceUnavailable
+
+    /// A non-transient service-side failure (provider billing, provider auth,
+    /// backend configuration, or provider request rejection).
+    /// Not the user's fault. Retrying immediately will not help.
+    case serviceError
 
     /// Rate limited by the provider (HTTP 429).
     /// Contains the `Retry-After` duration if the header was present.
@@ -60,12 +66,14 @@ enum AIProviderError: Error, LocalizedError, Sendable {
         case .accountDisabled:
             "Your Decode account has been disabled."
         case .serviceUnavailable:
-            "Decode service is temporarily unavailable. Please try again."
+            "Decode's AI service is temporarily unavailable. Please try again in a moment."
+        case .serviceError:
+            "Decode's AI service could not complete this request. Please try again later."
         case .rateLimited(let retryAfter):
             if let seconds = retryAfter {
-                "Rate limited. Try again in \(Int(seconds)) seconds."
+                "Decode is handling a lot of requests. Try again in \(Int(seconds)) seconds."
             } else {
-                "Rate limited. Try again shortly."
+                "Decode is handling a lot of requests right now. Please try again in a moment."
             }
         case .timeout:
             "Request timed out. Please try again."
