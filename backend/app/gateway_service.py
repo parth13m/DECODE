@@ -776,10 +776,134 @@ async def _stream_anthropic(
     yield ("done", token_usage)
 
 
+# ── Streaming: OpenAI-compatible SSE adapter ────────────────────────
+
+async def _stream_openai_compat(
+    messages: list[dict[str, str]],
+    system_prompt: str | None,
+    api_key: str,
+    model: str,
+    api_url: str,
+) -> AsyncGenerator[tuple[str, Any], None]:
+    """Stream tokens from an OpenAI-compatible API (Groq, OpenAI, etc.).
+
+    Yields tuples of (event_type, data):
+      ("token", "text chunk")      — a content delta
+      ("done", {token_usage dict}) — final usage after stream ends
+
+    Parses the standard OpenAI SSE format:
+      data: {"choices":[{"delta":{"content":"..."}}]}
+      data: [DONE]
+    """
+    api_messages: list[dict[str, str]] = []
+    if system_prompt:
+        api_messages.append({"role": "system", "content": system_prompt})
+    api_messages.extend(messages)
+
+    payload: dict[str, Any] = {
+        "model": model,
+        "max_tokens": _MAX_TOKENS,
+        "messages": api_messages,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    token_usage: dict[str, int | None] = {
+        "prompt_tokens": None,
+        "completion_tokens": None,
+        "total_tokens": None,
+    }
+
+    _diag_request_start = time.monotonic()
+    _diag_first_chunk_time = None
+    _diag_chunk_count = 0
+    _diag_total_chunk_bytes = 0
+
+    client = _get_client()
+    try:
+        async with client.stream("POST", api_url, json=payload, headers=headers) as response:
+            if response.status_code != 200:
+                await response.aread()
+                error_type = "api_error"
+                if response.status_code == 401:
+                    error_type = "auth_error"
+                elif response.status_code == 429:
+                    error_type = "rate_limit"
+                elif response.status_code >= 500:
+                    error_type = "server_error"
+                logger.error(
+                    "AI API streaming error: status=%d type=%s body=%s",
+                    response.status_code, error_type, response.text[:500],
+                )
+                raise GatewayError("AI service returned an error", error_type=error_type)
+
+            async for raw_line in response.aiter_lines():
+                line = raw_line.strip()
+
+                if not line.startswith("data: "):
+                    continue
+
+                data_str = line[6:]
+
+                # OpenAI signals end of stream with [DONE].
+                if data_str == "[DONE]":
+                    break
+
+                try:
+                    data = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
+
+                # Extract usage from the final chunk (when stream_options.include_usage is set).
+                chunk_usage = data.get("usage")
+                if chunk_usage:
+                    token_usage["prompt_tokens"] = chunk_usage.get("prompt_tokens")
+                    token_usage["completion_tokens"] = chunk_usage.get("completion_tokens")
+                    token_usage["total_tokens"] = chunk_usage.get("total_tokens")
+
+                choices = data.get("choices", [])
+                if not choices:
+                    continue
+
+                delta = choices[0].get("delta", {})
+                text = delta.get("content")
+                if text:
+                    _diag_chunk_count += 1
+                    _diag_total_chunk_bytes += len(text)
+                    if _diag_first_chunk_time is None:
+                        _diag_first_chunk_time = time.monotonic()
+                        logger.info(
+                            "DIAG_OPENAI_COMPAT first_chunk_ms=%.0f",
+                            (_diag_first_chunk_time - _diag_request_start) * 1000,
+                        )
+                    yield ("token", text)
+
+    except httpx.TimeoutException:
+        logger.error("AI API streaming timeout after %.0fs", _TIMEOUT)
+        raise GatewayError("Request timed out", error_type="timeout") from None
+    except httpx.HTTPError as exc:
+        logger.error("AI API streaming network error: %s", exc)
+        raise GatewayError("Failed to reach AI service", error_type="network_error") from exc
+
+    _diag_elapsed = (time.monotonic() - _diag_request_start) * 1000
+    _diag_avg_chunk = (_diag_total_chunk_bytes / _diag_chunk_count) if _diag_chunk_count > 0 else 0
+    logger.info(
+        "DIAG_OPENAI_COMPAT total_ms=%.0f chunks=%d total_bytes=%d avg_chunk_bytes=%.1f",
+        _diag_elapsed, _diag_chunk_count, _diag_total_chunk_bytes, _diag_avg_chunk,
+    )
+
+    yield ("done", token_usage)
+
+
 # ── Streaming adapters registry ───────────────────────────────────────
 
 _STREAM_ADAPTERS: dict[str, Any] = {
     "anthropic": _stream_anthropic,
+    "openai_compat": _stream_openai_compat,
 }
 
 

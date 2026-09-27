@@ -96,7 +96,7 @@ struct SettingsView: View {
                 Text("Model")
                     .foregroundStyle(.secondary)
                 Spacer()
-                Text("Claude Sonnet 4")
+                Text("Groq Llama 3.3 70B")
                     .foregroundStyle(.secondary)
             }
         }

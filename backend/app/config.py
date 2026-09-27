@@ -43,13 +43,14 @@ class Settings(BaseSettings):
     ANTHROPIC_VISION_MODEL: str = "claude-haiku-4-5-20251001"
     GROQ_VISION_MODEL: str = "qwen/qwen3.6-27b"
     # Which provider to use for vision requests: "anthropic" | "groq"
-    VISION_PROVIDER: str = "anthropic"
+    VISION_PROVIDER: str = "groq"
 
     # --- Legacy single-provider configuration (deprecated) ---
     # These are preserved for backward compatibility. New deployments
     # should use the explicit provider variables above.
     # AI_ADAPTER selects the backend adapter: "anthropic" | "openai_compat" | "gemini"
-    AI_ADAPTER: str = "anthropic"
+    # Set to "groq" to route all AI traffic through Groq's OpenAI-compatible API.
+    AI_ADAPTER: str = "groq"
     AI_API_KEY: str = ""
     AI_MODEL: str = ""
     AI_API_URL: str = ""
