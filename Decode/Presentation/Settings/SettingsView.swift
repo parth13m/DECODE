@@ -96,7 +96,7 @@ struct SettingsView: View {
                 Text("Model")
                     .foregroundStyle(.secondary)
                 Spacer()
-                Text("Groq Llama 3.3 70B")
+                Text("Groq GPT-OSS 120B")
                     .foregroundStyle(.secondary)
             }
         }

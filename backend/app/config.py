@@ -13,7 +13,7 @@ class Settings(BaseSettings):
         ANTHROPIC_API_KEY   — Anthropic API key (required for production)
         ANTHROPIC_MODEL     — Anthropic model (default: claude-haiku-4-5-20251001)
         GROQ_API_KEY        — Groq API key (optional, for knowledge generation)
-        GROQ_MODEL          — Groq model (default: llama-3.3-70b-versatile)
+        GROQ_MODEL          — Groq model (default: openai/gpt-oss-120b)
 
     Legacy variables (AI_ADAPTER, AI_API_KEY, AI_MODEL) are supported
     for backward compatibility but should be migrated to explicit
@@ -35,13 +35,13 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str = ""
     ANTHROPIC_MODEL: str = "claude-haiku-4-5-20251001"
     GROQ_API_KEY: str = ""
-    GROQ_MODEL: str = "llama-3.3-70b-versatile"
+    GROQ_MODEL: str = "openai/gpt-oss-120b"
 
     # --- Vision subsystem (independent of explanation) ---
     # ANTHROPIC_VISION_API_KEY: dedicated key for vision. Falls back to ANTHROPIC_API_KEY.
     ANTHROPIC_VISION_API_KEY: str = ""
     ANTHROPIC_VISION_MODEL: str = "claude-haiku-4-5-20251001"
-    GROQ_VISION_MODEL: str = "qwen/qwen3.6-27b"
+    GROQ_VISION_MODEL: str = "qwen/qwen3.8-27b"
     # Which provider to use for vision requests: "anthropic" | "groq"
     VISION_PROVIDER: str = "groq"
 
@@ -111,7 +111,7 @@ class Settings(BaseSettings):
         Prefers GROQ_MODEL. Falls back to AI_MODEL when
         AI_ADAPTER is a Groq-compatible value (legacy configuration).
         """
-        if self.GROQ_MODEL != "llama-3.3-70b-versatile":
+        if self.GROQ_MODEL != "openai/gpt-oss-120b":
             return self.GROQ_MODEL
         if self.AI_MODEL and self.AI_ADAPTER in ("groq", "openai_compat"):
             return self.AI_MODEL

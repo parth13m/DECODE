@@ -2288,7 +2288,7 @@ struct GroqProviderDITests {
         let config = ProviderConfig(
             identifier: "groq",
             apiKey: "gsk-test-key",
-            model: "llama-3.3-70b-versatile",
+            model: "openai/gpt-oss-120b",
             baseURL: AIConfiguration.groqBaseURL
         )
         let provider = GroqProvider(config: config)
@@ -2300,7 +2300,7 @@ struct GroqProviderDITests {
         let config = ProviderConfig(
             identifier: "groq",
             apiKey: nil,
-            model: "llama-3.3-70b-versatile",
+            model: "openai/gpt-oss-120b",
             baseURL: AIConfiguration.groqBaseURL
         )
         let provider = GroqProvider(config: config)

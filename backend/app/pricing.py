@@ -7,11 +7,15 @@ Rates are per million tokens (input_rate, output_rate) in USD.
 """
 
 MODEL_PRICING_PER_MTOK: dict[str, tuple[float, float]] = {
-    # Anthropic — used for explanation and vision
+    # Anthropic — retained for historical cost estimation and rollback
     "claude-haiku-4-5-20251001": (0.80, 4.00),
-    # Groq — used for KGR background knowledge generation
+    # Groq — primary model for all AI operations
+    "openai/gpt-oss-120b": (0.30, 0.50),
+    # Groq — previous default (deprecated on Groq free/dev tier June 2026)
     "llama-3.3-70b-versatile": (0.59, 0.79),
-    # Groq vision — used when VISION_PROVIDER=groq
+    # Groq vision — current vision model
+    "qwen/qwen3.8-27b": (0.20, 0.20),
+    # Groq vision — previous vision model (deprecated)
     "qwen/qwen3.6-27b": (0.20, 0.20),
     # Gemini — available via AI_ADAPTER=gemini (not currently active)
     "gemini-pro": (0.50, 1.50),

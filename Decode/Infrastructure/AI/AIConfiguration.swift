@@ -56,7 +56,7 @@ struct ProviderConfig: Sendable {
 /// ANTHROPIC_API_KEY   — Anthropic API key (gateway provider)
 /// ANTHROPIC_MODEL     — Anthropic model (default: claude-haiku-4-5-20251001)
 /// GROQ_API_KEY        — Groq API key (direct provider)
-/// GROQ_MODEL          — Groq model (default: llama-3.3-70b-versatile)
+/// GROQ_MODEL          — Groq model (default: openai/gpt-oss-120b)
 /// ```
 struct AIConfiguration: Sendable {
 
@@ -77,11 +77,11 @@ struct AIConfiguration: Sendable {
     /// Default Anthropic model for premium reasoning.
     static let defaultAnthropicModel = "claude-haiku-4-5-20251001"
 
-    /// Default Groq model for knowledge generation.
-    static let defaultGroqModel = "llama-3.3-70b-versatile"
+    /// Default Groq model for all AI operations.
+    static let defaultGroqModel = "openai/gpt-oss-120b"
 
     /// Default Groq vision model for Enhanced Explanation.
-    static let defaultGroqVisionModel = "qwen/qwen3.6-27b"
+    static let defaultGroqVisionModel = "qwen/qwen3.8-27b"
 
     // MARK: - Base URLs
 
